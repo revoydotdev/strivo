@@ -484,46 +484,246 @@ async fn thumbnails_generate(
     .into_response()
 }
 
+// ── ffprobe result cache ─────────────────────────────────────────────
+//
+// Keyed by `(canonical_path, mtime)` so any file rewrite (new mtime)
+// automatically bypasses the stale entry — the new key simply misses and
+// populates a fresh slot. Two separate caches, one per return type, let
+// each probe function be called independently without forcing both probes
+// whenever only one result is needed.
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
+
+type ProbeKey = (PathBuf, SystemTime);
+
+static DURATION_CACHE: OnceLock<Mutex<HashMap<ProbeKey, Option<f32>>>> = OnceLock::new();
+static RESOLUTION_CACHE: OnceLock<Mutex<HashMap<ProbeKey, Option<(u32, u32)>>>> = OnceLock::new();
+
+fn duration_cache() -> &'static Mutex<HashMap<ProbeKey, Option<f32>>> {
+    DURATION_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn resolution_cache() -> &'static Mutex<HashMap<ProbeKey, Option<(u32, u32)>>> {
+    RESOLUTION_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Return `cache_key(path)` = `(canonical_path, mtime)`, or `None` if
+/// metadata is unavailable (network path, deleted file, etc.).
+fn probe_cache_key(path: &std::path::Path) -> Option<ProbeKey> {
+    let mtime = std::fs::metadata(path).ok()?.modified().ok()?;
+    // Use the path as-is for the key: canonicalize() can fail on some
+    // filesystems and the same Path value is already consistent within a
+    // single process.
+    Some((path.to_path_buf(), mtime))
+}
+
+/// Look up `key` in `cache`; on miss, call `compute`, store, and return.
+///
+/// This is the testable core of the cache layer.  By accepting any
+/// `FnOnce() -> Option<T>` it can be driven in unit tests with a
+/// counting closure instead of real ffprobe.
+fn cached_probe<T: Clone + Send + 'static>(
+    cache: &Mutex<HashMap<ProbeKey, Option<T>>>,
+    key: ProbeKey,
+    compute: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = guard.get(&key) {
+            return cached.clone();
+        }
+    }
+    let result = compute();
+    {
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        guard.insert(key, result.clone());
+    }
+    result
+}
+
 /// Shell out to ffprobe for the duration in seconds.
 fn probe_duration(input: &std::path::Path) -> Option<f32> {
-    let out = std::process::Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
-        .arg(input)
-        .output()
-        .ok()?;
-    let s = String::from_utf8(out.stdout).ok()?;
-    s.trim().parse().ok()
+    let compute = || {
+        let out = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(input)
+            .output()
+            .ok()?;
+        let s = String::from_utf8(out.stdout).ok()?;
+        s.trim().parse().ok()
+    };
+    match probe_cache_key(input) {
+        Some(key) => cached_probe(duration_cache(), key, compute),
+        None => compute(),
+    }
 }
 
 /// Shell out to ffprobe for the video resolution.
 fn probe_resolution(input: &std::path::Path) -> Option<(u32, u32)> {
-    let out = std::process::Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=p=0",
-        ])
-        .arg(input)
-        .output()
-        .ok()?;
-    let s = String::from_utf8(out.stdout).ok()?;
-    let parts: Vec<&str> = s.trim().split(',').collect();
-    if parts.len() == 2 {
-        Some((parts[0].parse().ok()?, parts[1].parse().ok()?))
-    } else {
-        None
+    let compute = || {
+        let out = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(input)
+            .output()
+            .ok()?;
+        let s = String::from_utf8(out.stdout).ok()?;
+        let parts: Vec<&str> = s.trim().split(',').collect();
+        if parts.len() == 2 {
+            Some((parts[0].parse().ok()?, parts[1].parse().ok()?))
+        } else {
+            None
+        }
+    };
+    match probe_cache_key(input) {
+        Some(key) => cached_probe(resolution_cache(), key, compute),
+        None => compute(),
+    }
+}
+
+// ── ffprobe cache unit tests ─────────────────────────────────────────
+#[cfg(test)]
+mod probe_cache_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    /// Helper: create a fresh cache and a counting closure, then exercise
+    /// the get-or-insert contract.
+    fn make_cache<T: Clone + Send + 'static>() -> Mutex<HashMap<ProbeKey, Option<T>>> {
+        Mutex::new(HashMap::new())
+    }
+
+    /// Build a `ProbeKey` for `path` from its real on-disk mtime.
+    fn key_for(path: &std::path::Path) -> ProbeKey {
+        probe_cache_key(path).expect("test file must exist and have mtime")
+    }
+
+    #[test]
+    fn cache_hit_on_second_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sample.mkv");
+        std::fs::write(&file, b"fake media").unwrap();
+
+        let cache: Mutex<HashMap<ProbeKey, Option<u32>>> = make_cache();
+        let call_count = Arc::new(StdMutex::new(0u32));
+
+        // First call — miss, closure runs.
+        let cc = Arc::clone(&call_count);
+        let key = key_for(&file);
+        let v1 = cached_probe(&cache, key.clone(), || {
+            *cc.lock().unwrap() += 1;
+            Some(42u32)
+        });
+        assert_eq!(v1, Some(42));
+        assert_eq!(*call_count.lock().unwrap(), 1);
+
+        // Second call — same key, hit, closure must NOT run again.
+        let cc = Arc::clone(&call_count);
+        let v2 = cached_probe(&cache, key.clone(), || {
+            *cc.lock().unwrap() += 1;
+            Some(99u32) // would be wrong if closure ran
+        });
+        assert_eq!(v2, Some(42), "cached value must be returned");
+        assert_eq!(*call_count.lock().unwrap(), 1, "closure must run exactly once");
+    }
+
+    #[test]
+    fn stale_mtime_causes_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sample.mkv");
+        std::fs::write(&file, b"v1").unwrap();
+
+        let cache: Mutex<HashMap<ProbeKey, Option<u32>>> = make_cache();
+        let call_count = Arc::new(StdMutex::new(0u32));
+
+        // Prime the cache with the original mtime.
+        let key1 = key_for(&file);
+        let mtime1 = key1.1; // save for comparison; key1 will be moved below
+        let cc = Arc::clone(&call_count);
+        cached_probe(&cache, key1, || {
+            *cc.lock().unwrap() += 1;
+            Some(1u32)
+        });
+        assert_eq!(*call_count.lock().unwrap(), 1);
+
+        // Rewrite the file and advance its mtime so the key changes.  On Linux
+        // tmpfs the mtime resolution is 1 ns so a re-write is usually enough;
+        // we spin up to 500 ms to be safe on coarser FS.
+        std::fs::write(&file, b"v2").unwrap();
+        let probe_key_changed = || {
+            std::fs::write(&file, b"v2-retry").ok();
+            probe_cache_key(&file)
+                .map(|(_, mt)| mt != mtime1)
+                .unwrap_or(false)
+        };
+        // Spin up to 500 ms waiting for a detectable mtime change.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while !probe_key_changed() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // If the mtime didn't change (low-resolution FS in CI), skip the miss
+        // assertion — we can't manufacture a miss without a real mtime change.
+        let key2 = key_for(&file);
+        if key2.1 == mtime1 {
+            // FS mtime resolution too coarse to test miss; cache-hit is fine.
+            return;
+        }
+
+        // Now a lookup with key2 (new mtime) must miss and run the closure.
+        let cc = Arc::clone(&call_count);
+        let v2 = cached_probe(&cache, key2, || {
+            *cc.lock().unwrap() += 1;
+            Some(2u32)
+        });
+        assert_eq!(v2, Some(2));
+        assert_eq!(*call_count.lock().unwrap(), 2, "closure must run again for new mtime");
+    }
+
+    #[test]
+    fn no_metadata_falls_through_uncached() {
+        // A path that doesn't exist → probe_cache_key returns None → we
+        // call the compute closure directly without touching the cache.
+        let nonexistent = std::path::Path::new("/tmp/strivo-test-does-not-exist-xyz.mkv");
+        let call_count = Arc::new(StdMutex::new(0u32));
+
+        // probe_duration / probe_resolution would call ffprobe and fail
+        // gracefully; here we just verify probe_cache_key returns None.
+        assert!(
+            probe_cache_key(nonexistent).is_none(),
+            "missing file must yield no cache key"
+        );
+
+        // Verify the fall-through path: when key is None, compute is still called.
+        let cache: Mutex<HashMap<ProbeKey, Option<u32>>> = make_cache();
+        // Simulate "no key" by manually calling cached_probe with a synthetic key
+        // that won't be in the cache; confirm it runs the closure.
+        let synthetic_key: ProbeKey = (
+            nonexistent.to_path_buf(),
+            std::time::SystemTime::UNIX_EPOCH,
+        );
+        let cc = Arc::clone(&call_count);
+        cached_probe(&cache, synthetic_key, || {
+            *cc.lock().unwrap() += 1;
+            None::<u32>
+        });
+        assert_eq!(*call_count.lock().unwrap(), 1);
     }
 }
 

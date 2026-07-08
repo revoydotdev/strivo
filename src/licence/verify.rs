@@ -75,17 +75,31 @@ pub struct Claims {
 /// - the ECDSA verification fails (signature doesn't match the header+payload)
 /// - the payload is not valid JSON or is missing required fields
 pub fn verify_es256(token: &str) -> Result<Claims> {
+    // Resolve the verifying key: runtime env override, then compiled-in const.
+    let key_b64 = std::env::var("STRIVO_LICENCE_PUBKEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| ACTIVATION_VERIFYING_KEY_B64.to_string());
+
+    verify_es256_with_key(token, &key_b64)
+}
+
+/// Verify an ES256 JWT against an explicitly supplied verifying key.
+///
+/// This is the key-agnostic core of [`verify_es256`]: it takes the base64 DER
+/// SPKI verifying key directly instead of resolving it from the environment or
+/// compiled-in constant. [`verify_es256`] is a thin wrapper that performs that
+/// resolution and delegates here.
+///
+/// Passing an empty string or the literal `"PLACEHOLDER"` as `key_b64` skips
+/// verification (dev/CI mode) exactly as [`verify_es256`] does when no key is
+/// configured. Errors are identical to [`verify_es256`] for a given key.
+pub fn verify_es256_with_key(token: &str, key_b64: &str) -> Result<Claims> {
     let parts: Vec<&str> = token.splitn(4, '.').collect();
     if parts.len() != 3 {
         bail!("JWT must have exactly 3 segments, got {}", parts.len());
     }
     let (header_b64, payload_b64, sig_b64) = (parts[0], parts[1], parts[2]);
-
-    // Resolve the verifying key.
-    let key_b64 = std::env::var("STRIVO_LICENCE_PUBKEY")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| ACTIVATION_VERIFYING_KEY_B64.to_string());
 
     if key_b64.is_empty() || key_b64 == "PLACEHOLDER" {
         tracing::warn!(
@@ -97,23 +111,17 @@ pub fn verify_es256(token: &str) -> Result<Claims> {
     }
 
     // Decode the DER SPKI public key.
-    let key_der = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &key_b64,
-    )
-    .context("decode verifying key from base64")?;
-    let vk = VerifyingKey::from_public_key_der(&key_der)
-        .context("parse P-256 SPKI public key")?;
+    let key_der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key_b64)
+        .context("decode verifying key from base64")?;
+    let vk = VerifyingKey::from_public_key_der(&key_der).context("parse P-256 SPKI public key")?;
 
     // The signing input is the ASCII bytes of "header_b64.payload_b64".
     let signing_input = format!("{header_b64}.{payload_b64}");
 
     // Decode the JOSE-format signature (raw 64-byte r || s, no DER).
-    let sig_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        sig_b64,
-    )
-    .context("base64url-decode JWT signature")?;
+    let sig_bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, sig_b64)
+            .context("base64url-decode JWT signature")?;
     let signature = Signature::from_slice(&sig_bytes)
         .context("parse ES256 signature (expected 64-byte r||s)")?;
 
@@ -160,32 +168,28 @@ fn decode_claims(payload_b64: &str) -> Result<Claims> {
 ///
 /// Used exclusively in unit tests; not part of the public API.
 #[cfg(test)]
-pub(crate) fn sign_jwt_es256(
-    claims: &serde_json::Value,
-    sk: &p256::ecdsa::SigningKey,
-) -> String {
+pub(crate) fn sign_jwt_es256(claims: &serde_json::Value, sk: &p256::ecdsa::SigningKey) -> String {
     use base64::Engine;
     use p256::ecdsa::signature::Signer;
 
-    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(r#"{"alg":"ES256","typ":"JWT"}"#);
+    let header =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256","typ":"JWT"}"#);
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(serde_json::to_string(claims).unwrap());
     let signing_input = format!("{header}.{payload}");
 
     let sig: p256::ecdsa::Signature = sk.sign(signing_input.as_bytes());
-    let sig_b64 =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+    let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
 
     // Expose the verifying key in base64 DER SPKI so tests can feed it to
-    // verify_es256 via STRIVO_LICENCE_PUBKEY.
+    // verify_es256_with_key directly.
     let _ = sk; // bind for clarity
 
     format!("{signing_input}.{sig_b64}")
 }
 
 /// Return the base64 DER SPKI encoding of the verifying key, for use in
-/// tests that need to set `STRIVO_LICENCE_PUBKEY`.
+/// tests that pass it directly to `verify_es256_with_key`.
 #[cfg(test)]
 pub(crate) fn verifying_key_b64_spki(sk: &p256::ecdsa::SigningKey) -> String {
     use base64::Engine;
@@ -215,24 +219,16 @@ mod tests {
         })
     }
 
-    // ── helper that builds a valid token + configures the env key, calls
-    //    verify_es256, and restores the env afterward. NOT parallel-safe by
-    //    itself (env mutation), but test isolation is fine in single-threaded
-    //    unit tests (cargo test runs these sequentially by default).
-    fn with_key<F: FnOnce() -> R, R>(sk: &SigningKey, f: F) -> R {
-        let spki = verifying_key_b64_spki(sk);
-        std::env::set_var("STRIVO_LICENCE_PUBKEY", &spki);
-        let result = f();
-        std::env::remove_var("STRIVO_LICENCE_PUBKEY");
-        result
-    }
+    // Tests pass the verifying key directly to `verify_es256_with_key`, so
+    // they never touch the process-global `STRIVO_LICENCE_PUBKEY` env var and
+    // are parallel-safe by construction under the default multi-threaded runner.
 
     #[test]
     fn accepts_valid_token() {
         let sk = fresh_keypair();
         let claims = sample_claims();
         let token = sign_jwt_es256(&claims, &sk);
-        let result = with_key(&sk, || verify_es256(&token));
+        let result = verify_es256_with_key(&token, &verifying_key_b64_spki(&sk));
         let verified = result.expect("valid token must verify");
         assert_eq!(verified.tier, "pro");
         assert_eq!(verified.machine_hash, "abc123");
@@ -249,11 +245,9 @@ mod tests {
         let mut parts: Vec<String> = token.splitn(3, '.').map(str::to_string).collect();
         assert_eq!(parts.len(), 3);
         // Decode, mutate, re-encode the payload.
-        let mut payload_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &parts[1],
-        )
-        .unwrap();
+        let mut payload_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &parts[1])
+                .unwrap();
         // Change "pro" -> "fre" in the raw bytes (ASCII, definitely present).
         for w in payload_bytes.windows(3) {
             if w == b"pro" {
@@ -261,10 +255,7 @@ mod tests {
                 break;
             }
         }
-        if let Some(pos) = payload_bytes
-            .windows(3)
-            .position(|w| w == b"pro")
-        {
+        if let Some(pos) = payload_bytes.windows(3).position(|w| w == b"pro") {
             payload_bytes[pos] = b'f';
             payload_bytes[pos + 1] = b'r';
             payload_bytes[pos + 2] = b'e';
@@ -275,7 +266,7 @@ mod tests {
         );
         let tampered = parts.join(".");
 
-        let result = with_key(&sk, || verify_es256(&tampered));
+        let result = verify_es256_with_key(&tampered, &verifying_key_b64_spki(&sk));
         assert!(result.is_err(), "tampered payload must be rejected");
     }
 
@@ -287,28 +278,20 @@ mod tests {
 
         // Sign with sk1, but verify against sk2's public key.
         let token = sign_jwt_es256(&claims, &sk1);
-        let result = with_key(&sk2, || verify_es256(&token));
-        assert!(
-            result.is_err(),
-            "signature from wrong key must be rejected"
-        );
+        let result = verify_es256_with_key(&token, &verifying_key_b64_spki(&sk2));
+        assert!(result.is_err(), "signature from wrong key must be rejected");
     }
 
     #[test]
     fn placeholder_key_skips_verification_and_returns_claims() {
-        // Explicitly set STRIVO_LICENCE_PUBKEY to "PLACEHOLDER" so that
-        // verify_es256 takes the dev-mode skip path regardless of what other
-        // parallel tests may have set. Setting to the literal "PLACEHOLDER"
-        // is equivalent to the compiled-in default constant.
-        std::env::set_var("STRIVO_LICENCE_PUBKEY", "PLACEHOLDER");
-
         let sk = fresh_keypair();
         let claims = sample_claims();
         let token = sign_jwt_es256(&claims, &sk);
 
-        // verify_es256 sees "PLACEHOLDER" → skips crypto → returns parsed claims.
-        let result = verify_es256(&token);
-        std::env::remove_var("STRIVO_LICENCE_PUBKEY");
+        // A "PLACEHOLDER" key takes the dev-mode skip path → crypto is skipped
+        // and the parsed claims are returned. This mirrors the compiled-in
+        // default constant without touching any process-global env state.
+        let result = verify_es256_with_key(&token, "PLACEHOLDER");
         let verified = result.expect("placeholder key skips verification; must not error");
         assert_eq!(verified.tier, "pro");
     }

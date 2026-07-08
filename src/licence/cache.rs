@@ -8,9 +8,11 @@
 //! still returns the hardcoded stub).
 //!
 //! Schema: see [`Licence`]. The activation server signs `token` with
-//! ES256; client-side verification of that signature is Phase 3b. For
-//! now we trust the cache because only the daemon (running as the
-//! user) can write it.
+//! ES256. Client-side ES256 signature verification is implemented in
+//! `licence::verify::verify_es256` and is applied by the web routes
+//! before any token is written to the cache. The cache itself is
+//! additionally protected by the `machine_hash` binding: a cache lifted
+//! from another machine will be rejected by `gate::bound_and_active`.
 
 use std::fs;
 use std::path::PathBuf;

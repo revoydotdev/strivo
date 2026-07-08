@@ -12,10 +12,10 @@
 //! account sees a clean "backend not configured" rather than a
 //! confusing network error.
 //!
-//! JWT signature verification is intentionally deferred: the cache is
-//! bound to `machine_hash` (so a lifted file fails immediately), and
-//! the server is consulted every 72h refresh anyway. Adding full
-//! ES256 verify is a hardening task tracked in TODO(licence-verify).
+//! JWT signature verification (ES256 / P-256) is performed by
+//! `strivo_core::licence::verify_es256` before any backend token is
+//! persisted. In dev mode (production key not yet configured) verification
+//! is skipped with a logged warning so local dev boxes remain functional.
 
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -23,7 +23,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use strivo_core::licence::{cache::Licence, gate, machine_id, LicenceCache, Tier};
+use strivo_core::licence::{cache::Licence, gate, machine_id, verify_es256, LicenceCache, Tier};
 
 use crate::server::AppState;
 
@@ -242,9 +242,21 @@ async fn persist_and_reply(
         "trial" => Tier::Trial,
         _ => fallback_tier,
     };
-    // TODO(licence-verify): verify JWT signature with embedded P-256
-    // public key before trusting the payload. Until then we rely on
-    // the machine_hash binding + the 72h forced-refresh window.
+    // Verify the ES256 JWT signature before trusting the payload.
+    // In dev mode (ACTIVATION_VERIFYING_KEY_B64 == "PLACEHOLDER" and
+    // STRIVO_LICENCE_PUBKEY unset) this logs a warning and skips
+    // cryptographic verification so dev/local-trial flows still work.
+    // Local-trial tokens (produced in `trial()` above) do not go through
+    // the backend and thus never reach this helper, so skipping is safe
+    // for those paths in production as well.
+    if !parsed.token.is_empty() && !parsed.token.starts_with("local-trial.") {
+        if let Err(e) = verify_es256(&parsed.token) {
+            return crate::problem::Problem::internal(format!(
+                "JWT signature verification failed: {e}"
+            ))
+            .into_response();
+        }
+    }
     let lic = Licence {
         tier,
         machine_hash: machine_id::hashed_machine_id(),

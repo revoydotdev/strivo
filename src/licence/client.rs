@@ -6,8 +6,9 @@
 //! crate. The web crate's route handlers and the daemon's background
 //! task both call into these functions.
 //!
-//! No JWT verification yet — see `TODO(licence-verify)` in
-//! `routes::licence`.
+//! JWT signature verification for tokens received from the backend is
+//! handled in `licence::verify::verify_es256`, which is called by
+//! `routes::licence::persist_and_reply` before any token is trusted.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;

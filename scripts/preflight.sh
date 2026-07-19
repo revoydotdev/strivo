@@ -42,9 +42,12 @@ if [ -f "$LOCK" ]; then
   if [ "$age" -gt 1500 ]; then reasons+=("stale-lock(${age}s)"); fi
 fi
 
-# orphaned extra worktrees / leftover concern branches
-if [ "$(git worktree list --porcelain 2>/dev/null | grep -c '^worktree ')" -gt 1 ]; then
-  reasons+=("extra-worktrees")
+# orphaned per-worker `concern/*` worktrees from a killed tick. NOTE: the primary
+# repo worktree and the swarm's `integration` dispatch worktree legitimately
+# coexist (a project may be dispatched in a linked worktree so an operator keeps
+# their own checkout) — only `concern/*` worktrees are orphans worth flagging.
+if git worktree list --porcelain 2>/dev/null | grep -q '^branch refs/heads/concern/'; then
+  reasons+=("concern-worktrees")
 fi
 if git for-each-ref --format='%(refname:short)' 'refs/heads/concern/*' 2>/dev/null | grep -q .; then
   reasons+=("concern-branches")

@@ -25,20 +25,31 @@ attention=0
 INT="integration"
 
 echo "== worktrees =="
-main_wt="$(git rev-parse --show-toplevel)"
-while IFS= read -r wt; do
+# The primary repo worktree, the current worktree, and any base-branch
+# (integration/main/master) worktree are all legitimate — a project may be
+# dispatched in a linked `integration` worktree so an operator keeps their own
+# checkout. Only `concern/*` worktrees (ephemeral per-worker) are orphan candidates.
+primary_wt="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+cur_wt="$(git rev-parse --show-toplevel 2>/dev/null)"
+while IFS= read -r line; do
+  wt="${line%% *}"
+  br="$(printf '%s\n' "$line" | sed -n 's/.*\[\(.*\)\].*/\1/p')"
   [ -z "$wt" ] && continue
-  if [ "$wt" = "$main_wt" ]; then
-    echo "  active            $wt"
+  if [ "$wt" = "$primary_wt" ] || [ "$wt" = "$cur_wt" ] || [ "$br" = "integration" ] || [ "$br" = "main" ] || [ "$br" = "master" ]; then
+    echo "  active            $wt [${br:-detached}]"
     continue
   fi
-  head="$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo '?')"
-  if [ "$head" != "?" ] && git merge-base --is-ancestor "$head" "$INT" 2>/dev/null; then
-    echo "  orphaned-landed   $wt ($head on $INT — safe: git worktree remove)"
-  else
-    echo "  orphaned-unlanded $wt ($head NOT on $INT — SALVAGE first)"; attention=1
-  fi
-done < <(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+  case "$br" in
+    concern/*)
+      head="$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo '?')"
+      if [ "$head" != "?" ] && git merge-base --is-ancestor "$head" "$INT" 2>/dev/null; then
+        echo "  orphaned-landed   $wt ($head on $INT — safe: git worktree remove)"
+      else
+        echo "  orphaned-unlanded $wt ($head NOT on $INT — SALVAGE first)"; attention=1
+      fi ;;
+    *) echo "  active            $wt [${br:-detached}]" ;;
+  esac
+done < <(git worktree list 2>/dev/null)
 
 echo "== concern/* branches =="
 found_branch=0

@@ -8,9 +8,12 @@
 //! still returns the hardcoded stub).
 //!
 //! Schema: see [`Licence`]. The activation server signs `token` with
-//! ES256; client-side verification of that signature is Phase 3b. For
-//! now we trust the cache because only the daemon (running as the
-//! user) can write it.
+//! ES256. `strivo-web`'s `routes::licence::verify_licence_token`
+//! verifies that signature (plus the `sub`/`exp`/`licence_exp` claims)
+//! before a `Licence` reaches [`LicenceCache::save`] on the SPA's
+//! activate/trial/refresh paths — this module itself does not re-check
+//! the signature on load, so it still trusts the cache file's contents
+//! at rest (only the daemon, running as the user, can write it).
 
 use std::fs;
 use std::path::PathBuf;

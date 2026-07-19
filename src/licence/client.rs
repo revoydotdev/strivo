@@ -6,8 +6,15 @@
 //! crate. The web crate's route handlers and the daemon's background
 //! task both call into these functions.
 //!
-//! No JWT verification yet — see `TODO(licence-verify)` in
-//! `routes::licence`.
+//! ES256 JWT signature + claim verification lives in `strivo-web`'s
+//! `routes::licence` (`verify_licence_token`) and gates the SPA's
+//! activate/trial/refresh calls before a `Licence` is persisted from
+//! them — the core crate can't depend on strivo-web to reuse it here.
+//! `refresh_now` below (the daemon's own 72h background refresh, see
+//! `spawn_refresh_loop`) is a separate call path and does not yet run
+//! the same signature check; wiring an equivalent core-crate verifier
+//! into this path is tracked as follow-up hardening, not covered by
+//! this module today.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;

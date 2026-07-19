@@ -38,6 +38,13 @@ impl Problem {
         Self::new(StatusCode::UNAUTHORIZED, "authentication required")
     }
 
+    /// 401 with a caller-supplied reason — used where the generic
+    /// "authentication required" detail would hide *why* (e.g. licence
+    /// signature/claim verification failures).
+    pub fn unauthorized_detail(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, detail)
+    }
+
     pub fn bad_request(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, detail)
     }

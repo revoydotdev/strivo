@@ -127,9 +127,15 @@ hmac = "0.13"
 sha2 = "0.11.0"
 base64 = "0.22"
 
+# Licensing: ES256 JWT verification for the activation backend's token
+# (see routes::licence).
+jsonwebtoken = "9.3.1"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
 chrono = { version = "0.4" }
+p256 = { version = "0.13.2", features = ["ecdsa", "pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }

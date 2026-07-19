@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# .githooks/commit-msg — git commit-msg hook wiring for ADR-0017 enforcement.
+#
+# Activated repo-wide via `core.hooksPath = .githooks` (set by
+# scripts/install-hooks.sh). Resolves the repo root of whichever worktree
+# the commit is happening in, then delegates to the real checker so there is
+# exactly one source of truth for the Conventional Commits rules.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec "$repo_root/scripts/check-commit-msg.sh" "$1"

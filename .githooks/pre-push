@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# .githooks/pre-push — mechanically enforce the operator-respects-RUN.lock rule
+# (ADR-0018; revoy-spec friction F5 / ADR-059 "serialize main writes").
+#
+# Refuse any push to `integration` or `main` while a tick holds RUN.lock, UNLESS
+# this push is the tick's own (it exports SKINNER_TICK_ACTIVE=1). An out-of-band
+# operator push during an active tick diverges the tick's local branch — this
+# turns that prose rule into a wired gate. On the laptop (no local lock) it is a
+# no-op; scripts/safe-push.sh covers the operator's remote-lock case there.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+LOCK="$ROOT/.agents/locks/RUN.lock"
+
+[ -f "$LOCK" ] || exit 0                          # no tick running -> allow
+[ "${SKINNER_TICK_ACTIVE:-}" = "1" ] && exit 0    # the tick's own push -> allow
+
+while read -r _localref _localsha remoteref _remotesha; do
+  case "$remoteref" in
+    refs/heads/integration|refs/heads/main)
+      echo "pre-push: REFUSED — RUN.lock is held by an active tick; pushing to" \
+           "${remoteref#refs/heads/} would race it." >&2
+      echo "pre-push: pause the timer or wait for the lock to clear" \
+           "(operator-respects-RUN.lock, ADR-0018)." >&2
+      exit 1 ;;
+  esac
+done
+exit 0

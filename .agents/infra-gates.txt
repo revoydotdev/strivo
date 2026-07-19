@@ -1,0 +1,7 @@
+# Infra-gated todos — blocked on EXTERNAL infrastructure the swarm cannot
+# provision itself (a paid credential, a dedicated hardware/time slot, a VM).
+# next-buildable.sh treats a milestone as BLOCKED (skip the tick, no model turn)
+# only when EVERY remaining unclaimed todo of the current milestone is listed here.
+# One todo id per line; `#` comments. Remove an entry as soon as its blocker clears.
+#
+# (no active entries)

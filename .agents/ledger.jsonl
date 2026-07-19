@@ -2,3 +2,4 @@
 {"commit":"f075b2e","concern":"licence-verify","milestone":"M1","todo":"M1.P1.S1.T1","ts":"2026-07-19T19:21:10-0400","type":"done","verified_by":{"cmd":"cargo test -p strivo-web --features creator licence_verify","exit":0}}
 {"commit":"f075b2e","concern":"licence-verify","milestone":"M1","todo":"M1.P1.S1.T2","ts":"2026-07-19T19:21:10-0400","type":"done","verified_by":{"cmd":"cargo test -p strivo-web --features creator licence_reject","exit":0}}
 {"commit":"f075b2e","concern":"licence-verify","milestone":"M1","todo":"M1.P1.S1.T3","ts":"2026-07-19T19:21:10-0400","type":"done","verified_by":{"cmd":"bash -c '! git grep -qn \"TODO(licence-verify)\" -- crates/strivo-web'","exit":0}}
+{"commit":"46f08ae","concern":"ffprobe-cache","milestone":"M1","todo":"M1.P2.S1.T1","ts":"2026-07-19T19:22:14-0400","type":"done","verified_by":{"cmd":"cargo test -p strivo-web ffprobe_cache","exit":0}}

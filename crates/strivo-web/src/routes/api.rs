@@ -33,6 +33,40 @@ use uuid::Uuid;
 
 use crate::server::AppState;
 
+/// In-process ffprobe result cache, keyed on `(path, mtime, size)` so an
+/// unchanged file is never re-probed, while a changed mtime OR size (file
+/// re-recorded/overwritten in place) invalidates the entry transparently —
+/// the new key just misses and gets recomputed. See `recording_probe`.
+type ProbeCacheKey = (std::path::PathBuf, std::time::SystemTime, u64);
+
+static PROBE_CACHE: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<ProbeCacheKey, serde_json::Value>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Pure cache-or-compute helper, factored out so it's unit-testable without
+/// a real ffprobe binary: given a key and a `compute` closure, return the
+/// cached value for that key if present, otherwise run `compute`, store the
+/// result, and return it. A second lookup with the same key is served from
+/// cache (closure doesn't run again); a lookup with a different key runs
+/// `compute` again.
+fn cache_get_or_compute<K, V, F>(
+    cache: &std::sync::Mutex<std::collections::HashMap<K, V>>,
+    key: K,
+    compute: F,
+) -> V
+where
+    K: std::hash::Hash + Eq,
+    V: Clone,
+    F: FnOnce() -> V,
+{
+    if let Some(v) = cache.lock().unwrap().get(&key) {
+        return v.clone();
+    }
+    let v = compute();
+    cache.lock().unwrap().insert(key, v.clone());
+    v
+}
+
 /// Authorize a request via EITHER the `X-Api-Key` header (programmatic
 /// clients) OR a valid `strivo_session` cookie (browser, set by /login).
 /// The browser SPA only carries the cookie, so cookie support is what
@@ -153,6 +187,23 @@ async fn recording_probe(
     if !path.exists() {
         return crate::problem::Problem::not_found("file missing").into_response();
     }
+    // Cache key: (path, mtime, size). An unchanged file returns the cached
+    // summary without spawning ffprobe; either metadata field changing
+    // (re-recorded, transcoded, overwritten in place) misses and re-probes.
+    let cache_key: ProbeCacheKey = match std::fs::metadata(&path) {
+        Ok(meta) => (
+            path.clone(),
+            meta.modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            meta.len(),
+        ),
+        Err(e) => {
+            return crate::problem::Problem::internal(format!("stat: {e}")).into_response()
+        }
+    };
+    if let Some(cached) = PROBE_CACHE.lock().unwrap().get(&cache_key).cloned() {
+        return Json(cached).into_response();
+    }
     let out = match tokio::process::Command::new("ffprobe")
         .args([
             "-v",
@@ -267,7 +318,7 @@ async fn recording_probe(
         }
     }
 
-    Json(json!({
+    let summary = json!({
         "container": container,
         "duration_secs": duration_secs,
         "bit_rate": bit_rate,
@@ -275,8 +326,14 @@ async fn recording_probe(
         "video": video,
         "audio": audio,
         "subtitle": subtitle,
-    }))
-    .into_response()
+    });
+    // Only successful, fully-parsed results are cached — Problem responses
+    // (missing file, no ffprobe, ffprobe error, parse failure) always retry.
+    // We already know this key missed (checked above before spawning
+    // ffprobe), so `cache_get_or_compute` stores `summary` and hands it
+    // straight back; the closure never actually needs to recompute here.
+    let cached = cache_get_or_compute(&PROBE_CACHE, cache_key, || summary);
+    Json(cached).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2897,5 +2954,79 @@ mod tests {
         assert_eq!(disk_severity(100, 50), "ok"); // 50% free
         assert_eq!(disk_severity(100, 15), "ok"); // exactly 15% → ok (>= boundary)
         assert_eq!(disk_severity(100, 14), "warn");
+    }
+
+    /// `cache_get_or_compute` is the pure helper backing the ffprobe result
+    /// cache in `recording_probe`: a repeat lookup with the same
+    /// `(path, mtime, size)` key must be served from cache (compute runs
+    /// once), while a changed mtime OR size must miss and recompute. This
+    /// exercises the helper directly against a private `Mutex<HashMap>` (not
+    /// the process-global `PROBE_CACHE`) with a counting closure, so no real
+    /// ffprobe binary or filesystem I/O is needed.
+    #[test]
+    fn ffprobe_cache() {
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        use std::time::{Duration, SystemTime};
+
+        let cache: Mutex<HashMap<ProbeCacheKey, u32>> = Mutex::new(HashMap::new());
+        let calls = AtomicUsize::new(0);
+        let path = PathBuf::from("/recordings/sample.mkv");
+        let t0 = SystemTime::UNIX_EPOCH;
+        let key = |mtime: SystemTime, size: u64| -> ProbeCacheKey { (path.clone(), mtime, size) };
+
+        // Two lookups, same (path, mtime, size) key: compute runs once.
+        let a = cache_get_or_compute(&cache, key(t0, 1024), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            42
+        });
+        let b = cache_get_or_compute(&cache, key(t0, 1024), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            42
+        });
+        assert_eq!(a, 42);
+        assert_eq!(b, 42);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "second lookup with an identical key must be served from cache"
+        );
+
+        // Changed mtime, same size: distinct key, compute runs again.
+        let mtime_changed = t0 + Duration::from_secs(1);
+        let c = cache_get_or_compute(&cache, key(mtime_changed, 1024), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            99
+        });
+        assert_eq!(c, 99);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a changed mtime must invalidate the entry and recompute"
+        );
+
+        // Same mtime as the original, changed size: distinct key, compute
+        // runs again.
+        let d = cache_get_or_compute(&cache, key(t0, 2048), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            7
+        });
+        assert_eq!(d, 7);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "a changed size must invalidate the entry and recompute"
+        );
+
+        // Re-querying the original key still hits cache (untouched by the
+        // other keys' inserts).
+        let e = cache_get_or_compute(&cache, key(t0, 1024), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            42
+        });
+        assert_eq!(e, 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 }

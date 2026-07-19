@@ -3775,6 +3775,7 @@ dependencies = [
  "hyper",
  "jsonwebtoken",
  "libc",
+ "once_cell",
  "p256",
  "rand 0.9.4",
  "rand_core 0.6.4",

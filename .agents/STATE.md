@@ -30,7 +30,9 @@ Recon findings folded into worker briefs:
 
 CLAIMED (3 disjoint-file concerns; clippy-creator deferred — workspace-wide, conflicts):
 - DONE `M1.P1.S1.T1/T2/T3` · concern licence-verify (worker `f075b2e`) · verified `licence_verify` + `licence_reject` + `! git grep TODO(licence-verify) -- crates/strivo-web`. Real ES256 gate in `persist_and_reply` via `jsonwebtoken`: fail-closed on missing key / bad sig / `sub`≠machine / expired `exp`/`licence_exp` — no `Licence` built and no tier granted on failure. Key operator-supplied (`STRIVO_LICENCE_PUBKEY` env / embedded `LICENCE_PUBKEY_PEM` const, empty pre-launch). M1G4 rescoped to `*.rs` (ROADMAP legitimately names the todo). **Follow-up captured `M1.P1.S1.T4`:** daemon refresh path (`src/licence/client.rs`) still trusts the payload — not covered here.
-- CLAIMED `M1.P2.S1.T1` · concern ffprobe-cache · file `crates/strivo-web/src/routes/api.rs`
+- DONE `M1.P2.S1.T1` · concern ffprobe-cache (worker `46f08ae`) · verified `cargo test -p strivo-web ffprobe_cache`. Process-global `(path,mtime,size)`→normalised-summary cache in front of the `recording_probe` ffprobe spawn; changed mtime/size invalidates; only success values cached. Manifest conflict with licence-verify (`once_cell` vs `jsonwebtoken`) resolved by unioning `Cargo.toml` + regenerating `Cargo.lock`.
+
+**Tick result:** 3 concerns integrated onto `integration` (`eed0939` viewguard, `93c0c05` licence, this commit ffprobe); 5 todos closed (`M1.P1.S1.T1/T2/T3`, `M1.P2.S1.T1`, `M1.P3.S2.T1`). Remaining M1: `M1.P1.S1.T4` (daemon verify, new), `M1.P3.S1.T1` clippy-creator (deferred — workspace-wide), `M1.P9.S1.T1/T2` (M1G1/M1G2 build-green, audit-time). No push (no remote on `integration` worktree). MILESTONE_PHASE stays NORMAL.
 - DONE `M1.P3.S2.T1` · concern viewguard-path · verified `cargo test -p strivo-web --features creator viewguard_data_path` (worker `789bca8`). Root-cause fix in `viewguard/mod.rs` (`ctx.data_dir.clone()` — registry already scopes); two-path probe dropped in `plugins.rs`. `archiver/mod.rs:65` carries the identical double-join bug — left for a future concern.
 
 

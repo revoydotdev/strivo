@@ -38,6 +38,7 @@ window. Verify before trust (VISION AX-7).
 - **`M1.P1.S1.T1`** — Embed the backend's P-256 public key and verify the ES256 signature of the licence JWT in `routes/licence.rs` **before** constructing `Licence`; reject a bad signature with a typed `Problem`. → *Artifact:* `cargo test -p strivo-web --features creator licence_verify` · *Concern:* licence-verify
 - **`M1.P1.S1.T2`** — On verified tokens, reject when `machine_hash` ≠ local machine id or `expires_at` is in the past — as explicit verification failures, not a silent tier fallback. → *Artifact:* `cargo test -p strivo-web --features creator licence_reject` · *Concern:* licence-verify
 - **`M1.P1.S1.T3`** — Remove the `TODO(licence-verify)` marker and the "we rely on the machine_hash binding" comment once verification is the real gate. → *Artifact:* `bash -c '! git grep -qn "TODO(licence-verify)" -- crates/strivo-web'` · *Concern:* licence-verify
+- **`M1.P1.S1.T4`** — Apply the same ES256 verify-before-trust gate to the daemon's background refresh path (`src/licence/client.rs` `refresh_now`/`spawn_refresh_loop`, called from `src/daemon.rs`) — the web route verifies but the daemon path still trusts the payload. → *Artifact:* `cargo test --lib --features creator licence::client` · *Concern:* licence-daemon-verify
 
 ## M1.P2 — Capture-path performance & correctness
 
@@ -66,7 +67,15 @@ as a workaround — a violation of "one canonical source" (VISION AX-6).
 - **M1G1** — PVR (default) build + tests green. → *Check:* `cargo test`
 - **M1G2** — Creator build + tests green. → *Check:* `cargo test --workspace --features creator`
 - **M1G3** — strict clippy clean under Creator. → *Check:* `cargo clippy --workspace --features creator --all-targets -- -D warnings`
-- **M1G4** — no licence-verify TODO remains anywhere. → *Check:* `bash -c '! git grep -qn "TODO(licence-verify)"'`
+- **M1G4** — no licence-verify TODO marker remains in source. → *Check:* `bash -c "! git grep -qn 'TODO(licence-verify)' -- '*.rs'"` (docs/ROADMAP may reference the todo by name)
+
+### M1.P9.S1 — Gate-closing todos
+Explicit todos that close the milestone gates. `M1G3`/`M1G4` are already owned by
+feature todos (`M1.P3.S1.T1` clippy-creator, `M1.P1.S1.T3` licence-verify); the two
+build-green gates below have no feature owner and are tracked here.
+
+- **`M1.P9.S1.T1`** — PVR (default) build + full test suite green. → *Artifact:* `cargo test` · *Concern:* gate-m1g1
+- **`M1.P9.S1.T2`** — Creator build + full workspace test suite green under `--features creator`. → *Artifact:* `cargo test --workspace --features creator` · *Concern:* gate-m1g2
 
 ---
 

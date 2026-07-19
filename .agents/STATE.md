@@ -7,6 +7,20 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M1
 
+## tick 2026-07-19c — NORMAL (M1)
+Preflight CLEAN; worktrees clean; no governance directives / operator messages.
+M1: 5→8 done. **DONE** `M1.P1.S1.T4` (licence-daemon-verify, `573b1f4`) — mirrored the
+web route's ES256 `verify_licence_token` into `src/licence/client.rs` (core crate can't
+depend on strivo-web); `refresh_now` now verifies signature + `sub`/`exp`/`licence_exp`
+and derives tier/expiry from the verified claims before persisting, fail-closed when no
+key resolves. Added `jsonwebtoken`/`p256` (unconditional — the refresh loop runs in the
+default PVR binary). 4 verify tests. Closes AX-7 on the daemon path.
+Gates verified on the integrated tree and recorded: **M1G1** `cargo test` ✓,
+**M1G2** `cargo test --workspace --features creator` ✓ (`M1.P9.S1.T1`/`T2`). M1G4 already
+clean (no `TODO(licence-verify)` in `*.rs`). Deferred `M1.P3.S1.T1` (clippy-creator, M1G3)
+to its own tick: it may edit `src/licence/client.rs` (non-disjoint with T4) and warrants a
+full tick now that T4 has landed. **M1 remaining: 1** (clippy-creator).
+
 ## tick 2026-07-19b — NORMAL (M1, first feature tick)
 Preflight CLEAN; no governance directives / operator messages. First NORMAL tick of
 M1 (0 done) → **gate-decomposition:** appended explicit gate-closing todos

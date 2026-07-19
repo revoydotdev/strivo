@@ -8,13 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Changed
-- **ROADMAP regenerated around the engine north star.** `ROADMAP.md` is now the
-  single authority: it reframes StriVo as a domain-agnostic stream→clip analytics &
-  content-creation engine (capture PVR + DAW plugins as substrate), grounds the
-  honest build state (incl. the inert daemon-side pipeline executor and fragmented
-  per-plugin SQLite), and lays out phases P1–P8 with every blocker/stub tracked under
-  an explicit definition-of-done. README identity language reconciled (web-only;
-  engine framing); adversarial-review findings folded in as tracked status.
+- **Swarm governance adopted.** Added `VISION.md` (8 constitutional axioms + the
+  1.0.0 definition) and rewrote `ROADMAP.md` into the swarm scheme
+  (milestones/phases/stages/todos with per-todo artifact checks and `M#.P9` quality
+  gates), superseding the prior revoy-format phase block. Seeded `docs/adr/`
+  (ADR-0001…0005) capturing the load-bearing decisions — web-only frontend, the
+  two-edition split, the plugin/platform architecture — and recording the roadmap
+  supersession. See [ADR-0005](docs/adr/ADR-0005-supersede-revoy-roadmap.md).
 - **`strivo-plugins` folded into the workspace.** The separate
   `Chorosyne/strivo-plugins` repo is retired. The five first-party
   plugins (`crunchr`, `archiver`, `insights`, `editor`, `viewguard`)

@@ -1,234 +1,209 @@
-# StriVo Roadmap
+# StriVo Roadmap (swarm scheme)
 
-## North star
-
-**StriVo is a self-hosted Live Stream PVR — "Sonarr/Radarr for live streams."**
-It monitors Twitch/YouTube (and Patreon) channels, detects when they go live,
-records the stream, finalizes it into a clean library, and manages everything
-from a TUI-less *arr-style web UI backed by a background daemon. That product —
-capture, library, scheduling, monitoring — is the **core and the default build**.
-
-StriVo ships in two editions from one codebase, gated by the `creator` Cargo
-feature:
-
-- **StriVo** (default) — the pure PVR. `cargo build`.
-- **StriVo Creator Edition** — the PVR **plus** the creator/analytics toolkit
-  (transcription, clip discovery, the DAW/EDL editor, cross-recording analytics,
-  the pipeline engine). `cargo build -p strivo-bin --features creator`.
-
-The creator toolkit's destination is a **domain-agnostic stream→signal
-analytics & content-creation engine** — extract → parse → analyse → visualise →
-export, fast enough to keep up with capture, with sports-analytics and
-creator-content as templates on top. That ambition is real but it is the
-**Creator Edition's** trajectory, not the core PVR's. The PVR must be excellent
-and complete on its own first; the engine builds on it for those who opt in.
-
-> **Status legend:** ✅ shipped & wired end-to-end · 🟡 built but not wired /
-> shallow · ⬜ not started · ⏸ deferred (with reason).
+> **Authority:** this file + `VISION.md` + `docs/adr/`. Governed by the swarm
+> harness (ADR-0028); the prior revoy-format ROADMAP was superseded by
+> [ADR-0005](docs/adr/ADR-0005-supersede-revoy-roadmap.md).
 >
-> **Definition of done (non-negotiable):** a milestone is ✅ only when wired
-> end-to-end. A pure-data crate with tests is necessary but **not sufficient**.
-> Stubs, inert modules, hardcoded paths, and "tested but disconnected" code are
-> tracked below as 🟡/⬜ blockers, never presented as shipped.
+> **Format:** milestones `# M#`, phases `## M#.P#`, stages `### M#.P#.S#`, todos
+> `- **`M#.P#.S#.T#`**`, gates `- **M#G#**`. Each todo carries an *Artifact:* — a
+> single command that must exit 0 to prove it done — and a *Concern:* tag so a tick
+> can pick disjoint work. Each milestone closes with a `## M#.P9` gate section.
+>
+> **Definition of done (non-negotiable, per VISION AX-3):** a todo is done only
+> when its Artifact check passes on the integrated tree. A pure-data crate with
+> tests is necessary but not sufficient — wiring separates 🟡 from ✅.
+>
+> **Current state (v0.5.0 alpha):** PVR core is solid and wired end-to-end
+> (web-only frontend, recording/finalization pipeline, live detection, daemon↔SPA
+> IPC, SQLite jobs journal, notifications). The Creator Edition toolkit (~34 in-tree
+> crates) is built but only partly wired — the daemon does not yet drive the DAG
+> executor and per-plugin SQLite is fragmented. Milestones below run current → 1.0.0.
 
 ---
 
-## The edition split (✅ shipped)
+# M1 — PVR hardening & security correctness (v0.5.x → 0.6.0)
 
-The default build is a pure PVR; all creator tooling compiles only under
-`--features creator`.
+The product comes first. Close the near-term correctness, security, and code-health
+gaps on the shipped PVR before extending the Creator engine. Todos here are
+immediately buildable against existing files.
 
-- **strivo-core** — `creator` feature gates the Crunchr/Archiver config sections
-  and the `crunchr_auto` tandem handshake on the back-catalog pull path. The
-  plugin host trait/registry is generic and unconditional.
-- **strivo-web** — all 34 tool-crate deps are `optional`; `routes::plugins` plus
-  the marketplace/pipelines/capabilities/archiver routes mount only under the
-  feature. The PVR build serves recordings, monitor, schedule, settings,
-  system, logs, history, watch.
-- **strivo-bin** — `strivo-plugins` is optional; the feature registers the
-  first-party plugins and fans out to `strivo-web/creator` + `strivo-core/creator`.
-- **workspace** — `default-members` = the PVR crates, so plain `cargo build`/
-  `cargo test` is the PVR; `--workspace` and `-p … --features creator` reach the
-  rest.
+## M1.P1 — Licence & credential trust
 
-Verified: both editions compile and pass tests (191 PVR tests); a `compile_error!`
-probe confirmed the gate fires under `creator` and is absent without it; legacy
-configs carrying `[crunchr]`/`[archiver]` sections still load in the PVR build
-(unknown fields are ignored).
+### M1.P1.S1 — Verify the licence JWT signature
+The licence route currently trusts the backend JWT payload without checking its
+ES256 signature (`crates/strivo-web/src/routes/licence.rs:245`,
+`TODO(licence-verify)`), relying only on the machine-hash binding and a 72h refresh
+window. Verify before trust (VISION AX-7).
 
----
+- **`M1.P1.S1.T1`** — Embed the backend's P-256 public key and verify the ES256 signature of the licence JWT in `routes/licence.rs` **before** constructing `Licence`; reject a bad signature with a typed `Problem`. → *Artifact:* `cargo test -p strivo-web --features creator licence_verify` · *Concern:* licence-verify
+- **`M1.P1.S1.T2`** — On verified tokens, reject when `machine_hash` ≠ local machine id or `expires_at` is in the past — as explicit verification failures, not a silent tier fallback. → *Artifact:* `cargo test -p strivo-web --features creator licence_reject` · *Concern:* licence-verify
+- **`M1.P1.S1.T3`** — Remove the `TODO(licence-verify)` marker and the "we rely on the machine_hash binding" comment once verification is the real gate. → *Artifact:* `bash -c '! git grep -qn "TODO(licence-verify)" -- crates/strivo-web'` · *Concern:* licence-verify
 
-## Where StriVo is today (v0.5.0)
+## M1.P2 — Capture-path performance & correctness
 
-### PVR core — solid ✅
-- Web-only frontend (the ratatui TUI was removed in `2ab4e6c`); `strivo`
-  launches the SPA + daemon.
-- Recording pipeline: live + VOD capture, gap-resume segment merge, Twitch
-  ad-trim, MPEG-TS→Matroska remux, deterministic UUIDv5 ids, HTTP-Range seeking.
-- Live detection: polling monitor (15 s floor) + Twitch EventSub websocket
-  (`stream.online`, ≤10 subs) + optional YouTube WebSub callback.
-- Recording dispatch centralised through `src/intents/` (one canonical
-  translator). Daemon ↔ SPA over a Unix-socket IPC; SSE event stream.
-- Jobs journal in SQLite (`jobs.db`) with orphan recovery on restart; health
-  checks page; backup/restore; blocklist; first-run onboarding.
-- Desktop notifications now actually fire (✅ this cycle); config + schedule
-  state are written atomically (✅ this cycle).
+### M1.P2.S1 — Cache ffprobe results
+`recording_probe` (`crates/strivo-web/src/routes/api.rs:135`) shells out to
+`ffprobe` on **every** `/probe` call, re-analysing unchanged files.
 
-### Creator Edition toolkit — built, partly wired 🟡 (see Creator Edition roadmap)
-~34 in-tree crates under `crates/<name>/`, each pure-data with unit tests, most
-wired to a Pro-gated HTTP endpoint and surfaced on the SPA. Transcription
-(`crunchr`), scene/cue detection (`cuepoints`), chat density (`chat-density`),
-and cross-recording aggregation (`insights`) work and are wired. The analytics
-spine (`dataviz`, `pipelines-dag` + `src/pipeline/`) is built but the daemon
-does not yet drive the executor — the highest-leverage Creator gap.
+- **`M1.P2.S1.T1`** — Put an in-process cache keyed by `(path, mtime, size)` in front of the `recording_probe` ffprobe subprocess; a repeat probe of an unchanged file returns the cached result, and a changed mtime or size invalidates it. → *Artifact:* `cargo test -p strivo-web ffprobe_cache` · *Concern:* ffprobe-cache
+
+## M1.P3 — Creator code health
+
+### M1.P3.S1 — Clean the Creator clippy warnings
+~44 clippy warnings across the Creator tool crates; the PVR build is clean but the
+Creator surface is not gated.
+
+- **`M1.P3.S1.T1`** — Resolve the outstanding Creator-crate clippy warnings so a strict clippy run under the feature is clean. → *Artifact:* `cargo clippy --workspace --features creator --all-targets -- -D warnings` · *Concern:* clippy-creator
+
+### M1.P3.S2 — Single canonical viewguard data path
+`viewguard`'s `data_dir` double-nests, so the web layer probes two candidate paths
+as a workaround — a violation of "one canonical source" (VISION AX-6).
+
+- **`M1.P3.S2.T1`** — Fix the `viewguard` `data_dir` resolution so the plugin and the web layer agree on one path, and drop the two-path probe workaround in the web route. → *Artifact:* `cargo test -p strivo-web --features creator viewguard_data_path` · *Concern:* viewguard-path
+
+## M1.P9 — Milestone quality gates
+
+- **M1G1** — PVR (default) build + tests green. → *Check:* `cargo test`
+- **M1G2** — Creator build + tests green. → *Check:* `cargo test --workspace --features creator`
+- **M1G3** — strict clippy clean under Creator. → *Check:* `cargo clippy --workspace --features creator --all-targets -- -D warnings`
+- **M1G4** — no licence-verify TODO remains anywhere. → *Check:* `bash -c '! git grep -qn "TODO(licence-verify)"'`
 
 ---
 
-## PVR roadmap (near-term — the product comes first)
+# M2 — Creator signal spine & pipeline executor (CE-P1, CE-P3)
 
-Folded in from the 2026-06-25 audit + exemplar comparison (Sonarr/*arr,
-streamerREC, Tdarr, Jellyfin). Full detail in `research/analysis/` (SYNTHESIS,
-ui-ux, backend) and `research/exemplars/`.
+Give the Creator engine its two load-bearing foundations: one canonical signal store
+(VISION AX-6) and a daemon that actually drives the DAG executor (VISION AX-3). Both
+are Creator-gated; the PVR build stays untouched.
 
-### Robustness & correctness
-| Item | State | Notes |
-|---|---|---|
-| Desktop notifications dispatched (notify-rust was a dead dep) | ✅ | `src/daemon.rs` — per-flag banners on a blocking task |
-| Atomic `config.toml` write (tmp+rename) | ✅ | `src/config/mod.rs` |
-| Atomic `schedule-state.json` write | ✅ | `src/recording/schedule.rs` |
-| **Stall detection** — frozen ffmpeg/yt-dlp stays `Recording` forever, silently | ✅ | `recording/mod.rs` — per-recording growth clock; 120 s no-growth → warn + stop (feeds retry) |
-| Concurrency cap is porous — manual `Start` paths bypass `max_concurrent_recordings` | ✅ | gate now in the manager's `Start` handler (all paths) |
-| Single-loop monitor — a slow platform delays all live detection that tick | ✅ | `monitor/mod.rs` — per-platform fetches fan out via `join_all`; state mutations stay serial |
-| yt-dlp retry falls back to FFmpeg for YouTube live-from-start | ✅ | retry now re-spawns the original process kind (yt-dlp `--live-from-start`) |
-| `count_finished_recordings` O(N), undercounts >500/channel | ✅ | `persist.rs` — `SELECT COUNT(*) … WHERE channel_id=? AND state='finished'` |
-| `.orig.mkv` safety copies accumulate after every remux | ✅ | deleted after the remuxed file is verified non-empty; kept on failure |
-| IPC protocol unversioned — silent drop/deser failure across peer versions | ✅ | `src/ipc.rs` — `Hello {version:u32}`, `StateSnapshot {version:u32}`, `IPC_PROTOCOL_VERSION` constant, roundtrip tests. |
-| VOD backfill ignores the daemon CancellationToken (300 s sleep on shutdown) | ✅ | `d784480` — `CancellationToken` threaded into `vod_backfill::spawn`; shutdown no longer blocks 300 s. |
+## M2.P1 — Unified signal store (CE-P1)
 
-### Web UI — finish the clean PVR split
-| Item | State | Notes |
-|---|---|---|
-| `creator_enabled` exposed in `/api/v1/settings` | ✅ | the enabler for SPA gating |
-| SPA hides creator UI in the PVR build | ✅ | consumes `creator_enabled`: filters TOPNAV, bounces creator deep-links, hides the Recording-Info plugin actions, Settings→Plugins pane, and Monitor "Tandem downloads". Chat kept (client-side IRC) |
-| Build-time SPA split to drop dead creator JS (~30+ unused API methods) | ✅ | `7776179` — build-time strip confirmed; dead API methods excluded from PVR bundle. |
-
-### PVR feature gaps vs *arr / streamerREC
-| Item | State | Notes |
-|---|---|---|
-| Calendar / upcoming-streams grid | ✅ | 7-day strip on the Schedule page off `next_fire`; full EPG later |
-| Per-channel quality/format overrides in the UI | ✅ | Monitor rows expose container/profile selects; `put_auto_record` persists them |
-| Outbound webhook / notification connectors | ✅ | `[notifications.webhook]` (enabled/url); `src/webhook.rs` POSTs streamerREC-shaped JSON off `DaemonEvent`. Discord/ntfy presets later |
-| Storage gauge in the UI | ✅ | three-segment disk bar on the System page from `/api/v1/storage` |
-| Concurrent-slot indicator ("N / M rec") | ✅ | topbar slot pill from `monitor_limits.max_concurrent_recordings` + live count |
-| Quality profiles (tiered) | ✅ | `bd75f9c` + `0fa189e` — `QualityTier` enum in `CaptureProfile`; threaded through streamlink and yt-dlp. |
-| Filename-token browser, JSON channel import/export | ✅ | `bd75f9c` — token browser SPA pane + JSON import/export routes shipped. |
-
-### DESIGN.md compliance ✅ (resolved — JellySkin is canonical)
-DESIGN.md previously mandated ElegantFin while the SPA shipped JellySkin. Owner
-decision: **JellySkin is the trajectory.** DESIGN.md §"Web UI Theme" + Typography
-were rewritten to JellySkin (tokens mirror `spa.css`), the SPA font is Montserrat,
-and `spa.css` font loading moved Google Fonts → Bunny Fonts (privacy). The SPA
-uses JellySkin purple/cyan; brand cyan `#00E5FF` stays the TUI/marketing accent.
-The stale ElegantFin reference CSS under `docs/reference/` was archived.
-
----
-
-## Creator Edition roadmap — the analytics engine
-
-The phased engine plan, preserved. This is the Creator Edition's destination; it
-builds on the PVR substrate and ships only under `--features creator`. Each phase
-lists concrete blockers; none is ✅ until wired end-to-end with tests.
-
-### CE-P1 · Unified signal spine ⬜ *(foundation)*
-Replace fragmented per-plugin SQLite with one canonical, append-only **signal
-store** every extractor writes and every analytic reads:
+### M2.P1.S1 — Schema, write API, query API
+Replace fragmented per-plugin SQLite with one append-only signal store:
 `(recording_id, t_start, t_end, kind, label, payload JSON, confidence, source_plugin)`.
-- **Blockers:** schema + migration; plugin write API; analytic query API; retire
-  `insights`' hardcoded `crunchr.db` reach-in; fix the `viewguard` `data_dir`
-  double-nest (web probes two paths as a workaround).
-- **Unblocks:** cross-signal joins, the sports event spine (CE-P4), real corpus
-  assembly (CE-P2).
 
-### CE-P2 · Corpus-assembly service ⬜
-Move corpus assembly server-side: hydrate a `dataviz::Corpus` by
-`recording | playlist | channel + date-range` from the CE-P1 store, behind an
-endpoint. Today `dataviz_run` exists but the SPA hand-assembles the corpus.
+- **`M2.P1.S1.T1`** — Define the canonical signal schema + migration behind a typed store module. → *Artifact:* `cargo test --workspace --features creator signal_store_schema` · *Concern:* signal-store
+- **`M2.P1.S1.T2`** — Plugin **write** API: a typed `write_signals` entrypoint extractors call, enforcing confidence + `source_plugin` provenance. → *Artifact:* `cargo test --workspace --features creator signal_store_write` · *Concern:* signal-store
+- **`M2.P1.S1.T3`** — Analytic **query** API: range/kind/recording queries every analytic reads through. → *Artifact:* `cargo test --workspace --features creator signal_store_query` · *Concern:* signal-store
 
-### CE-P3 · Wire the DAG executor into the daemon 🟡→✅ *(highest CE leverage)*
-The `pipelines-dag` + `src/pipeline/` model/executor is complete and tested, but
-the daemon never drives it. Connect `PluginAction::SubmitPipeline` →
-`PipelineRegistry::submit` → dispatch ready stages to plugin verbs →
-`mark_stage_done`/`mark_stage_failed` → advance → emit live `StageState` over SSE.
-Honour the `ResourceLock` + `max_attempts`/backoff the model already encodes.
+### M2.P1.S2 — Retire per-plugin SQLite reach-ins
+- **`M2.P1.S2.T1`** — Migrate `insights` off its hardcoded `crunchr.db` reach-in to the query API. → *Artifact:* `bash -c 'cargo test --workspace --features creator insights_via_signal_store && ! git grep -qn "crunchr.db" -- crates/strivo-plugins/src/insights'` · *Concern:* insights-migrate
 
-### CE-P4 · Extraction adapters — domain-agnostic 🟡→✅
-A common `Extractor` contract writing into the CE-P1 store. Have: transcription,
-scene/cue, chat density. Missing: timecoded entity/event extraction (the sports
-spine), visual/OCR (scoreboards, lower-thirds). Needs per-extractor confidence +
-provenance and back-pressure so extraction keeps up with capture (feeds CE-P8).
+## M2.P2 — Drive the DAG executor from the daemon (CE-P3)
 
-### CE-P5 · Analytics over real corpora ⬜
-Experiment registry over `dataviz`; cross-signal experiments (transcript ×
-events × chat); incremental/streaming aggregation over SSE.
+The `pipelines-dag` + `src/pipeline/` model/executor is complete and tested, but the
+daemon never drives it — the highest-leverage Creator gap.
 
-### CE-P6 · Visualisation & composer UI ⬜
-Pick corpus → pick experiment → render via `chart_hint` → export CSV/JSON/PNG. A
-general composer (not per-plugin pages); chart-type auto-selection; saved views.
+- **`M2.P2.S1.T1`** — Handle `PluginAction::SubmitPipeline` → `PipelineRegistry::submit`, dispatching ready stages to plugin verbs. → *Artifact:* `cargo test --workspace --features creator pipeline_submit_dispatch` · *Concern:* pipeline-exec
+- **`M2.P2.S1.T2`** — `mark_stage_done`/`mark_stage_failed` advance the DAG, honouring the `ResourceLock` and the `max_attempts`/backoff the model encodes. → *Artifact:* `cargo test --workspace --features creator pipeline_advance_backoff` · *Concern:* pipeline-exec
+- **`M2.P2.S1.T3`** — Emit live `StageState` transitions over SSE so the SPA reflects pipeline progress. → *Artifact:* `cargo test --workspace --features creator pipeline_sse` · *Concern:* pipeline-sse
 
-### CE-P7 · Clip & export pipeline 🟡→✅
-Wire `clipper` + `captions` into `finalize_completion` and the CE-P3 DAG so
-*extract → select highlights → cut → caption → export* is one chain.
+## M2.P9 — Milestone quality gates
 
-### CE-P8 · Real-time — "as fast as it is recorded" ⬜ *(headline promise)*
-Streaming incremental extraction *during* capture: extractors tail the live
-segment, write signals, analytics/visualisation update live over SSE.
-
-### CE-Capstone · Domain templates ⬜
-On the domain-agnostic core, ship two configs (not codebases): a **Sports**
-template (event taxonomy + MLB-style box-score rollups) and a **Creator**
-template (highlight/retention rollups + publish-ready clips).
+- **M2G1** — signal store round-trips (write → query). → *Check:* `cargo test --workspace --features creator signal_store`
+- **M2G2** — no plugin reaches into a sibling plugin's SQLite. → *Check:* `bash -c '! git grep -qn "crunchr.db" -- crates/strivo-plugins/src'`
+- **M2G3** — a submitted pipeline runs to completion driven by the daemon. → *Check:* `cargo test --workspace --features creator pipeline_submit_dispatch pipeline_advance_backoff`
+- **M2G4** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
 
 ---
 
-## Cross-cutting blockers & hardening
+# M3 — Corpus service & extraction adapters (CE-P2, CE-P4)
 
-| Item | State | Disposition |
-|---|---|---|
-| SPA not edition-aware (creator UI in PVR build) | 🟡 | **PVR / Web UI** — top PVR priority |
-| Daemon doesn't drive the pipeline executor | 🟡 | **CE-P3** |
-| Per-plugin SQLite fragmentation; `insights` hardcoded `crunchr.db` reach-in | 🟡 | **CE-P1** |
-| `viewguard` `data_dir` double-nest (web probes two paths) | 🟡 | **CE-P1** |
-| Corpus assembled client-side, not server-side | 🟡 | **CE-P2** |
-| Licence JWT ES256 signature **not verified** (`TODO(licence-verify)`, `routes/licence.rs:239`) | 🟡 | Security — verify before any paid Creator launch |
-| `crunchr::queue_recording` headless stub; auto-transcribe relies on the webui RPC verb — confirm it enqueues end-to-end | 🟡 | **CE-P3/P4** |
-| ffprobe results uncached — re-analyses on every `/probe` | ⬜ | Perf; cache keyed by path+mtime |
-| Dynamic cdylib plugin loading coded but never triggered; no hot-reload | ⬜ | Deferred until third-party plugins are real |
-| `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |
-| Creator-crate clippy warnings (44, across tool crates) | ⬜ | Cleanup pass within Creator Edition scope |
+Move corpus assembly server-side and give extraction a domain-agnostic contract that
+writes into the M2 signal store.
 
-### Adversarial-review wounds (from the 2026-05-29 review, folded in)
-1. **Identity collapse** — resolved: the PVR is now the product, the engine is
-   the Creator Edition trajectory, and the edition split makes the boundary
-   concrete in code.
-2. **Architectural straddle (TUI + web)** — resolved; the TUI is gone (`2ab4e6c`).
-3. **No recording service** — resolved by `src/intents/`.
-4. **Doctrine without enforcement** — partially open; the DoD above is the gate.
-5. **No customer / forcing function** — the PVR has direct competitors
-   (streamerREC, CLI recorders) and an unoccupied "*arr-grade live-stream PVR"
-   niche; the Creator Edition engine is the upsell thesis. A founder-level call.
+## M3.P1 — Server-side corpus assembly (CE-P2)
+
+### M3.P1.S1 — Hydrate corpora behind an endpoint
+- **`M3.P1.S1.T1`** — `hydrate_corpus` builds a `dataviz::Corpus` by `recording | playlist | channel + date-range` from the signal store, behind an HTTP endpoint. → *Artifact:* `cargo test --workspace --features creator corpus_hydrate` · *Concern:* corpus-service
+- **`M3.P1.S1.T2`** — The SPA consumes the endpoint instead of hand-assembling the corpus client-side. → *Artifact:* `cargo test --workspace --features creator corpus_endpoint_route` · *Concern:* corpus-web
+
+## M3.P2 — Extraction adapters (CE-P4)
+
+### M3.P2.S1 — Common extractor contract
+- **`M3.P2.S1.T1`** — Define an `Extractor` trait that writes into the signal store with per-extractor confidence + provenance. → *Artifact:* `cargo test --workspace --features creator extractor_contract` · *Concern:* extractor-contract
+- **`M3.P2.S1.T2`** — Back-pressure: a bounded extraction queue so extraction keeps up with capture without unbounded growth. → *Artifact:* `cargo test --workspace --features creator extractor_backpressure` · *Concern:* extractor-contract
+
+### M3.P2.S2 — New domain-agnostic extractors
+- **`M3.P2.S2.T1`** — Timecoded entity/event extractor (the sports spine) writing typed events into the store. → *Artifact:* `cargo test --workspace --features creator extractor_events` · *Concern:* extractor-events
+- **`M3.P2.S2.T2`** — Visual/OCR extractor (scoreboards, lower-thirds) with confidence + provenance. → *Artifact:* `cargo test --workspace --features creator extractor_ocr` · *Concern:* extractor-ocr
+
+## M3.P9 — Milestone quality gates
+
+- **M3G1** — corpus hydrates server-side from the signal store. → *Check:* `cargo test --workspace --features creator corpus_hydrate`
+- **M3G2** — every extractor writes through the store contract (confidence + provenance present). → *Check:* `cargo test --workspace --features creator extractor_contract`
+- **M3G3** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
 
 ---
 
-## Appendix · shipped history (condensed)
+# M4 — Analytics, visualisation & clip/export (CE-P5, CE-P6, CE-P7)
 
-- **0.1.0** (2026-03-14) — initial release: monitoring (Twitch/YouTube/Patreon),
-  ffmpeg recording, playback, daemon, CLI, TOML config + keyring. *(TUI; removed.)*
-- **0.2.0 – 0.3.0** (2026-04-19) — Tier-1 UX + P0/P1 quality.
-- **0.3.0 → 0.4.0** — DAW phase-1 closeout (iters 21–53) + E2E audit + SPA polish.
-- **0.4.0 → 0.5.0** — TUI removed (web-only), `strivo-plugins` folded into the
-  workspace, `ab-render` + `submix`, backend integration batches (iters 54–84).
-- **0.5.0 (post)** — **PVR / Creator Edition split** (the `creator` feature);
-  sweep fixes (notify dispatch, atomic config/schedule writes, `creator_enabled`).
+Turn stored signals into analysis, visuals, and shippable clips.
+
+## M4.P1 — Analytics over real corpora (CE-P5)
+- **`M4.P1.S1.T1`** — Experiment registry over `dataviz`, run against a hydrated corpus. → *Artifact:* `cargo test --workspace --features creator experiment_registry` · *Concern:* analytics
+- **`M4.P1.S1.T2`** — Cross-signal experiment (transcript × events × chat) joined through the store. → *Artifact:* `cargo test --workspace --features creator experiment_cross_signal` · *Concern:* analytics
+- **`M4.P1.S1.T3`** — Incremental/streaming aggregation over SSE as signals arrive. → *Artifact:* `cargo test --workspace --features creator experiment_incremental` · *Concern:* analytics-sse
+
+## M4.P2 — Visualisation & composer UI (CE-P6)
+- **`M4.P2.S1.T1`** — A general composer: pick corpus → pick experiment → render via `chart_hint` (not per-plugin pages). → *Artifact:* `cargo test --workspace --features creator composer_route` · *Concern:* composer
+- **`M4.P2.S1.T2`** — Export a rendered view to CSV/JSON/PNG. → *Artifact:* `cargo test --workspace --features creator composer_export` · *Concern:* composer-export
+
+## M4.P3 — Clip & export pipeline (CE-P7)
+- **`M4.P3.S1.T1`** — Wire `clipper` + `captions` into `finalize_completion` and the M2 DAG so *extract → select highlights → cut → caption → export* is one chain. → *Artifact:* `cargo test --workspace --features creator clip_export_chain` · *Concern:* clip-export
+
+## M4.P9 — Milestone quality gates
+
+- **M4G1** — an experiment runs against a hydrated corpus and produces a chartable result. → *Check:* `cargo test --workspace --features creator experiment_registry`
+- **M4G2** — the composer renders + exports a view end-to-end. → *Check:* `cargo test --workspace --features creator composer_export`
+- **M4G3** — the clip chain produces a captioned clip from stored signals. → *Check:* `cargo test --workspace --features creator clip_export_chain`
+- **M4G4** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
+
+---
+
+# M5 — Real-time extraction & domain templates (CE-P8, CE-Capstone)
+
+The headline promise: analysis "as fast as it is recorded," plus the two shipping
+domain templates that prove the engine is domain-agnostic.
+
+## M5.P1 — Real-time incremental extraction (CE-P8)
+- **`M5.P1.S1.T1`** — Extractors tail the live capture segment and write signals **during** recording, not only after finalize. → *Artifact:* `cargo test --workspace --features creator realtime_tail_extract` · *Concern:* realtime
+- **`M5.P1.S1.T2`** — Analytics + visualisation update live over SSE as in-capture signals arrive. → *Artifact:* `cargo test --workspace --features creator realtime_live_update` · *Concern:* realtime-sse
+
+## M5.P2 — Domain templates (CE-Capstone)
+- **`M5.P2.S1.T1`** — Ship a **Sports** template (event taxonomy + box-score rollups) as config over the domain-agnostic core, not new code. → *Artifact:* `cargo test --workspace --features creator template_sports` · *Concern:* template-sports
+- **`M5.P2.S1.T2`** — Ship a **Creator** template (highlight/retention rollups + publish-ready clips) as config. → *Artifact:* `cargo test --workspace --features creator template_creator` · *Concern:* template-creator
+
+## M5.P9 — Milestone quality gates
+
+- **M5G1** — signals appear for an in-flight capture before finalize. → *Check:* `cargo test --workspace --features creator realtime_tail_extract`
+- **M5G2** — both domain templates load and drive the engine from config alone. → *Check:* `cargo test --workspace --features creator template_sports template_creator`
+- **M5G3** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
+
+---
+
+# M6 — 1.0.0 stabilization & release
+
+Freeze the contracts (VISION AX-8), close the platform gap, and cut 1.0.0.
+
+## M6.P1 — Freeze the contracts
+- **`M6.P1.S1.T1`** — Stabilize and version the config schema; document it and add a migration path so upgrades no longer require hand-editing `config.toml`. → *Artifact:* `cargo test config_schema_stable` · *Concern:* freeze-config
+- **`M6.P1.S1.T2`** — Assert and document the daemon IPC protocol version; add a cross-version compatibility test around `IPC_PROTOCOL_VERSION`. → *Artifact:* `cargo test ipc_version_compat` · *Concern:* freeze-ipc
+- **`M6.P1.S1.T3`** — Document and pin the plugin ABI contract; the manifest declares the ABI version the loader enforces. → *Artifact:* `cargo test --workspace --features creator plugin_abi_version` · *Concern:* freeze-abi
+
+## M6.P2 — Windows daemon transport
+- **`M6.P2.S1.T1`** — Add the Windows named-pipe transport behind the IPC abstraction (or, if deferred, record the deferral in an ADR). → *Artifact:* `bash -c 'cargo test ipc_transport_abstraction || test -f docs/adr/ADR-0006-defer-windows-transport.md'` · *Concern:* windows-transport
+
+## M6.P3 — Release
+- **`M6.P3.S1.T1`** — Reconcile `README.md`, `DESIGN.md`, and `CHANGELOG.md` with shipped reality; no aspirational claim outruns the code. → *Artifact:* `bash -c 'grep -q "1.0.0" CHANGELOG.md'` · *Concern:* release-docs
+- **`M6.P3.S1.T2`** — Bump workspace version to `1.0.0` and tag the release. → *Artifact:* `bash -c 'grep -q "^version = \"1.0.0\"" Cargo.toml || git tag | grep -qx v1.0.0'` · *Concern:* release-cut
+
+## M6.P9 — Milestone quality gates
+
+- **M6G1** — config/IPC/ABI contracts are versioned and tested. → *Check:* `bash -c 'cargo test config_schema_stable ipc_version_compat && cargo test --workspace --features creator plugin_abi_version'`
+- **M6G2** — Windows transport landed or ADR-deferred. → *Check:* `bash -c 'cargo test ipc_transport_abstraction || test -f docs/adr/ADR-0006-defer-windows-transport.md'`
+- **M6G3** — version is 1.0.0 and docs match. → *Check:* `bash -c 'grep -q "^version = \"1.0.0\"" Cargo.toml && grep -q "1.0.0" CHANGELOG.md'`
+- **M6G4** — full workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
 
 ---
 
@@ -236,32 +211,8 @@ template (highlight/retention rollups + publish-ready clips).
 
 - Commit prefixes: `feat:` `fix:` `chore:` `refactor:` `ci:` `docs:` `test:` `perf:`.
 - **No AI attribution** in commits, PRs, or code comments (per project CLAUDE.md).
-- **Editions:** default build = PVR; `--features creator` = Creator Edition. Keep
-  the PVR build free of creator deps; gate new creator surfaces behind the feature.
-- A PVR slice is: change + tests + daemon/web wiring + SPA surface + E2E verify.
-  A Creator slice adds: signal-store/contract change (where relevant) + pure-data
+- **Editions:** default build = PVR; `--features creator` = Creator Edition. Keep the
+  PVR build free of creator deps; gate new creator surfaces behind the feature.
+- A PVR slice is: change + tests + daemon/web wiring + SPA surface + E2E verify. A
+  Creator slice adds a signal-store/contract change (where relevant) + the pure-data
   crate + capability/marketplace registration. The wiring step separates 🟡 from ✅.
-
----
-
-## revoy ledger block
-
-Machine-readable current phase for the revoy cross-project ledger. Tracks the
-outstanding (⬜) items of the near-term PVR phase (the product comes first); roll
-to the next phase when these land. Keep in sync with the tables above.
-
-<!-- revoy:begin -->
-```toml
-phase = "post-near-term hardening (v0.5.x)"
-
-[[todo]]
-line = "Verify Licence JWT ES256 signature (TODO(licence-verify) in routes/licence.rs) before any Creator Edition commercial launch"
-difficulty = 30
-priority = "HIGH"
-
-[[todo]]
-line = "Clean 44 Creator-crate clippy warnings (across tool crates); gate on cargo clippy --features creator"
-difficulty = 25
-priority = "LOW"
-```
-<!-- revoy:end -->

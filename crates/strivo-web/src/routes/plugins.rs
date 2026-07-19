@@ -44,24 +44,8 @@ fn archiver_db() -> PathBuf {
     plugins_root().join("archiver").join("archiver.db")
 }
 
-/// Viewguard's `init` joins `plugins/viewguard` onto a data_dir that already
-/// ends in `plugins/viewguard`, so the live DB nests twice. Prefer that path
-/// but fall back to the un-nested location so this keeps working if the plugin
-/// ever corrects the join.
-fn viewguard_db() -> Option<PathBuf> {
-    let nested = plugins_root()
-        .join("viewguard")
-        .join("plugins")
-        .join("viewguard")
-        .join("viewguard.db");
-    let flat = plugins_root().join("viewguard").join("viewguard.db");
-    if nested.exists() {
-        Some(nested)
-    } else if flat.exists() {
-        Some(flat)
-    } else {
-        None
-    }
+fn viewguard_db() -> PathBuf {
+    plugins_root().join("viewguard").join("viewguard.db")
 }
 
 /// `POST /api/v1/plugins/chapters/<recording_id>` — generate (or
@@ -1523,9 +1507,7 @@ async fn casebook_generate(
     }
 
     // Viewguard: try the viewguard DB if it's there.
-    let viewbot_score: Option<f32> = viewguard_db()
-        .as_deref()
-        .and_then(open_ro)
+    let viewbot_score: Option<f32> = open_ro(&viewguard_db())
         .and_then(|c| {
             // We can't reach into strivo_plugins::viewguard without a stable
             // shape — use the SQL we know lives in the DB. Fall back to
@@ -1981,7 +1963,7 @@ async fn viewguard_trend(headers: HeaderMap, State(state): State<AppState>) -> i
     if let Err(r) = gate_pro("viewguard") {
         return r;
     }
-    let Some(conn) = viewguard_db().as_deref().and_then(open_ro) else {
+    let Some(conn) = open_ro(&viewguard_db()) else {
         return Json(json!({
             "watchlist": {
                 "critical": [], "warning": [], "watch": [], "clear": []
@@ -3635,8 +3617,8 @@ async fn index(headers: HeaderMap, State(state): State<AppState>) -> impl IntoRe
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
     let viewguard_data = viewguard_db()
-        .as_deref()
-        .and_then(|p| p.parent().map(|p| p.to_string_lossy().to_string()))
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
     let crunchr_conn = open_ro(&crunchr_db());
@@ -3714,7 +3696,7 @@ async fn index(headers: HeaderMap, State(state): State<AppState>) -> impl IntoRe
         }),
     };
 
-    let viewguard = match viewguard_db().as_deref().and_then(open_ro) {
+    let viewguard = match open_ro(&viewguard_db()) {
         Some(c) => json!({
             "name": "viewguard",
             "display": "Viewguard",
@@ -3965,7 +3947,7 @@ async fn viewguard_verdicts(
     if let Err(r) = gate_pro("viewguard") {
         return r;
     }
-    let Some(conn) = viewguard_db().as_deref().and_then(open_ro) else {
+    let Some(conn) = open_ro(&viewguard_db()) else {
         return Json(json!({ "available": false, "verdicts": [] })).into_response();
     };
     match strivo_plugins::viewguard::store::all_verdicts(&conn) {
@@ -4002,7 +3984,7 @@ async fn viewguard_samples(
     if let Err(r) = gate_pro("viewguard") {
         return r;
     }
-    let Some(conn) = viewguard_db().as_deref().and_then(open_ro) else {
+    let Some(conn) = open_ro(&viewguard_db()) else {
         return Json(json!({ "available": false, "samples": [] })).into_response();
     };
     match strivo_plugins::viewguard::store::samples_for(&conn, &channel_id, 240) {

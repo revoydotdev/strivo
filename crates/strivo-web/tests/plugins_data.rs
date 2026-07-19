@@ -9,10 +9,13 @@
 //! standing up a daemon + auth.
 
 use rusqlite::Connection;
+use strivo_core::config::AppConfig;
+use strivo_core::plugin::{Plugin, PluginContext};
 use strivo_plugins::archiver::db as adb;
 use strivo_plugins::crunchr::db as cdb;
 use strivo_plugins::insights::frequency;
 use strivo_plugins::viewguard::store::{self, VerdictRow, ViewguardStore};
+use strivo_plugins::viewguard::ViewguardPlugin;
 
 #[test]
 fn crunchr_list_and_detail() {
@@ -137,4 +140,49 @@ fn viewguard_verdicts_and_samples_read_only() {
     let samples = store::samples_for(&conn, "c1", 10).unwrap();
     assert_eq!(samples.len(), 4);
     assert!(samples[0].viewers <= samples[3].viewers); // oldest-first
+}
+
+/// Guards against the double-nesting regression (AX-6): the plugin registry's
+/// `init_all` already scopes each plugin's `data_dir` to
+/// `<base>/plugins/<name>` before calling `init`, so the plugin must use that
+/// path as-is rather than re-joining `plugins/<name>` a second time. This
+/// mirrors exactly how `registry.rs::init_all` builds the `PluginContext`, and
+/// asserts the resulting DB lands at the same flat path the web layer's
+/// `plugins_root()`-style resolution computes: `<base>/plugins/viewguard/viewguard.db`.
+#[test]
+fn viewguard_data_path() {
+    let base = tempfile::tempdir().unwrap();
+    let base_data = base.path().to_path_buf();
+
+    let config = AppConfig::default();
+    let ctx = PluginContext {
+        config: &config,
+        data_dir: base_data.join("plugins").join("viewguard"),
+        cache_dir: base_data.join("cache").join("plugins").join("viewguard"),
+    };
+
+    let mut plugin = ViewguardPlugin::new();
+    plugin.init(&ctx).unwrap();
+
+    let expected_db = base_data
+        .join("plugins")
+        .join("viewguard")
+        .join("viewguard.db");
+    assert!(
+        expected_db.exists(),
+        "expected viewguard db at {}",
+        expected_db.display()
+    );
+
+    let double_nested = base_data
+        .join("plugins")
+        .join("viewguard")
+        .join("plugins")
+        .join("viewguard")
+        .join("viewguard.db");
+    assert!(
+        !double_nested.exists(),
+        "viewguard db must not double-nest under {}",
+        double_nested.display()
+    );
 }

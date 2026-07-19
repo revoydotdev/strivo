@@ -147,7 +147,9 @@ impl Plugin for ViewguardPlugin {
     }
 
     fn init(&mut self, ctx: &PluginContext) -> anyhow::Result<()> {
-        self.data_dir = ctx.data_dir.join("plugins").join("viewguard");
+        // `init_all` already scopes data_dir to `<base>/plugins/viewguard`;
+        // use it directly. The webui reads `<data>/plugins/viewguard/viewguard.db`.
+        self.data_dir = ctx.data_dir.clone();
         std::fs::create_dir_all(&self.data_dir)?;
         let db_path = self.data_dir.join("viewguard.db");
         self.store = Some(ViewguardStore::open(&db_path)?);

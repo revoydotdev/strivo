@@ -1,0 +1,1 @@
+{"commit":"789bca8","concern":"viewguard-path","milestone":"M1","todo":"M1.P3.S2.T1","ts":"2026-07-19T19:19:42-0400","type":"done","verified_by":{"cmd":"cargo test -p strivo-web --features creator viewguard_data_path","exit":0}}

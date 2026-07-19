@@ -1,6 +1,7 @@
 //! SQLite persistence for viewguard.
 //!
-//! Schema lives at `<data_dir>/plugins/viewguard/viewguard.db`. Three
+//! Schema lives at `<data_dir>/viewguard.db`, where `data_dir` is already
+//! scoped to `<base>/plugins/viewguard` by the plugin registry. Three
 //! tables: `samples` (the time series), `signals` (per-detector firings),
 //! `verdicts` (the audit trail — final score per stream session).
 

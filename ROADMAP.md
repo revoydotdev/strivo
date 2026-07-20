@@ -156,6 +156,14 @@ writes into the M2 signal store.
 - **M3G2** — every extractor writes through the store contract (confidence + provenance present). → *Check:* `cargo test --workspace --features creator extractor_contract`
 - **M3G3** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
 
+### M3.P9.S1 — Gate-closing todos
+Explicit todos that close the milestone gates. `M3G1` is owned by the corpus-service
+todo (`M3.P1.S1.T1`, artifact `corpus_hydrate`); `M3G2` by the extractor-contract todo
+(`M3.P2.S1.T1`, artifact `extractor_contract`). The milestone-wide quality gate below
+has no feature owner and is tracked here.
+
+- **`M3.P9.S1.T1`** — Workspace+creator test suite green and strict clippy clean. → *Artifact:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'` · *Concern:* gate-m3g3
+
 ---
 
 # M4 — Analytics, visualisation & clip/export (CE-P5, CE-P6, CE-P7)

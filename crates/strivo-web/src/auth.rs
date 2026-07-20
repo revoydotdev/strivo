@@ -1,7 +1,7 @@
 use rand::Rng;
 
 use base64::Engine;
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -74,8 +74,8 @@ impl SessionToken {
 /// Generate a 32-byte session secret (URL-safe base64). Persisted in
 /// `[web].session_secret` so cookies survive restarts.
 pub fn generate_session_secret() -> String {
-    let mut rng = rand::rng();
-    let bytes: [u8; 32] = std::array::from_fn(|_| rng.random());
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = std::array::from_fn(|_| rng.gen());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -87,10 +87,10 @@ pub struct ApiKey(pub String);
 impl ApiKey {
     pub fn generate() -> Self {
         const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let s: String = (0..32)
             .map(|_| {
-                let i = rng.random_range(0..CHARSET.len());
+                let i = rng.gen_range(0..CHARSET.len());
                 CHARSET[i] as char
             })
             .collect();

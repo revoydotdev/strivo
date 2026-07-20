@@ -227,13 +227,7 @@ pub fn insert_segments(
     )?;
     for (idx, start, end, text, speaker, confidence) in segments {
         stmt.execute(rusqlite::params![
-            video_id,
-            *idx as i64,
-            start,
-            end,
-            text,
-            speaker,
-            confidence
+            video_id, idx, start, end, text, speaker, confidence
         ])?;
     }
     Ok(())
@@ -248,14 +242,7 @@ pub fn insert_chunks(
         "INSERT OR REPLACE INTO chunks (video_id, chunk_index, text, start_sec, end_sec, token_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
     for (idx, text, start, end, tokens) in chunks {
-        stmt.execute(rusqlite::params![
-            video_id,
-            *idx as i64,
-            text,
-            start,
-            end,
-            *tokens as i64
-        ])?;
+        stmt.execute(rusqlite::params![video_id, idx, text, start, end, tokens])?;
     }
     Ok(())
 }
@@ -289,7 +276,7 @@ pub fn insert_word_frequencies(
         "INSERT OR REPLACE INTO word_frequency (video_id, word, count) VALUES (?1, ?2, ?3)",
     )?;
     for (word, count) in frequencies {
-        stmt.execute(rusqlite::params![video_id, word, *count as i64])?;
+        stmt.execute(rusqlite::params![video_id, word, count])?;
     }
     Ok(())
 }
@@ -436,7 +423,7 @@ pub fn get_top_words(conn: &Connection, limit: usize) -> Result<Vec<(String, i64
         "SELECT word, SUM(count) as total FROM word_frequency GROUP BY word ORDER BY total DESC LIMIT ?1",
     )?;
     let results = stmt
-        .query_map([limit as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map([limit], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(results)
 }
@@ -514,8 +501,7 @@ pub fn get_segments_for_video(
     )?;
     let results = stmt
         .query_map([video_id], |row| {
-            let idx: i64 = row.get(0)?;
-            Ok((idx as usize, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(results)

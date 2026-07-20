@@ -226,8 +226,14 @@ const API = {
     API._fetch(`/plugins/editor/${encodeURIComponent(recordingId)}/render`, { method: "POST" }),
   datavizRun: (corpus, experiment) =>
     API._fetch(`/dataviz/run`, { method: "POST", body: { corpus, experiment } }),
-  crunchrTranscript: (recordingId) =>
-    API._fetch(`/plugins/crunchr/transcript/${encodeURIComponent(recordingId)}`).catch(() => null),
+  datavizCorpus: (scope, id, dateFrom, dateTo) => {
+    const p = new URLSearchParams();
+    p.set("scope", scope);
+    p.set("id", id);
+    if (dateFrom) p.set("date_from", dateFrom);
+    if (dateTo) p.set("date_to", dateTo);
+    return API._fetch(`/dataviz/corpus?${p.toString()}`);
+  },
   /* @creator-end */
   chatSend: (room, text) =>
     API._fetch(`/chat/send`, {
@@ -4751,28 +4757,17 @@ async function renderDataviz() {
   document.getElementById("dz-run").addEventListener("click", async (ev) => {
     if (datavizState.selectedIds.size === 0) { Toast.error("Pick at least one recording first"); return; }
     const exp = DATAVIZ_EXPERIMENTS.find((e) => e.kind === datavizState.experimentKind);
-    await withBusy(ev.currentTarget, "Fetching transcripts…", async () => {
-      // Build the Corpus client-side from each recording's Crunchr
-      // transcript. Skip recordings that have no transcript yet.
+    await withBusy(ev.currentTarget, "Fetching corpus…", async () => {
+      // Hydrate the Corpus server-side (signal store) per selected
+      // recording, then merge into one combined corpus for the run.
       const episodes = [];
       for (const id of datavizState.selectedIds) {
-        const r = finished.find((x) => x.id === id);
-        const tr = await API.crunchrTranscript(id);
-        if (!tr || !tr.utterances) continue;
-        episodes.push({
-          id,
-          title: niceTitle(r?.stream_title) || r?.channel_name || id.slice(0, 8),
-          date: r?.started_at || "",
-          utterances: tr.utterances.map((u) => ({
-            speaker: u.speaker || "Speaker",
-            text: u.text || "",
-            start_sec: u.start_sec || 0,
-            end_sec: u.end_sec || (u.start_sec || 0) + 1,
-          })),
-        });
+        const result = await API.datavizCorpus("recording", id);
+        if (!result || !result.available || !result.corpus) continue;
+        episodes.push(...result.corpus.episodes);
       }
       if (episodes.length === 0) {
-        Toast.error("None of the selected recordings have Crunchr transcripts yet");
+        Toast.error("None of the selected recordings have a hydrated corpus yet");
         return;
       }
       const corpus = { label: "selection", episodes };

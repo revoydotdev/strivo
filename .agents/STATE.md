@@ -7,6 +7,37 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M3
 
+## tick 2026-07-20b — NORMAL (M3): SPA corpus consume + events/OCR extractors
+
+Preflight CLEAN, worktrees clean. Governance: no directives, not paused, 0
+unread. Not first M3 tick (2 done) → no re-decomposition. Picked 3 concerns;
+`corpus-web` file-disjoint, `extractor-events`/`extractor-ocr` share only a
+single anchored line in `src/extraction/mod.rs` (top vs EOF anchors) → clean
+rebases, no conflict. Self-heal `--record` deliberately SKIPPED on all 3
+(their artifact tests did not yet exist → the tick-2026-07-20a vacuous-pass
+trap); unbuilt state confirmed by grep instead. Built by sonnet workers,
+integrated + re-verified non-vacuous on the integrated tree:
+- **`M3.P1.S1.T2` corpus-web** — SPA now fetches the server-hydrated corpus via
+  `API.datavizCorpus` → `GET /dataviz/corpus` per selected recording and POSTs
+  that to `/dataviz/run`; removed the client-side transcript→episode assembly
+  (and the now-orphaned `API.crunchrTranscript`). 3 tests
+  (`corpus_endpoint_route`: route registered, auth-gated, spa.js consumes it),
+  clippy clean. Closes M3G1's client-consumer gap.
+- **`M3.P2.S2.T1` extractor-events** — `EventExtractor` (`src/extraction/events.rs`,
+  DI'd `TimecodedEvent` detections, no pipeline calls) maps → `ExtractedSignal`
+  `kind:"event:*"` through `run_extractor`. 3 tests (`extractor_events`).
+- **`M3.P2.S2.T2` extractor-ocr** — `OcrExtractor` (`src/extraction/ocr.rs`,
+  DI'd `OcrDetection` scoreboard/lower-third reads) maps → `kind:"ocr:*"`,
+  engine confidence + region/text payload carried through. 3 tests
+  (`extractor_ocr`). Both new extractors write through the M2 store contract
+  (provenance from the trait, confidence validated pre-write) — satisfy M3G2.
+
+M3 now 5/7 done. Remaining: `M3.P2.S1.T2` (extractor back-pressure queue) and
+`M3.P9.S1.T1` (gate-m3g3 whole-suite). Phase stays NORMAL (not all todos done).
+Integrated via `integrate.sh` (rebase+gate+ff-merge); ledger `done --run`
+re-verified each on `integration`; each concern's `ledger.jsonl` folded into its
+`chore: integrate` commit (no standalone chore(ledger)). Pushed to `origin`.
+
 ## tick 2026-07-20a — NORMAL (M3): gate-decompose + T1s (corpus, extractor)
 
 Preflight CLEAN, worktrees clean. Governance: no directives, not paused, 0
@@ -404,20 +435,7 @@ Gates re-verified on the integrated tree: **M1G1** `cargo test` ✓, **M1G2**
 **M1G4** no `TODO(licence-verify)` in `*.rs` ✓. **M1 remaining: 0 — candidate-complete.**
 `MILESTONE_PHASE` flipped to `AUDIT` (no audit run this tick, per protocol).
 
-## tick 2026-07-19c — NORMAL (M1)
-Preflight CLEAN; worktrees clean; no governance directives / operator messages.
-M1: 5→8 done. **DONE** `M1.P1.S1.T4` (licence-daemon-verify, `573b1f4`) — mirrored the
-web route's ES256 `verify_licence_token` into `src/licence/client.rs` (core crate can't
-depend on strivo-web); `refresh_now` now verifies signature + `sub`/`exp`/`licence_exp`
-and derives tier/expiry from the verified claims before persisting, fail-closed when no
-key resolves. Added `jsonwebtoken`/`p256` (unconditional — the refresh loop runs in the
-default PVR binary). 4 verify tests. Closes AX-7 on the daemon path.
-Gates verified on the integrated tree and recorded: **M1G1** `cargo test` ✓,
-**M1G2** `cargo test --workspace --features creator` ✓ (`M1.P9.S1.T1`/`T2`). M1G4 already
-clean (no `TODO(licence-verify)` in `*.rs`). Deferred `M1.P3.S1.T1` (clippy-creator, M1G3)
-to its own tick: it may edit `src/licence/client.rs` (non-disjoint with T4) and warrants a
-full tick now that T4 has landed. **M1 remaining: 1** (clippy-creator).
-
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`
 - 2026-07-20T04:33:39Z — integrated `concern/extractor-events` into `integration` at `8fbdfa4`
 - 2026-07-20T04:34:29Z — integrated `concern/extractor-ocr` into `integration` at `1cb3eea`
+- 2026-07-20T04:35:21Z — integrated `concern/corpus-web` into `integration` at `0fedc49`

@@ -79,3 +79,7 @@ desktop.ini
 
 # Local cargo config (per-contributor [patch] overrides etc).
 .cargo/
+
+# Swarm runtime state (per-tick locks + operator governance store)
+.agents/locks/
+.agents/governance/

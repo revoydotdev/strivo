@@ -7,6 +7,57 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## tick 2026-07-19e — NORMAL (M2): webui-signals
+
+Preflight CLEAN, RUN.lock held by tick runner. Governance: no directives, not
+paused. Self-heal-check for `M2.P1.S2.T3` already ran NEEDS-WORK (genuinely
+must be built) — went straight to building per instruction, no re-run.
+- CLAIMED `M2.P1.S2.T3` — **webui-signals**: migrate the webui analytics call
+  sites off `crunchr.db` to `SignalStore` + the query API. Files:
+  `crates/strivo-web/src/routes/plugins.rs`, `tests/plugins_data.rs`.
+
+**RESULT — BLOCKED / NOT integrated.** Decomposition gap, not a worker
+failure (same class as `insights-migrate` at tick `2026-07-19c`). Dispatched
+one worker in `/home/revelri/Desktop/skinner-wt/webui-signals`; it correctly
+migrated the 5 true cross-recording analytics handlers (`insights_words`,
+`insights_topics`, `insights_speakers`, `insights_export`, `insights_compare`)
+onto `SignalStore::open(signals_db())` + a new `signal_word_frequencies` /
+`signal_topics` / `signal_speaker_airtime` / `signal_sentiment` helper set,
+reusing `strivo_plugins::insights::frequency::STOPWORDS` rather than
+duplicating it, and added `insights_via_signal_store` in `plugins_data.rs`.
+Independently re-verified in the worktree: `captest cargo test --workspace
+--features creator insights_via_signal_store` → 1 passed, exit 0. BUT the
+todo's full artifact also requires `! git grep -qn "crunchr.db" --
+crates/strivo-web/src`, and that grep still finds 21 lines — confirmed by
+rerunning it myself, not just trusting the worker. Root cause: `plugins.rs`
+has ~27 `crunchr_db()`/`crunchr.db` sites, not the ~9 the todo estimated; only
+the 5 migrated ones are true analytics. The rest (`chapters_generate` ×2,
+`captions_export`, `insights_retention`, `recording_captions`, plus
+brandsafe/reuse/casebook/heatmap/broll/crunchr-CRUD) need full per-segment
+transcript text including segments with **no speaker label** — real
+transcripts have these (diarization-off case; see
+`crunchr/db.rs::load_full_segments_preserves_speakers_and_order`) — and the
+`T2` producer's `speaker_segment` kind deliberately skips them, so migrating
+would silently drop spoken words from live captions/VTT. `chapters_generate`
+is additionally a hard block regardless: it calls
+`strivo_chapters::generate_chapters(&Path, ..)`, a different crate outside
+this concern's 2-file scope. Bonus finding: `chapters_generate` is *already
+dead* — `read_segments` queries `segments.recording_id`, a column that
+doesn't exist in the real `crunchr.db` schema (only `video_id`) — so it
+already errors on any real recording; not a regression risk either way.
+Did NOT force a pass, did NOT integrate, did NOT touch `ledger.jsonl`
+(`ledger.py done --run` would correctly refuse — never invoked). Destroyed
+the worktree/branch; the 5-handler migration is not preserved anywhere and
+must be redone. **Re-sequenced ROADMAP:** added `M2.P1.S2.T4`
+(signal-store-full-parity — extend the producer to also mirror unlabeled
+segments) as the path to actually closing `T3`, or an owner may instead
+rescope `T3`'s own artifact to the 5 analytics handlers (mirrors the still-
+open M2G2 gate-wording gap flagged at tick `2026-07-19c`) and close it
+directly without `T4`. Left `T3`'s artifact untouched pending that decision.
+M2 remaining: `T3` (blocked, re-sequenced), `T4` (new), insights-migrate
+(`T1`, still blocked on `T3`), gate-m2g4 (`M2.P9.S1.T1`). Phase stays
+NORMAL/M2 (not candidate-complete).
+
 ## tick 2026-07-19d — NORMAL (M2): crunchr-signals producer
 Preflight CLEAN, worktree-check clean. Governance: no directives, not paused, 0
 unread. M2 = 4 unclaimed of 10; gate-decomp already done. Dependency read: T1

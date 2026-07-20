@@ -333,11 +333,6 @@ const API = {
     const qs = platform ? `?platform=${encodeURIComponent(platform)}` : "";
     return API._fetch(`/plugins/loudness/${encodeURIComponent(recordingId)}${qs}`, { method: "POST" });
   },
-  multistreamTiles: (containerW, containerH, mode, host) => {
-    const p = new URLSearchParams({ container_w: containerW, container_h: containerH, host });
-    if (mode) p.set("mode", JSON.stringify(mode));
-    return API._fetch(`/plugins/multistream/tiles?${p.toString()}`);
-  },
   brandingLoad: (recordingId) =>
     API._fetch(`/plugins/branding/${encodeURIComponent(recordingId)}`),
   brandingSave: (recordingId, spec) =>
@@ -346,6 +341,14 @@ const API = {
   pipelinesDag: () => API._fetch("/pipelines/dag"),
   marketplaceCatalog: () => API._fetch("/marketplace/catalog"),
   /* @creator-end */
+  // Multi-stream tile layout for the watch player. Core (single + multi
+  // view), available in the PVR build — kept outside the @creator block so
+  // the player isn't broken by a missing API method.
+  multistreamTiles: (containerW, containerH, mode, host) => {
+    const p = new URLSearchParams({ container_w: containerW, container_h: containerH, host });
+    if (mode) p.set("mode", JSON.stringify(mode));
+    return API._fetch(`/multistream/tiles?${p.toString()}`);
+  },
   patreonPull: (body) =>
     API._fetch("/patreon/pull", { method: "POST", body }),
   vodDownload: (body) =>

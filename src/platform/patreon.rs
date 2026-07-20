@@ -483,82 +483,129 @@ impl PatreonClient {
         cookies_path: Option<&std::path::Path>,
         limit: usize,
     ) -> Result<Vec<PatreonPost>> {
-        let url = format!("https://www.patreon.com/c/{vanity}/posts");
-        let mut cmd = tokio::process::Command::new("yt-dlp");
-        cmd.arg("-J")
+        // The campaign page lists each post under its vanity-prefixed URL
+        // (e.g. patreon.com/theyard/posts/<slug>-<id>), but yt-dlp's PatreonIE
+        // only accepts the canonical patreon.com/posts/<id> form. A single
+        // full extraction therefore fails per-post ("Unsupported URL") and
+        // yields only null entries — no posts at all. So enumerate the post
+        // URLs flat (cheap, reliable), rewrite them to the canonical form, then
+        // extract metadata from those.
+        let page = format!("https://www.patreon.com/c/{vanity}/posts");
+
+        // Pass 1: flat enumeration of the most recent post URLs.
+        let mut list = tokio::process::Command::new("yt-dlp");
+        list.arg("-J")
+            .arg("--flat-playlist")
             .arg("--playlist-end")
             .arg(limit.to_string())
             .arg("--ignore-errors")
             .arg("--no-warnings");
         if let Some(cp) = cookies_path {
-            cmd.arg("--cookies").arg(cp);
+            list.arg("--cookies").arg(cp);
         }
-        cmd.arg(&url);
+        list.arg(&page);
 
-        // Bound the call: yt-dlp does a full per-post extraction, so a hung
-        // request must not stall the monitor poll.
-        let output = tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output())
+        let listing = tokio::time::timeout(std::time::Duration::from_secs(60), list.output())
+            .await
+            .context("yt-dlp post listing timed out")?
+            .context("failed to spawn yt-dlp")?;
+        let listing_out = String::from_utf8_lossy(&listing.stdout);
+        let listing_json: serde_json::Value = serde_json::from_str(listing_out.trim())
+            .with_context(|| format!("parse yt-dlp listing for {vanity}"))?;
+
+        let mut canonical_urls = Vec::new();
+        if let Some(entries) = listing_json.get("entries").and_then(|v| v.as_array()) {
+            for e in entries {
+                let raw = e
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| e.get("webpage_url").and_then(|v| v.as_str()))
+                    .unwrap_or("");
+                if let Some(c) = canonical_post_url(raw) {
+                    canonical_urls.push(c);
+                }
+            }
+        }
+
+        if canonical_urls.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Pass 2: full metadata extraction against the canonical URLs. yt-dlp
+        // does a per-post extraction, so bound the call: a hung request must
+        // not stall the monitor poll.
+        let mut meta = tokio::process::Command::new("yt-dlp");
+        meta.arg("-J").arg("--ignore-errors").arg("--no-warnings");
+        if let Some(cp) = cookies_path {
+            meta.arg("--cookies").arg(cp);
+        }
+        for u in &canonical_urls {
+            meta.arg(u);
+        }
+
+        let output = tokio::time::timeout(std::time::Duration::from_secs(120), meta.output())
             .await
             .context("yt-dlp timed out")?
             .context("failed to spawn yt-dlp")?;
-
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let data: serde_json::Value = serde_json::from_str(stdout.trim())
-            .with_context(|| format!("parse yt-dlp output for {vanity}"))?;
 
+        // With multiple URLs, `-J` prints one compact JSON object per post,
+        // one per line. Skip lines that fail to parse or carry no id.
         let mut posts = Vec::new();
-        if let Some(entries) = data.get("entries").and_then(|v| v.as_array()) {
-            for e in entries {
-                if e.is_null() {
-                    continue; // inaccessible post skipped via --ignore-errors
-                }
-                let id = e
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let webpage = e
-                    .get("webpage_url")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| e.get("url").and_then(|v| v.as_str()))
-                    .unwrap_or("")
-                    .to_string();
-                if id.is_empty() || webpage.is_empty() {
-                    continue;
-                }
-                let title = e
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Untitled")
-                    .to_string();
-                let thumbnail_url = e
-                    .get("thumbnail")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                // upload_date is YYYYMMDD; normalise to YYYY-MM-DD for display.
-                let published_at = e
-                    .get("upload_date")
-                    .and_then(|v| v.as_str())
-                    .map(|d| {
-                        if d.len() == 8 {
-                            format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8])
-                        } else {
-                            d.to_string()
-                        }
-                    })
-                    .unwrap_or_default();
-                posts.push(PatreonPost {
-                    id,
-                    campaign_id: campaign_id.to_string(),
-                    title,
-                    // The post page URL is the stable handle; the pull path
-                    // re-runs yt-dlp on it (with cookies) to download.
-                    url: webpage.clone(),
-                    published_at,
-                    embed_url: Some(webpage),
-                    thumbnail_url,
-                });
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
             }
+            let Ok(e) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let id = e
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if id.is_empty() {
+                continue;
+            }
+            let title = e
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled")
+                .to_string();
+            let thumbnail_url = e
+                .get("thumbnail")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            // The canonical post page URL is the stable handle; the pull path
+            // re-runs yt-dlp on it (with cookies) to download.
+            let url = e
+                .get("webpage_url")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .unwrap_or_else(|| format!("https://www.patreon.com/posts/{id}"));
+            // upload_date is YYYYMMDD; normalise to YYYY-MM-DD for display.
+            let published_at = e
+                .get("upload_date")
+                .and_then(|v| v.as_str())
+                .map(|d| {
+                    if d.len() == 8 {
+                        format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8])
+                    } else {
+                        d.to_string()
+                    }
+                })
+                .unwrap_or_default();
+            posts.push(PatreonPost {
+                id,
+                campaign_id: campaign_id.to_string(),
+                title,
+                url: url.clone(),
+                published_at,
+                embed_url: Some(url),
+                thumbnail_url,
+            });
         }
         Ok(posts)
     }
@@ -676,6 +723,24 @@ impl PatreonClient {
     }
 }
 
+/// Rewrite a Patreon post URL to the canonical `patreon.com/posts/<id>` form
+/// that yt-dlp's PatreonIE accepts. The campaign listing emits vanity-prefixed
+/// URLs (`patreon.com/<vanity>/posts/<slug>-<id>`) that the post extractor
+/// rejects, so keep only the trailing numeric post id. Returns None if no
+/// numeric id can be found.
+fn canonical_post_url(url: &str) -> Option<String> {
+    let clean = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    let id = clean.rsplit(['-', '/']).next()?;
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("https://www.patreon.com/posts/{id}"))
+}
+
 /// Simple URL encoding for OAuth redirect URI
 fn urlencoding(s: &str) -> String {
     s.chars()
@@ -716,4 +781,36 @@ async fn wait_for_auth_code(listener: tokio::net::TcpListener) -> Result<String>
     stream.write_all(response.as_bytes()).await?;
 
     Ok(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_post_url;
+
+    #[test]
+    fn canonicalizes_vanity_prefixed_post_urls() {
+        // The campaign listing emits vanity-prefixed URLs that PatreonIE rejects.
+        assert_eq!(
+            canonical_post_url("https://www.patreon.com/theyard/posts/ep-256-supertf-162040009")
+                .as_deref(),
+            Some("https://www.patreon.com/posts/162040009")
+        );
+        // Already-canonical slug form.
+        assert_eq!(
+            canonical_post_url("https://www.patreon.com/posts/why-are-you-to-d-161901821")
+                .as_deref(),
+            Some("https://www.patreon.com/posts/161901821")
+        );
+        // Bare numeric id, with a trailing slash and a query string.
+        assert_eq!(
+            canonical_post_url("https://www.patreon.com/posts/114721679/?foo=bar").as_deref(),
+            Some("https://www.patreon.com/posts/114721679")
+        );
+    }
+
+    #[test]
+    fn rejects_non_post_urls() {
+        assert_eq!(canonical_post_url("https://www.patreon.com/theyard"), None);
+        assert_eq!(canonical_post_url(""), None);
+    }
 }

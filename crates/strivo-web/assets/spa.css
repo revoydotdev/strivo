@@ -647,31 +647,30 @@ th[data-sort]:hover {
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
-/* Home row variant: horizontal scroll strip for media-pills and the
- * Jellyfin-style Live Now cards. Snap so flicked-scroll lands cleanly. */
+/* Home rows: a viewport-responsive grid that wraps instead of scrolling
+ * horizontally. auto-fill packs each row with as many cards as fit and
+ * minmax(min(W, 100%), 1fr) clamps the track to the container width, so
+ * cards stay neatly gridded and never spill off-page at any viewport size.
+ * Media-pill rows use a wider track than the thumbnail-sized Live Now
+ * cards (.live-now-row). */
 .dash-scroll {
-  display: flex;
-  flex-direction: row;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
   gap: 0.6rem;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 0.5rem;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
+  align-items: start;
 }
-.dash-scroll > .media-pill {
-  flex: 0 0 320px;
-  scroll-snap-align: start;
+.live-now-row .dash-scroll {
+  grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr));
 }
-/* Live Now cards are thumbnail-sized so the whole row of currently-
- * live channels fits on screen and scrolls horizontally. Much smaller
- * than the recording pill above. */
+/* min-width:0 lets grid items shrink so long titles ellipsize rather than
+ * widen the track past its column. */
+.dash-scroll > .media-pill,
 .dash-scroll > .live-card {
-  flex: 0 0 180px;
-  scroll-snap-align: start;
+  min-width: 0;
 }
+/* Empty-state note spans the row instead of sitting in one card slot. */
 .dash-scroll > .empty.sm {
-  flex: 0 0 auto;
+  grid-column: 1 / -1;
 }
 /* Live Now card — channel thumbnail + name + viewers + LIVE chip. */
 .live-card {

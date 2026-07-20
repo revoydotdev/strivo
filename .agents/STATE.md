@@ -439,3 +439,4 @@ Gates re-verified on the integrated tree: **M1G1** `cargo test` ✓, **M1G2**
 - 2026-07-20T04:33:39Z — integrated `concern/extractor-events` into `integration` at `8fbdfa4`
 - 2026-07-20T04:34:29Z — integrated `concern/extractor-ocr` into `integration` at `1cb3eea`
 - 2026-07-20T04:35:21Z — integrated `concern/corpus-web` into `integration` at `0fedc49`
+- 2026-07-20T04:46:53Z — integrated `concern/extractor-backpressure` into `integration` at `ca12543`

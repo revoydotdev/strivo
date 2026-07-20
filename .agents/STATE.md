@@ -4,8 +4,73 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: AUDIT
-- CURRENT_MILESTONE: M3
+- MILESTONE_PHASE: NORMAL
+- CURRENT_MILESTONE: M4
+
+## tick 2026-07-20d — AUDIT (M3): PASS → advance to M4
+
+Sole-turn Opus audit, no workers. **VERDICT: PASS.**
+
+1. `python3 scripts/ledger.py check --rerun` → **PASS** (26 done todos,
+   structural+rerun, exit 0, no file diffs — read-only this run).
+2. Gates rerun fresh on `integration` HEAD (`f7fcea1`), all non-vacuous:
+   - **M3G1** `corpus_hydrate` → 5 passed (`corpus_hydrate_recording_scope_
+     orders_utterances_by_start`, `..._channel_scope_yields_all_matching_
+     recordings`, `..._playlist_scope_is_empty_without_playlist_data`,
+     `..._includes_recording_with_no_segments_as_empty_episode`,
+     `..._date_range_filters_episodes_out`).
+   - **M3G2** `extractor_contract` → 3 passed (`extractor_contract_stamps_
+     provenance_from_the_trait_not_the_payload`, `..._round_trips_
+     confidence_and_span`, `..._rejects_out_of_range_confidence_and_writes_
+     nothing`).
+   - **M3G3** full `cargo test --workspace --features creator` → **795
+     passed, 0 failed**; `cargo clippy --workspace --features creator
+     --all-targets -- -D warnings` → clean (0 warnings). Also spot-verified
+     non-vacuous: `corpus_endpoint_route` 3 passed, `extractor_backpressure`
+     2 passed, `extractor_events` 3 passed, `extractor_ocr` 3 passed — every
+     M3 artifact filter matches real, passing tests (no repeat of the
+     tick-20a/20c vacuous-filter trap).
+   - Default (non-creator) `cargo build` also verified green — PVR stays
+     unregressed (AX-1).
+3. **Axiom/ADR conformance, spot-checked against source, not test names:**
+   - **M3G1 wired end-to-end (ADR-0002):** `crates/strivo-web/src/corpus.rs`
+     `hydrate_corpus` is pure/no-IO; `routes/plugins.rs::dataviz_corpus`
+     (`GET /api/v1/dataviz/corpus`) is auth-gated, resolves recording meta,
+     calls it. SPA (`assets/spa.js`) `API.datavizCorpus` is called from a
+     real click handler (`dz-run` in the Data Viz hub) — not dead code; the
+     old client-side transcript assembly is gone.
+   - **M3G2 contract (AX-6/AX-7 spirit):** `src/extraction/mod.rs`
+     `Extractor`/`run_extractor` — `ExtractedSignal` has no `source_plugin`
+     field by construction, so provenance is stamped by the runner, not
+     claimed by the extractor; confidence validated `[0,1]` pre-write,
+     whole batch rejected on violation, matching `SignalStore::write_
+     signals`'s all-or-nothing storage-layer contract. `events.rs`/`ocr.rs`
+     both implement `Extractor` and map through `run_extractor` only.
+   - **Edition gating (ADR-0003/AX-4):** `src/lib.rs:26` `#[cfg(feature =
+     "creator")] pub mod extraction;` — confirmed via default `cargo build`
+     staying green with no creator deps pulled in.
+   - **Watch item, not a defect (mirrors the M2 audit's pipeline-executor
+     precedent):** `EventExtractor`/`OcrExtractor`/`ExtractionQueue`/
+     `WorkItem`/`run_extractor` have no caller anywhere outside `src/
+     extraction/*`'s own tests — no daemon/capture path constructs one yet.
+     This is correctly scoped, not an oversight: both extractors are
+     explicitly dependency-injected ("acquisition is out-of-band" per their
+     module docs), and ROADMAP `M5.P1.S1.T1` (`realtime_tail_extract`) is
+     where extractors get wired to tail live capture. M3's job was the
+     contract + adapters + back-pressure queue, delivered and tested against
+     a real `SignalStore`, ready for M5 to call.
+   - **Known honest gap (carried from tick 20a, unchanged):** corpus
+     `scope=playlist` returns an empty corpus — no plugin persists a
+     recording→playlist mapping yet. Tested as expected-empty behavior
+     (`corpus_hydrate_playlist_scope_is_empty_without_playlist_data`), not a
+     stub; the scope/endpoint contract won't change once a playlist source
+     lands.
+
+M3 candidate-complete → audited PASS. **Promotion: deferred-to-operator.**
+`main` is a clean ancestor of `integration` (ff-able) BUT is checked out in
+the operator's worktree (`/home/revelri/Dev/chorosyne/strivo [main]`) —
+per protocol, `main` is untouched, not entered. `integration` remains the
+line of record. CONTROL advanced: AUDIT(M3) → NORMAL(M4).
 
 ## tick 2026-07-20c — NORMAL (M3): backpressure queue + M3G3 gate → M3 candidate-complete
 
@@ -450,28 +515,6 @@ untracked routes/multistream.rs, `.omo/` — untouched, not clobbered). No new u
 governance messages (0) — the standing blocker from tick `e` still applies, no
 duplicate posted. `integration` is the line of record at `c2b4d77`; `origin` untouched,
 pushed this tick's state commit only.
-
-## tick 2026-07-19e — AUDIT (M1)
-Preflight CLEAN; worktrees clean; no governance directives / unread messages. Sole-turn
-audit of M1, no workers. **AUDIT VERDICT: PASS (gates+axioms), but ff-to-main BLOCKED.**
-All 9 M1 todos re-verified: gates rerun green on the integrated tree — **M1G1** `cargo test` ✓,
-**M1G2** `cargo test --workspace --features creator` ✓ (80/80 ok), **M1G3** strict clippy ✓ (exit 0),
-**M1G4** no `TODO(licence-verify)` in `*.rs` ✓; `ledger.py check --rerun` ✓ (9 done, structural+rerun).
-Axioms verified in code: **AX-7** ES256 verify-before-trust on BOTH paths — `routes/licence.rs`
-(`verify_licence_token` decode ES256 + sub/exp checks before `Licence` at :391) and
-`licence/client.rs` `refresh_now` (verify `?` before build at :222, fail-closed when no pubkey);
-tamper tests present both sides. **AX-6** viewguard single path — `viewguard/mod.rs:152`
-`data_dir = ctx.data_dir.clone()`, `plugins.rs` `viewguard_db()` returns one `PathBuf`, dual-path
-probe gone. **AX-2/3** ffprobe cache keyed `(path,mtime,size)` wired into live `recording_probe`,
-mtime/size invalidation tested.
-**Advancement blocked:** the sibling `main` worktree `/home/revelri/Dev/chorosyne/strivo`
-carries substantial UNCOMMITTED FOREIGN WIP (staged Cargo.toml across crates, `ci.yml`,
-`crunchr/db.rs`, `auth.rs`, `plugins.rs`, `patreon.rs`; untracked `routes/multistream.rs`, `.omo/`
-— apparent M2 work). `main` (744af45) IS a clean ancestor of `integration` (8de87f0), so the
-ff-only merge is valid once that tree is clean, but I did NOT touch that WIP (never clobber work I
-didn't create). `git -C .../chorosyne/strivo merge --ff-only integration` aborted cleanly; no push.
-Phase left at **AUDIT**; posted a `blocker` message to the operator (commit/stash/relocate that WIP,
-then a subsequent AUDIT tick fast-forwards + pushes and advances M1→M2). Remote `origin` untouched.
 
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`
 - 2026-07-20T04:33:39Z — integrated `concern/extractor-events` into `integration` at `8fbdfa4`

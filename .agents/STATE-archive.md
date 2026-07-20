@@ -87,3 +87,26 @@ Gates re-verified on the integrated tree: **M1G1** `cargo test` ✓, **M1G2**
 `cargo clippy --workspace --features creator --all-targets -- -D warnings` ✓ (exit 0),
 **M1G4** no `TODO(licence-verify)` in `*.rs` ✓. **M1 remaining: 0 — candidate-complete.**
 `MILESTONE_PHASE` flipped to `AUDIT` (no audit run this tick, per protocol).
+
+<!-- rotated  : 1 entries + 0 intlog lines -->
+## tick 2026-07-19e — AUDIT (M1)
+Preflight CLEAN; worktrees clean; no governance directives / unread messages. Sole-turn
+audit of M1, no workers. **AUDIT VERDICT: PASS (gates+axioms), but ff-to-main BLOCKED.**
+All 9 M1 todos re-verified: gates rerun green on the integrated tree — **M1G1** `cargo test` ✓,
+**M1G2** `cargo test --workspace --features creator` ✓ (80/80 ok), **M1G3** strict clippy ✓ (exit 0),
+**M1G4** no `TODO(licence-verify)` in `*.rs` ✓; `ledger.py check --rerun` ✓ (9 done, structural+rerun).
+Axioms verified in code: **AX-7** ES256 verify-before-trust on BOTH paths — `routes/licence.rs`
+(`verify_licence_token` decode ES256 + sub/exp checks before `Licence` at :391) and
+`licence/client.rs` `refresh_now` (verify `?` before build at :222, fail-closed when no pubkey);
+tamper tests present both sides. **AX-6** viewguard single path — `viewguard/mod.rs:152`
+`data_dir = ctx.data_dir.clone()`, `plugins.rs` `viewguard_db()` returns one `PathBuf`, dual-path
+probe gone. **AX-2/3** ffprobe cache keyed `(path,mtime,size)` wired into live `recording_probe`,
+mtime/size invalidation tested.
+**Advancement blocked:** the sibling `main` worktree `/home/revelri/Dev/chorosyne/strivo`
+carries substantial UNCOMMITTED FOREIGN WIP (staged Cargo.toml across crates, `ci.yml`,
+`crunchr/db.rs`, `auth.rs`, `plugins.rs`, `patreon.rs`; untracked `routes/multistream.rs`, `.omo/`
+— apparent M2 work). `main` (744af45) IS a clean ancestor of `integration` (8de87f0), so the
+ff-only merge is valid once that tree is clean, but I did NOT touch that WIP (never clobber work I
+didn't create). `git -C .../chorosyne/strivo merge --ff-only integration` aborted cleanly; no push.
+Phase left at **AUDIT**; posted a `blocker` message to the operator (commit/stash/relocate that WIP,
+then a subsequent AUDIT tick fast-forwards + pushes and advances M1→M2). Remote `origin` untouched.

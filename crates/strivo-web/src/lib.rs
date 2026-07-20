@@ -11,6 +11,10 @@ pub mod auth;
 #[cfg(feature = "creator")]
 pub mod corpus;
 pub mod csrf;
+// Enumerates the `strivo_dataviz::Experiment` variants for discovery —
+// Creator Edition only, same gate as `corpus`.
+#[cfg(feature = "creator")]
+pub mod experiment_registry;
 pub mod ipc_client;
 pub mod problem;
 pub mod ratelimit;

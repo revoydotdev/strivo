@@ -234,6 +234,17 @@ const API = {
     if (dateTo) p.set("date_to", dateTo);
     return API._fetch(`/dataviz/corpus?${p.toString()}`);
   },
+  // Discoverable experiment catalog (id/label/params) — replaces the
+  // previous hardcoded experiment list.
+  datavizExperiments: () => API._fetch(`/dataviz/experiments`),
+  // Single server-side "scope selection -> chartable Series" call: hydrates
+  // the corpus from the signal store and runs `experiment` over it in one
+  // request, no client round-trip of the corpus JSON.
+  datavizExperimentRun: (scope, id, experiment, dateFrom, dateTo) =>
+    API._fetch(`/dataviz/experiment`, {
+      method: "POST",
+      body: { scope, id, experiment, date_from: dateFrom, date_to: dateTo },
+    }),
   /* @creator-end */
   chatSend: (room, text) =>
     API._fetch(`/chat/send`, {
@@ -4670,29 +4681,41 @@ async function renderChat() {
 
 // Data viz / analytics route — research-grade aggregation +
 // experiment runner over a corpus of transcribed recordings.
-// User picks recordings to assemble a corpus, picks an experiment,
-// SPA POSTs to /dataviz/run and renders the returned Series as a
-// chart (bar / line / treemap). Pure SVG renderer — no library
-// dependency.
-const DATAVIZ_EXPERIMENTS = [
-  { kind: "word_frequency", label: "Top words", body: { kind: "word_frequency", top_n: 30 } },
-  { kind: "speaker_time", label: "Speaker minutes", body: { kind: "speaker_time" } },
-  { kind: "speaker_episode_count", label: "Speaker appearances", body: { kind: "speaker_episode_count" } },
-  { kind: "episodes_per_month", label: "Episodes per month", body: { kind: "episodes_per_month" } },
-  { kind: "episode_durations", label: "Episode durations", body: { kind: "episode_durations" } },
-  { kind: "speaker_cooccurrence", label: "Speaker co-occurrence", body: { kind: "speaker_cooccurrence" } },
-];
+// User picks recordings, picks an experiment (fetched from
+// /dataviz/experiments — the SPA no longer hardcodes the Experiment
+// variants), then runs it and renders the returned Series as a chart
+// (bar / line / treemap). Pure SVG renderer — no library dependency.
+//
+// Single-recording runs go straight through the combined
+// /dataviz/experiment endpoint (hydrate + run server-side in one call).
+// Multi-recording runs still hydrate each recording via /dataviz/corpus
+// and merge client-side before /dataviz/run, since the combined endpoint
+// only accepts one scope target (recording/playlist/channel).
+
+// Build the JSON body strivo_dataviz::Experiment expects from a registry
+// descriptor: the `kind` tag plus each declared param's default value.
+function experimentBodyFor(desc) {
+  const body = { kind: desc.kind };
+  for (const p of desc.params || []) body[p.name] = p.default;
+  return body;
+}
 
 let datavizState = {
   selectedIds: new Set(),
   series: null,
-  experimentKind: "word_frequency",
+  experiments: [],
+  experimentKind: null,
 };
 
 async function renderDataviz() {
   const recs = (await API.recordings().catch(() => ({ recordings: [] }))).recordings || [];
   const finished = recs.filter((r) => r.state === "Finished");
-  const expBtns = DATAVIZ_EXPERIMENTS.map((e) =>
+  const experiments = (await API.datavizExperiments().catch(() => ({ experiments: [] }))).experiments || [];
+  datavizState.experiments = experiments;
+  if (!datavizState.experimentKind || !experiments.some((e) => e.kind === datavizState.experimentKind)) {
+    datavizState.experimentKind = experiments[0]?.kind || null;
+  }
+  const expBtns = experiments.map((e) =>
     `<button class="sm dz-exp ${datavizState.experimentKind === e.kind ? "active" : ""}" data-kind="${e.kind}" type="button">${htmlEscape(e.label)}</button>`
   ).join("");
   const list = finished.map((r) => `
@@ -4756,26 +4779,44 @@ async function renderDataviz() {
   });
   document.getElementById("dz-run").addEventListener("click", async (ev) => {
     if (datavizState.selectedIds.size === 0) { Toast.error("Pick at least one recording first"); return; }
-    const exp = DATAVIZ_EXPERIMENTS.find((e) => e.kind === datavizState.experimentKind);
-    await withBusy(ev.currentTarget, "Fetching corpus…", async () => {
-      // Hydrate the Corpus server-side (signal store) per selected
-      // recording, then merge into one combined corpus for the run.
-      const episodes = [];
-      for (const id of datavizState.selectedIds) {
-        const result = await API.datavizCorpus("recording", id);
-        if (!result || !result.available || !result.corpus) continue;
-        episodes.push(...result.corpus.episodes);
+    const exp = datavizState.experiments.find((e) => e.kind === datavizState.experimentKind);
+    if (!exp) { Toast.error("No experiment selected"); return; }
+    const body = experimentBodyFor(exp);
+    await withBusy(ev.currentTarget, "Running…", async () => {
+      let series, episodeCount;
+      if (datavizState.selectedIds.size === 1) {
+        // Single recording: hydrate + run in one server-side call.
+        const [id] = datavizState.selectedIds;
+        const resp = await API.datavizExperimentRun("recording", id, body);
+        if (!resp || !resp.available || !resp.series) {
+          Toast.error("No hydrated corpus available for that recording yet");
+          return;
+        }
+        series = resp.series;
+        episodeCount = 1;
+      } else {
+        // Multiple recordings: the combined endpoint only accepts one
+        // scope target, so hydrate each selected recording server-side
+        // and merge the episodes client-side before running.
+        const episodes = [];
+        for (const id of datavizState.selectedIds) {
+          const result = await API.datavizCorpus("recording", id);
+          if (!result || !result.available || !result.corpus) continue;
+          episodes.push(...result.corpus.episodes);
+        }
+        if (episodes.length === 0) {
+          Toast.error("None of the selected recordings have a hydrated corpus yet");
+          return;
+        }
+        const corpus = { label: "selection", episodes };
+        const resp = await API.datavizRun(corpus, body);
+        series = resp.series;
+        episodeCount = episodes.length;
       }
-      if (episodes.length === 0) {
-        Toast.error("None of the selected recordings have a hydrated corpus yet");
-        return;
-      }
-      const corpus = { label: "selection", episodes };
-      const resp = await API.datavizRun(corpus, exp.body);
-      datavizState.series = resp.series;
-      document.getElementById("dz-chart-title").textContent = resp.series.label;
-      renderDatavizChart(resp.series, document.getElementById("dz-chart"));
-      Toast.success(`Ran ${exp.label} over ${episodes.length} episode(s)`);
+      datavizState.series = series;
+      document.getElementById("dz-chart-title").textContent = series.label;
+      renderDatavizChart(series, document.getElementById("dz-chart"));
+      Toast.success(`Ran ${exp.label} over ${episodeCount} episode(s)`);
     }).catch((err) => Toast.error(err.message || "Run failed"));
   });
   // Re-render chart on resize so the SVG scales. Listener stored on

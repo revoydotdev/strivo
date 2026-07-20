@@ -4145,6 +4145,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/dataviz/run", axum::routing::post(dataviz_run))
         .route("/api/v1/dataviz/corpus", get(dataviz_corpus))
         .route(
+            "/api/v1/dataviz/experiments",
+            get(dataviz_experiments_list),
+        )
+        .route(
+            "/api/v1/dataviz/experiment",
+            axum::routing::post(dataviz_experiment_run),
+        )
+        .route(
             "/api/v1/plugins/loudness/{id}",
             axum::routing::post(loudness_measure),
         )
@@ -4303,6 +4311,87 @@ async fn dataviz_corpus(
         Ok(corpus) => Json(json!({ "available": true, "corpus": corpus })).into_response(),
         Err(e) => Problem::internal(e.to_string()).into_response(),
     }
+}
+
+/// `GET /api/v1/dataviz/experiments` — list every experiment
+/// `strivo_dataviz::run` supports (id/label/params) so a caller doesn't
+/// have to hardcode the `Experiment` variant names. See
+/// [`crate::experiment_registry::list_experiments`].
+async fn dataviz_experiments_list(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    Json(json!({ "experiments": crate::experiment_registry::list_experiments() })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct DatavizExperimentBody {
+    /// "recording" | "playlist" | "channel" — same scope contract as
+    /// `CorpusQuery` / `GET /api/v1/dataviz/corpus`.
+    scope: String,
+    id: String,
+    #[serde(default)]
+    date_from: Option<String>,
+    #[serde(default)]
+    date_to: Option<String>,
+    experiment: strivo_dataviz::Experiment,
+}
+
+/// `POST /api/v1/dataviz/experiment` — hydrate a [`strivo_dataviz::Corpus`]
+/// server-side (same scope/date-range contract as `dataviz_corpus`) and run
+/// `body.experiment` over it in one call, returning the chart-ready
+/// `Series`. This is the single server-side "scope selection to chartable
+/// result" path: unlike `dataviz_corpus` + `dataviz_run`, the client never
+/// round-trips the assembled corpus JSON back to the server.
+async fn dataviz_experiment_run(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(body): Json<DatavizExperimentBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let scope = match body.scope.as_str() {
+        "recording" => crate::corpus::CorpusScope::Recording { id: body.id.clone() },
+        "playlist" => crate::corpus::CorpusScope::Playlist { id: body.id.clone() },
+        "channel" => crate::corpus::CorpusScope::Channel { name: body.id.clone() },
+        other => {
+            return Problem::bad_request(format!(
+                "scope must be recording|playlist|channel, got {other}"
+            ))
+            .into_response()
+        }
+    };
+    let Some(conn) = open_ro(&crunchr_db()) else {
+        return Json(json!({ "available": false, "series": null })).into_response();
+    };
+    let recordings: Vec<crate::corpus::RecordingMeta> =
+        match strivo_plugins::crunchr::db::list_videos(&conn) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|v| crate::corpus::RecordingMeta {
+                    id: v.recording_id,
+                    title: v.title,
+                    date: v.created_at,
+                    channel: v.channel_name,
+                    playlist: None,
+                })
+                .collect(),
+            Err(e) => return Problem::internal(e.to_string()).into_response(),
+        };
+    let Some(store) = open_signal_store() else {
+        return Json(json!({ "available": false, "series": null })).into_response();
+    };
+    let date_range = match (body.date_from.as_deref(), body.date_to.as_deref()) {
+        (Some(from), Some(to)) => Some((from, to)),
+        _ => None,
+    };
+    let corpus = match crate::corpus::hydrate_corpus(&store, &recordings, &scope, date_range) {
+        Ok(corpus) => corpus,
+        Err(e) => return Problem::internal(e.to_string()).into_response(),
+    };
+    let series = strivo_dataviz::run(&corpus, &body.experiment);
+    Json(json!({ "available": true, "series": series })).into_response()
 }
 
 #[derive(Debug, Deserialize)]

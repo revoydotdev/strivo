@@ -40,6 +40,12 @@ fn crunchr_db() -> PathBuf {
     plugins_root().join("crunchr").join("crunchr.db")
 }
 
+/// The canonical signal store crunchr mirrors its analytics into, sibling
+/// of `crunchr.db` in the same plugin directory.
+fn signals_db() -> PathBuf {
+    plugins_root().join("crunchr").join("signals.db")
+}
+
 fn archiver_db() -> PathBuf {
     plugins_root().join("archiver").join("archiver.db")
 }
@@ -626,13 +632,13 @@ async fn insights_compare(
     if ids.len() < 2 {
         return Problem::bad_request("recs= must list at least two recording ids").into_response();
     }
-    let Some(conn) = open_ro(&crunchr_db()) else {
+    let Some(store) = open_signal_store() else {
         return Problem::not_found("crunchr has no data yet").into_response();
     };
     let limit = q.limit.clamp(10, 500) as usize;
     let fetch = |rid: &str| -> Vec<strivo_insights_compare::WordCount> {
-        strivo_plugins::insights::frequency::top_words_for_recording(
-            &conn,
+        strivo_plugins::insights::frequency::top_words_for_recording_from_signals(
+            &store,
             rid,
             limit,
             q.include_stopwords,
@@ -3286,6 +3292,17 @@ fn count(conn: &Connection, sql: &str) -> i64 {
     conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0)
 }
 
+/// Open the canonical signal store read path. Returns `None` when
+/// `signals.db` doesn't exist yet (crunchr hasn't transcribed anything) so
+/// callers can render `{ "available": false, ... }` the same way `open_ro`
+/// lets crunchr.db-backed handlers do.
+fn open_signal_store() -> Option<strivo_core::signal_store::SignalStore> {
+    if !signals_db().exists() {
+        return None;
+    }
+    strivo_core::signal_store::SignalStore::open(signals_db()).ok()
+}
+
 /// Returns Err(402) when `name` is a Pro plugin and this machine is not
 /// entitled. Free plugins always Ok. The check is centralised here so
 /// every data route shares the same gate without forgetting one.
@@ -3741,15 +3758,15 @@ async fn insights_words(
     if let Err(r) = gate_pro("insights") {
         return r;
     }
-    let Some(conn) = open_ro(&crunchr_db()) else {
+    let Some(store) = open_signal_store() else {
         return Json(json!({ "available": false, "words": [] })).into_response();
     };
     let include_stopwords = q.stopwords.unwrap_or(false);
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let result = if q.scope.as_deref() == Some("recording") {
         match q.recording.as_deref() {
-            Some(rec) => strivo_plugins::insights::frequency::top_words_for_recording(
-                &conn,
+            Some(rec) => strivo_plugins::insights::frequency::top_words_for_recording_from_signals(
+                &store,
                 rec,
                 limit,
                 include_stopwords,
@@ -3760,7 +3777,11 @@ async fn insights_words(
             }
         }
     } else {
-        strivo_plugins::insights::frequency::top_words_global(&conn, limit, include_stopwords)
+        strivo_plugins::insights::frequency::top_words_global_from_signals(
+            &store,
+            limit,
+            include_stopwords,
+        )
     };
     match result {
         Ok(rows) => {
@@ -3781,10 +3802,10 @@ async fn insights_topics(headers: HeaderMap, State(state): State<AppState>) -> i
     if let Err(r) = gate_pro("insights") {
         return r;
     }
-    let Some(conn) = open_ro(&crunchr_db()) else {
+    let Some(store) = open_signal_store() else {
         return Json(json!({ "available": false, "topics": [] })).into_response();
     };
-    match strivo_plugins::insights::topics::cross_recording_topics(&conn) {
+    match strivo_plugins::insights::topics::cross_recording_topics_from_signals(&store) {
         Ok(mut rows) => {
             rows.sort_by_key(|t| std::cmp::Reverse(t.count));
             let items: Vec<Value> = rows
@@ -3815,12 +3836,14 @@ async fn insights_speakers(
     if let Err(r) = gate_pro("insights") {
         return r;
     }
-    let Some(conn) = open_ro(&crunchr_db()) else {
+    let Some(store) = open_signal_store() else {
         return Json(json!({ "available": false, "speakers": [], "sentiment": null }))
             .into_response();
     };
-    let airtime = strivo_plugins::insights::speakers::airtime_for_recording(&conn, &id);
-    let sentiment = strivo_plugins::insights::speakers::sentiment_for_recording(&conn, &id);
+    let airtime =
+        strivo_plugins::insights::speakers::airtime_for_recording_from_signals(&store, &id);
+    let sentiment =
+        strivo_plugins::insights::speakers::sentiment_for_recording_from_signals(&store, &id);
     match airtime {
         Ok(rows) => {
             let speakers: Vec<Value> = rows
@@ -3869,13 +3892,13 @@ async fn insights_export(
     if let Err(r) = gate_pro("insights") {
         return r;
     }
-    let Some(conn) = open_ro(&crunchr_db()) else {
+    let Some(store) = open_signal_store() else {
         return Problem::not_found("crunchr has no data yet").into_response();
     };
     let include_stopwords = q.stopwords.unwrap_or(false);
     let limit = q.limit.unwrap_or(200).clamp(1, 5000);
-    let rows = match strivo_plugins::insights::frequency::top_words_global(
-        &conn,
+    let rows = match strivo_plugins::insights::frequency::top_words_global_from_signals(
+        &store,
         limit,
         include_stopwords,
     ) {

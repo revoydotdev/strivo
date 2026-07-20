@@ -8,8 +8,12 @@
 //! single point per recording. When per-window sentiment lands the
 //! query swaps in place.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use rusqlite::Connection;
+
+use strivo_core::signal_store::{SignalQuery, SignalStore};
 
 /// One row in the speakers airtime view.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +49,46 @@ pub fn airtime_for_recording(conn: &Connection, recording_id: &str) -> Result<Ve
     for r in rows {
         out.push(r?);
     }
+    Ok(out)
+}
+
+/// Sum each speaker's total time-on-mic for one recording, sourced from the
+/// canonical signal store's `speaker_segment` signals instead of
+/// the crunchr database directly. Sorted descending by seconds.
+///
+/// Unlike [`airtime_for_recording`] there is no `(unlabeled)` bucket: the
+/// producer (`crunchr::signals::write_recording_signals`) never mirrors
+/// segments without a speaker label, so those minutes are simply absent
+/// here — an accepted gap, not a bug.
+pub fn airtime_for_recording_from_signals(
+    store: &SignalStore,
+    recording_id: &str,
+) -> Result<Vec<SpeakerAirtime>> {
+    let rows = store.query_signals(
+        &SignalQuery::new()
+            .recording_id(recording_id)
+            .kind("speaker_segment"),
+    )?;
+    let mut by_speaker: HashMap<String, (f64, i64)> = HashMap::new();
+    for row in &rows {
+        let entry = by_speaker.entry(row.label.clone()).or_insert((0.0, 0));
+        entry.0 += row.t_end - row.t_start;
+        entry.1 += 1;
+    }
+    let mut out: Vec<SpeakerAirtime> = by_speaker
+        .into_iter()
+        .map(|(speaker, (seconds, segments))| SpeakerAirtime {
+            speaker,
+            seconds,
+            segments,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.seconds
+            .partial_cmp(&a.seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.speaker.cmp(&b.speaker))
+    });
     Ok(out)
 }
 
@@ -105,6 +149,26 @@ pub fn sentiment_for_recording(
     Ok(row.flatten().map(|lbl| SentimentPoint {
         recording_id: recording_id.to_string(),
         label: SentimentBand::from_label(&lbl),
+    }))
+}
+
+/// Per-recording sentiment snapshot, sourced from the canonical signal
+/// store's `sentiment` signals instead of the crunchr database directly.
+/// There is at most one `sentiment` signal per recording (the producer
+/// writes it only when a `video_analysis` row exists), so this takes the
+/// first match.
+pub fn sentiment_for_recording_from_signals(
+    store: &SignalStore,
+    recording_id: &str,
+) -> Result<Option<SentimentPoint>> {
+    let rows = store.query_signals(
+        &SignalQuery::new()
+            .recording_id(recording_id)
+            .kind("sentiment"),
+    )?;
+    Ok(rows.into_iter().next().map(|s| SentimentPoint {
+        recording_id: recording_id.to_string(),
+        label: SentimentBand::from_label(&s.label),
     }))
 }
 

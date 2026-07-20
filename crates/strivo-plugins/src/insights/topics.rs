@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rusqlite::Connection;
 
+use strivo_core::signal_store::{SignalQuery, SignalStore};
+
 /// One row in the topic-graph view.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TopicRow {
@@ -66,6 +68,48 @@ pub fn cross_recording_topics(conn: &Connection) -> Result<Vec<TopicRow>> {
                     last_seen: day.clone(),
                 });
         }
+    }
+    let mut out: Vec<TopicRow> = by_topic.into_values().collect();
+    out.sort_by(|a, b| b.count.cmp(&a.count).then(a.topic.cmp(&b.topic)));
+    Ok(out)
+}
+
+/// Cross-recording topic aggregate, sourced from the canonical signal
+/// store's `topic` signals instead of the crunchr database directly. One row per
+/// distinct normalized topic (trimmed, lowercased), with `first_seen`/
+/// `last_seen` derived from each signal's `created_at` (day-granularity,
+/// matching the `date(v.created_at)` truncation the crunchr database query used).
+pub fn cross_recording_topics_from_signals(store: &SignalStore) -> Result<Vec<TopicRow>> {
+    let rows = store.query_signals(&SignalQuery::new().kind("topic"))?;
+
+    let mut by_topic: HashMap<String, TopicRow> = HashMap::new();
+    for row in &rows {
+        let key = row.label.trim().to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        let day = row
+            .created_at
+            .get(..10)
+            .unwrap_or(&row.created_at)
+            .to_string();
+        by_topic
+            .entry(key.clone())
+            .and_modify(|r| {
+                r.count += 1;
+                if day.as_str() < r.first_seen.as_str() {
+                    r.first_seen = day.clone();
+                }
+                if day.as_str() > r.last_seen.as_str() {
+                    r.last_seen = day.clone();
+                }
+            })
+            .or_insert(TopicRow {
+                topic: key,
+                count: 1,
+                first_seen: day.clone(),
+                last_seen: day,
+            });
     }
     let mut out: Vec<TopicRow> = by_topic.into_values().collect();
     out.sort_by(|a, b| b.count.cmp(&a.count).then(a.topic.cmp(&b.topic)));

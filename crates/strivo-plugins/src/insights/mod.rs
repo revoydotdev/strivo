@@ -1,13 +1,13 @@
 //! Insights — data-viz over the Crunchr transcript corpus.
 //!
-//! Reads Crunchr's existing `word_frequency` / `segments` /
-//! `video_analysis` tables and surfaces them as histograms and exports.
-//! Was a TUI-rendered pane; with the TUI deletion the plugin is now a
-//! headless registration shell — the webui reads the same tables
+//! Cross-recording analytics (word frequency, topics, speaker airtime,
+//! sentiment) read the canonical `SignalStore` that Crunchr mirrors into on
+//! every transcribe; per-recording operational reads still go straight to
+//! `the crunchr database`. Was a TUI-rendered pane; with the TUI deletion the plugin is
+//! now a headless registration shell — the webui calls these query functions
 //! directly via `strivo-web/src/routes/plugins.rs`.
 
 use std::any::Any;
-use std::path::PathBuf;
 
 use strivo_core::events::DaemonEvent;
 use strivo_core::plugin::{Plugin, PluginAction, PluginContext, StatusSlot};
@@ -18,7 +18,6 @@ pub mod speakers;
 pub mod topics;
 
 pub struct InsightsPlugin {
-    db_path: PathBuf,
     last_status: Option<String>,
 }
 
@@ -30,10 +29,7 @@ impl Default for InsightsPlugin {
 
 impl InsightsPlugin {
     pub fn new() -> Self {
-        Self {
-            db_path: PathBuf::new(),
-            last_status: None,
-        }
+        Self { last_status: None }
     }
 }
 
@@ -45,12 +41,7 @@ impl Plugin for InsightsPlugin {
         "Insights"
     }
 
-    fn init(&mut self, ctx: &PluginContext) -> anyhow::Result<()> {
-        self.db_path = ctx
-            .data_dir
-            .join("plugins")
-            .join("crunchr")
-            .join("crunchr.db");
+    fn init(&mut self, _ctx: &PluginContext) -> anyhow::Result<()> {
         Ok(())
     }
 

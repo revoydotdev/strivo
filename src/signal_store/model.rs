@@ -37,6 +37,9 @@ pub struct Signal {
     pub payload: Value,
     pub confidence: f64,
     pub source_plugin: String,
+    /// Insertion timestamp assigned by the store (`signals.created_at`),
+    /// as the raw SQLite timestamp string.
+    pub created_at: String,
 }
 
 /// Filter for [`crate::signal_store::SignalStore::query_signals`].

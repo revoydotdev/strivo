@@ -134,7 +134,7 @@ impl SignalStore {
     /// impose no restriction.
     pub fn query_signals(&self, query: &SignalQuery) -> Result<Vec<Signal>, SignalStoreError> {
         let mut sql = String::from(
-            "SELECT id, recording_id, t_start, t_end, kind, label, payload, confidence, source_plugin
+            "SELECT id, recording_id, t_start, t_end, kind, label, payload, confidence, source_plugin, created_at
              FROM signals WHERE 1=1",
         );
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
@@ -168,6 +168,7 @@ impl SignalStore {
                 payload: row.get(6)?,
                 confidence: row.get(7)?,
                 source_plugin: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
 
@@ -193,6 +194,7 @@ struct RawSignal {
     payload: String,
     confidence: f64,
     source_plugin: String,
+    created_at: String,
 }
 
 impl RawSignal {
@@ -207,6 +209,7 @@ impl RawSignal {
             payload: serde_json::from_str(&self.payload)?,
             confidence: self.confidence,
             source_plugin: self.source_plugin,
+            created_at: self.created_at,
         })
     }
 }

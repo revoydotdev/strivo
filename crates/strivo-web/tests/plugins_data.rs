@@ -11,9 +11,10 @@
 use rusqlite::Connection;
 use strivo_core::config::AppConfig;
 use strivo_core::plugin::{Plugin, PluginContext};
+use strivo_core::signal_store::{NewSignal, SignalStore};
 use strivo_plugins::archiver::db as adb;
 use strivo_plugins::crunchr::db as cdb;
-use strivo_plugins::insights::frequency;
+use strivo_plugins::insights::{frequency, speakers, topics};
 use strivo_plugins::viewguard::store::{self, VerdictRow, ViewguardStore};
 use strivo_plugins::viewguard::ViewguardPlugin;
 
@@ -65,6 +66,195 @@ fn insights_word_frequency_filters_stopwords() {
     let without = frequency::top_words_global(&conn, 10, false).unwrap();
     assert!(!without.iter().any(|r| r.word == "the"));
     assert!(without.iter().any(|r| r.word == "stream"));
+}
+
+/// Proves the migration onto the canonical signal store: seeds a
+/// `SignalStore` (not `crunchr.db`) with the same kinds crunchr's
+/// `write_recording_signals` mirrors — `word_frequency`, `speaker_segment`,
+/// `sentiment`, `topic` — across two recordings, then exercises the
+/// `*_from_signals` functions the web handlers now call. A handler still
+/// reading `crunchr.db` would see none of this seeded data.
+#[test]
+fn insights_via_signal_store() {
+    let store = SignalStore::open_in_memory().unwrap();
+
+    let sig = |recording_id: &str,
+               t_start: f64,
+               t_end: f64,
+               kind: &str,
+               label: &str,
+               payload: serde_json::Value,
+               confidence: f64| NewSignal {
+        recording_id: recording_id.to_string(),
+        t_start,
+        t_end,
+        kind: kind.to_string(),
+        label: label.to_string(),
+        payload,
+        confidence,
+        source_plugin: "crunchr".to_string(),
+    };
+
+    store
+        .write_signals(&[
+            // word_frequency — rec-1 has a stopword and a content word;
+            // rec-2 contributes more of the same content word plus a new
+            // one, so the global aggregate must sum across recordings.
+            sig(
+                "rec-1",
+                0.0,
+                0.0,
+                "word_frequency",
+                "the",
+                serde_json::json!({"word": "the", "count": 100}),
+                1.0,
+            ),
+            sig(
+                "rec-1",
+                0.0,
+                0.0,
+                "word_frequency",
+                "stream",
+                serde_json::json!({"word": "stream", "count": 10}),
+                1.0,
+            ),
+            sig(
+                "rec-2",
+                0.0,
+                0.0,
+                "word_frequency",
+                "stream",
+                serde_json::json!({"word": "stream", "count": 5}),
+                1.0,
+            ),
+            sig(
+                "rec-2",
+                0.0,
+                0.0,
+                "word_frequency",
+                "speedrun",
+                serde_json::json!({"word": "speedrun", "count": 3}),
+                1.0,
+            ),
+            // speaker_segment — Alice speaks across two segments, Bob one.
+            sig(
+                "rec-1",
+                0.0,
+                2.0,
+                "speaker_segment",
+                "Alice",
+                serde_json::json!({"text": "hi", "speaker": "Alice", "confidence": 0.9}),
+                0.9,
+            ),
+            sig(
+                "rec-1",
+                2.0,
+                5.0,
+                "speaker_segment",
+                "Alice",
+                serde_json::json!({"text": "there", "speaker": "Alice", "confidence": 0.8}),
+                0.8,
+            ),
+            sig(
+                "rec-1",
+                5.0,
+                6.0,
+                "speaker_segment",
+                "Bob",
+                serde_json::json!({"text": "yo", "speaker": "Bob", "confidence": 1.0}),
+                1.0,
+            ),
+            // sentiment — at most one per recording.
+            sig(
+                "rec-1",
+                0.0,
+                0.0,
+                "sentiment",
+                "positive",
+                serde_json::json!({"sentiment": "positive", "summary": "A friendly chat"}),
+                1.0,
+            ),
+            // topic — normalization must fold case/whitespace variants
+            // together across recordings.
+            sig(
+                "rec-1",
+                0.0,
+                0.0,
+                "topic",
+                "Streaming",
+                serde_json::json!({"topic": "Streaming"}),
+                1.0,
+            ),
+            sig(
+                "rec-1",
+                0.0,
+                0.0,
+                "topic",
+                "Highlights",
+                serde_json::json!({"topic": "Highlights"}),
+                1.0,
+            ),
+            sig(
+                "rec-2",
+                0.0,
+                0.0,
+                "topic",
+                "streaming ",
+                serde_json::json!({"topic": "streaming "}),
+                1.0,
+            ),
+        ])
+        .unwrap();
+
+    // Global word frequency sums across both recordings and drops stopwords.
+    let global = frequency::top_words_global_from_signals(&store, 10, false).unwrap();
+    assert!(!global.iter().any(|r| r.word == "the"));
+    let stream = global.iter().find(|r| r.word == "stream").unwrap();
+    assert_eq!(stream.count, 15); // 10 (rec-1) + 5 (rec-2)
+    let speedrun = global.iter().find(|r| r.word == "speedrun").unwrap();
+    assert_eq!(speedrun.count, 3);
+
+    let global_with_stop = frequency::top_words_global_from_signals(&store, 10, true).unwrap();
+    assert!(global_with_stop.iter().any(|r| r.word == "the"));
+
+    // Per-recording word frequency is scoped to rec-1 only.
+    let per_rec =
+        frequency::top_words_for_recording_from_signals(&store, "rec-1", 10, false).unwrap();
+    assert_eq!(per_rec.len(), 1);
+    assert_eq!(per_rec[0].word, "stream");
+    assert_eq!(per_rec[0].count, 10);
+
+    // Speaker airtime: Alice's two segments sum to 5s, Bob's one to 1s,
+    // sorted descending by seconds.
+    let airtime = speakers::airtime_for_recording_from_signals(&store, "rec-1").unwrap();
+    assert_eq!(airtime.len(), 2);
+    assert_eq!(airtime[0].speaker, "Alice");
+    assert_eq!(airtime[0].seconds, 5.0);
+    assert_eq!(airtime[0].segments, 2);
+    assert_eq!(airtime[1].speaker, "Bob");
+    assert_eq!(airtime[1].seconds, 1.0);
+    assert_eq!(airtime[1].segments, 1);
+
+    // Sentiment for rec-1 is present; rec-2 never got a sentiment signal.
+    let sentiment = speakers::sentiment_for_recording_from_signals(&store, "rec-1")
+        .unwrap()
+        .expect("rec-1 sentiment signal should be present");
+    assert_eq!(sentiment.label.label(), "positive");
+    assert!(
+        speakers::sentiment_for_recording_from_signals(&store, "rec-2")
+            .unwrap()
+            .is_none()
+    );
+
+    // Cross-recording topics: "Streaming" (rec-1) and "streaming " (rec-2)
+    // normalize to the same topic and aggregate to count 2.
+    let topics = topics::cross_recording_topics_from_signals(&store).unwrap();
+    let streaming = topics.iter().find(|t| t.topic == "streaming").unwrap();
+    assert_eq!(streaming.count, 2);
+    assert!(!streaming.first_seen.is_empty());
+    assert!(!streaming.last_seen.is_empty());
+    let highlights = topics.iter().find(|t| t.topic == "highlights").unwrap();
+    assert_eq!(highlights.count, 1);
 }
 
 #[test]

@@ -428,6 +428,26 @@ pub fn get_top_words(conn: &Connection, limit: usize) -> Result<Vec<(String, i64
     Ok(results)
 }
 
+/// Top words for a single video, highest count first. Unlike
+/// [`get_top_words`] (a cross-recording aggregate for the global Insights
+/// view), this scopes to one recording — used by the signal-store producer
+/// to mirror per-recording `word_frequency` signals.
+pub fn get_top_words_for_video(
+    conn: &Connection,
+    video_id: i64,
+    limit: usize,
+) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT word, count FROM word_frequency WHERE video_id = ?1 ORDER BY count DESC LIMIT ?2",
+    )?;
+    let results = stmt
+        .query_map(rusqlite::params![video_id, limit], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(results)
+}
+
 /// Get analysis data for a video that owns the given chunk.
 pub fn get_analysis_for_chunk(
     conn: &Connection,

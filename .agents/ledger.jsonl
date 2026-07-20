@@ -13,3 +13,4 @@
 {"commit":"1dd30cc","concern":"pipeline-exec","milestone":"M2","todo":"M2.P2.S1.T1","ts":"2026-07-19T22:19:06-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator pipeline_submit_dispatch","exit":0}}
 {"commit":"1dd30cc","concern":"pipeline-exec","milestone":"M2","todo":"M2.P2.S1.T2","ts":"2026-07-19T22:19:06-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator pipeline_advance_backoff","exit":0}}
 {"commit":"96bfecb","concern":"pipeline-sse","milestone":"M2","todo":"M2.P2.S1.T3","ts":"2026-07-19T22:40:09-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator pipeline_sse","exit":0}}
+{"commit":"ebabad4","concern":"crunchr-signals","milestone":"M2","todo":"M2.P1.S2.T2","ts":"2026-07-19T22:57:43-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator crunchr_writes_signals","exit":0}}

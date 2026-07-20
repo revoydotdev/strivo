@@ -7,6 +7,37 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## tick 2026-07-19d — NORMAL (M2): crunchr-signals producer
+Preflight CLEAN, worktree-check clean. Governance: no directives, not paused, 0
+unread. M2 = 4 unclaimed of 10; gate-decomp already done. Dependency read: T1
+(insights-migrate) is blocked on T2+T3; T3 (webui-signals) verification
+(`insights_via_signal_store`) needs the store *populated*, which only T2 does —
+so T2 is the single unblocking prerequisite (readers can't verify independently
+this tick). Picked ONE concern.
+- CLAIMED `M2.P1.S2.T2` — **crunchr-signals**: crunchr mirrors its analytics into
+  the canonical `SignalStore`. Files: `crates/strivo-plugins/src/crunchr/*`.
+
+**RESULT — integrated & recorded (rerun on integrated tree):**
+- **crunchr-signals** `ebabad4` — DONE `M2.P1.S2.T2`. New `crunchr/signals.rs`
+  `write_recording_signals(conn, &SignalStore, recording_id)` emits four kinds —
+  `word_frequency` (label=word, payload word/count), `speaker_segment` (per
+  segment span, label=speaker), `sentiment` + `topic` (from `video_analysis`,
+  recording-level) — all `source_plugin="crunchr"`, confidence clamped to [0,1].
+  `runner.rs::run_inner` now (a) wires the previously-DEAD
+  `pipeline::word_frequencies`→`db::insert_word_frequencies` path and (b) opens
+  `SignalStore` at `signals.db` (sibling of `crunchr.db`) and calls the producer;
+  both best-effort (warn, never fail the job) like the embedding step. Added
+  `db::get_top_words_for_video` (the existing `get_top_words` is a cross-recording
+  aggregate, unsuitable per-recording). Rerun on integrated tree: `ledger done
+  --run` => 0, `crunchr::signals::tests::crunchr_writes_signals` 1 passed.
+- Note for T1/T3 (readers, next tick): `sentiment`/`topic` signals only emit when
+  a `video_analysis` row exists — that table still has no production writer (the
+  LLM analyze path is a separate, out-of-M2 concern); `word_frequency`/
+  `speaker_segment` now populate on every transcribe. Store write path is live.
+- M2 remaining: webui-signals (`M2.P1.S2.T3`), insights-migrate (`M2.P1.S2.T1`,
+  now unblocked → do T3+T1 in lockstep next tick), gate-m2g4 (`M2.P9.S1.T1`).
+  Phase stays NORMAL/M2 (not candidate-complete).
+
 ## tick 2026-07-19c — NORMAL (M2): insights-migrate + pipeline-sse
 Preflight CLEAN. Governance: no directives, not paused, 0 unread. M2 = 3 unclaimed
 of 8 (gate-decomp already done in 20b). Picked 2 INDEPENDENT concerns (disjoint

@@ -26,6 +26,7 @@ pub mod embed;
 pub mod pipeline;
 pub mod presets;
 pub mod runner;
+pub mod signals;
 pub mod transcribe;
 pub mod types;
 pub mod voice_samples;

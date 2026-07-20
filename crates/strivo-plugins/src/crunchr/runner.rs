@@ -17,10 +17,11 @@ use std::process::Stdio;
 
 use anyhow::{bail, Context, Result};
 use strivo_core::config::CrunchrConfig;
+use strivo_core::signal_store::SignalStore;
 use uuid::Uuid;
 
 use super::transcribe::create_backend;
-use super::{db, embed, pipeline};
+use super::{db, embed, pipeline, signals};
 
 /// Per-recording result, handed back to the plugin via `on_plugin_event`
 /// so it can surface a desktop notification.
@@ -206,6 +207,36 @@ async fn run_inner(
             0
         }
     };
+
+    // ── word frequencies + canonical signal-store mirror ────────────────────
+    // Best-effort, same as embedding above: a transcript must never be lost
+    // to a word-frequency or signal-store hiccup.
+    match db::open_and_init(db_path) {
+        Ok(conn) => {
+            let freqs = pipeline::word_frequencies(&full_text);
+            if let Err(e) = db::insert_word_frequencies(&conn, video_id, &freqs) {
+                tracing::warn!(recording_id = %rid, "crunchr: persisting word frequencies failed: {e:#}");
+            }
+
+            let signals_db_path = db_path.with_file_name("signals.db");
+            match SignalStore::open(&signals_db_path) {
+                Ok(store) => match signals::write_recording_signals(&conn, &store, rid) {
+                    Ok(n) => {
+                        tracing::info!(recording_id = %rid, signals = n, "crunchr: mirrored analytics into signal store")
+                    }
+                    Err(e) => {
+                        tracing::warn!(recording_id = %rid, "crunchr: writing signals failed: {e:#}")
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(recording_id = %rid, "crunchr: opening signal store failed: {e:#}")
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(recording_id = %rid, "crunchr: opening crunchr.db for word frequencies failed: {e:#}")
+        }
+    }
 
     {
         let conn = db::open_and_init(db_path)?;

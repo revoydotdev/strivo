@@ -4,8 +4,23 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: NORMAL
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M1
+
+## tick 2026-07-19d — NORMAL (M1)
+Preflight CLEAN; worktrees clean; no governance directives / operator messages.
+M1: 8→9 done. **DONE** `M1.P3.S1.T1` (clippy-creator, `12fab7d9`) — self-heal found the
+todo not yet clean (one `clippy::type_complexity` error on `RESOLUTION_CACHE` in
+`crates/strivo-web/src/routes/plugins.rs:486`, introduced by the ffprobe-cache landing;
+the roadmap's "~44 warnings" note was stale, prior ticks had already cleared the rest).
+Dispatched one worker: factored the nested generic into a `ResolutionCache` type alias,
+no behavior change. Verified diff was single-file / minimal before integrating; ff-merged
+onto `integration`, re-ran the gate clean on the integrated tree.
+Gates re-verified on the integrated tree: **M1G1** `cargo test` ✓, **M1G2**
+`cargo test --workspace --features creator` ✓, **M1G3**
+`cargo clippy --workspace --features creator --all-targets -- -D warnings` ✓ (exit 0),
+**M1G4** no `TODO(licence-verify)` in `*.rs` ✓. **M1 remaining: 0 — candidate-complete.**
+`MILESTONE_PHASE` flipped to `AUDIT` (no audit run this tick, per protocol).
 
 ## tick 2026-07-19c — NORMAL (M1)
 Preflight CLEAN; worktrees clean; no governance directives / operator messages.

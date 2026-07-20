@@ -482,14 +482,18 @@ use std::time::SystemTime;
 
 type ProbeKey = (PathBuf, SystemTime);
 
+/// Cached ffprobe resolution lookups, keyed by `ProbeKey`. Named to keep
+/// the `RESOLUTION_CACHE` static under clippy's type-complexity limit.
+type ResolutionCache = Mutex<HashMap<ProbeKey, Option<(u32, u32)>>>;
+
 static DURATION_CACHE: OnceLock<Mutex<HashMap<ProbeKey, Option<f32>>>> = OnceLock::new();
-static RESOLUTION_CACHE: OnceLock<Mutex<HashMap<ProbeKey, Option<(u32, u32)>>>> = OnceLock::new();
+static RESOLUTION_CACHE: OnceLock<ResolutionCache> = OnceLock::new();
 
 fn duration_cache() -> &'static Mutex<HashMap<ProbeKey, Option<f32>>> {
     DURATION_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn resolution_cache() -> &'static Mutex<HashMap<ProbeKey, Option<(u32, u32)>>> {
+fn resolution_cache() -> &'static ResolutionCache {
     RESOLUTION_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 

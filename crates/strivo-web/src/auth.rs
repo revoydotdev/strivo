@@ -52,7 +52,7 @@ impl SessionToken {
         let actual_sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(sig_b64)
             .ok()?;
-        if expected_sig.as_slice() != actual_sig.as_slice() {
+        if expected_sig[..] != actual_sig[..] {
             return None;
         }
         let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD

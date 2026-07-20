@@ -7,6 +7,25 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## tick 2026-07-20a — RECOVER (integration-behind-main) → STOP, surface to operator
+Preflight `RECOVER:integration-behind-main`. `main` (operator worktree
+`/home/revelri/Dev/chorosyne/strivo`, ahead of `origin/main` by 6 unpushed) has
+diverged with **deliberate operator reverts of shipped swarm work**:
+`8bd09ca revert deps (sha2/rusqlite/rand/hmac/dirs)`,
+`48135a6 revert(web) drop ffprobe path+mtime cache`, plus
+`1ae08b4 multi-stream core route`, `655ddab`, `5827487`, `6294b75`.
+`git merge-tree integration←main` → **3 conflicts encoding operator intent**:
+`Cargo.lock` (dep migration vs revert), `crates/strivo-web/src/routes/plugins.rs`
+(integration's ffprobe-cache add `4bae891`+clippy fix `8de87f0` vs operator's
+ffprobe revert), `ROADMAP.md` (swarm milestone rewrite vs revert touch).
+**No autonomous merge performed** — resolving these picks winners on the
+operator's own reverts, and `integration` is a shared pushed branch (no
+force-push / no rebase-publish). Left `integration` at `f3183b2` untouched; did
+not touch operator's `main` checkout. **Operator action needed:** decide whether
+the swarm's ffprobe cache + dep migration stay reverted; if so, land those
+reverts onto `integration` (or the swarm drops them next tick under direction),
+then reconcile. Lock cleared; tick STOP.
+
 ## tick 2026-07-19f — AUDIT (M1) → advance
 Sole-turn Opus audit, no workers. Re-verified the prior PASS still holds on the
 integrated tree (HEAD `c2b4d77`, harness-protocol fix committed after tick `e`:

@@ -114,6 +114,14 @@ daemon never drives it — the highest-leverage Creator gap.
 - **M2G3** — a submitted pipeline runs to completion driven by the daemon. → *Check:* `cargo test --workspace --features creator pipeline_submit_dispatch pipeline_advance_backoff`
 - **M2G4** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
 
+### M2.P9.S1 — Gate-closing todos
+Explicit todos that close the milestone gates. `M2G1` is owned by the signal-store
+feature todos (`M2.P1.S1.T1`–`T3`), `M2G2` by `M2.P1.S2.T1` (insights-migrate), and
+`M2G3` by `M2.P2.S1.T1`–`T2` (pipeline-exec). The milestone-wide quality gate below
+has no feature owner and is tracked here.
+
+- **`M2.P9.S1.T1`** — Workspace+creator test suite green and strict clippy clean. → *Artifact:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'` · *Concern:* gate-m2g4
+
 ---
 
 # M3 — Corpus service & extraction adapters (CE-P2, CE-P4)

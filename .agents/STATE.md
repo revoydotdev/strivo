@@ -7,6 +7,46 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## tick 2026-07-19c — NORMAL (M2): insights-migrate + pipeline-sse
+Preflight CLEAN. Governance: no directives, not paused, 0 unread. M2 = 3 unclaimed
+of 8 (gate-decomp already done in 20b). Picked 2 INDEPENDENT concerns (disjoint
+files); `M2.P9.S1.T1` (gate-m2g4) deferred to after they land — it verifies the
+whole tree, not independent.
+- CLAIMED `M2.P1.S2.T1` — **insights-migrate**: read via `SignalStore` query API,
+  drop the `crunchr.db` reach-in. Files: `crates/strivo-plugins/src/insights/*`.
+- CLAIMED `M2.P2.S1.T3` — **pipeline-sse**: emit stage-state transitions as a
+  `DaemonEvent` over the `/events` SSE stream. Files: `src/events.rs`,
+  `src/daemon.rs`, `crates/strivo-web/src/*`.
+
+**RESULT:**
+- **pipeline-sse** `96bfecb` — DONE `M2.P2.S1.T3`. New
+  `DaemonEvent::PipelineStageChanged { pipeline_id, stage_id, state }` reusing the
+  real `PipelineId`/`StageId`/`StageState` (already serde). Emitted at every
+  transition in `process_daemon_plugin_actions`/`dispatch_stage_batch`/
+  `schedule_stage_retry`; `/events` route serialises `DaemonEvent` generically so
+  no web change. `PipelineRegistry::stage_snapshot` added as the lookup helper;
+  `DaemonEventKind` mirror in `src/plugin/mod.rs` extended (compile-required).
+  Re-ran on the integrated tree: `daemon::tests::pipeline_sse` PASS (`ledger done
+  --run` => 0).
+- **insights-migrate** `M2.P1.S2.T1` — **BLOCKED / NOT integrated.** Decomposition
+  gap, not a worker failure. The worker's module-scope migration compiles and its
+  `insights_via_signal_store` test passes, BUT the todo is unshippable as scoped:
+  (1) making the insights readers take `&SignalStore` breaks 9 live call sites in
+  `crates/strivo-web/src/routes/plugins.rs` (+ `tests/plugins_data.rs`) so
+  `--workspace` won't compile; (2) more importantly, **nothing writes to
+  `signals.db`** anywhere (only the store defines `write_signals`; no extractor
+  calls it) — so migrating the read side would regress the LIVE webui Insights
+  surface (word-freq/speakers/topics/sentiment) to empty. The read-migration has
+  an undecomposed dependency on a **crunchr→signal-store write path** + a
+  strivo-web call-site migration. Worktree/branch destroyed; re-decompose before
+  retrying. Added `M2.P1.S2.T2`/`T3` to ROADMAP to sequence it.
+- `M2.P9.S1.T1` (gate-m2g4) left undone — M2 feature todos incomplete
+  (insights-migrate blocked); the milestone-wide green+clippy gate closes once
+  the signal read/write path lands. M2 stays NORMAL (not candidate-complete).
+- AUDIT note for later: M2G2's check `! git grep -qn "crunchr.db" -- crates/
+  strivo-plugins/src` also matches crunchr's OWN legitimate refs — gate wording
+  needs scoping to sibling reach-ins, or crunchr's self-refs excluded.
+
 ## tick 2026-07-20b — NORMAL (M2) first tick: gate-decomp + 2 concerns
 Preflight CLEAN (operator merged main→integration at `f293d77`, divergence
 resolved). Governance: no directives, not paused, 0 unread. First NORMAL tick of

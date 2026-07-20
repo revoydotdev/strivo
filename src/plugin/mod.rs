@@ -350,6 +350,7 @@ pub enum DaemonEventKind {
     ChannelResolved,
     ScheduleFired,
     Error,
+    PipelineStageChanged,
 }
 
 impl DaemonEventKind {
@@ -375,6 +376,7 @@ impl DaemonEventKind {
             DaemonEvent::ChannelResolved { .. } => Self::ChannelResolved,
             DaemonEvent::ScheduleFired { .. } => Self::ScheduleFired,
             DaemonEvent::Error(_) => Self::Error,
+            DaemonEvent::PipelineStageChanged { .. } => Self::PipelineStageChanged,
         }
     }
 }

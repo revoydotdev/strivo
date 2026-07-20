@@ -7,6 +7,7 @@
 
 use uuid::Uuid;
 
+use crate::pipeline::{PipelineId, StageId, StageState};
 use crate::platform::{ChannelEntry, PlatformKind};
 use crate::recording::job::{RecordingJob, RecordingState};
 
@@ -117,4 +118,14 @@ pub enum DaemonEvent {
         duration_secs: u64,
     },
     Error(String),
+    /// A pipeline stage transitioned (dispatched/Running, Done, Failed,
+    /// Cancelled, Skipped, or reset to Pending for a scheduled retry).
+    /// Published by `process_daemon_plugin_actions` and friends
+    /// (`src/daemon.rs`) at every DAG-relevant state change so the SPA
+    /// can render live pipeline progress (VISION AX-3).
+    PipelineStageChanged {
+        pipeline_id: PipelineId,
+        stage_id: StageId,
+        state: StageState,
+    },
 }

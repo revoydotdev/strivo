@@ -438,6 +438,20 @@ impl PipelineRegistry {
         }
     }
 
+    /// Look up a stage's owning pipeline id and current state in one
+    /// shot. The daemon calls this after every mutation (dispatch,
+    /// advance, retry) to build a `DaemonEvent::PipelineStageChanged`
+    /// without threading extra return values through each registry
+    /// method's signature.
+    pub fn stage_snapshot(&self, stage_id: StageId) -> Option<(PipelineId, StageState)> {
+        self.pipelines.iter().find_map(|(pid, pipe)| {
+            pipe.stages
+                .iter()
+                .find(|s| s.id == stage_id)
+                .map(|s| (*pid, s.state.clone()))
+        })
+    }
+
     /// Whether `lock` currently has a free slot. Exposed for the DAG
     /// overlay / status bar (contention indicator) and for tests that
     /// need to confirm a lock was actually released on stage

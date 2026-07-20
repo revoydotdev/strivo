@@ -1275,9 +1275,9 @@ fn process_daemon_plugin_actions<'a>(
                     new_state,
                 } => {
                     use crate::plugin::PipelineStageUpdate as U;
-                    let (dispatches, retry_after) = {
+                    let (dispatches, retry_after, snapshot) = {
                         let mut preg = pipeline_registry.lock().await;
-                        match new_state {
+                        let (dispatch, retry_after) = match new_state {
                             U::Running => {
                                 preg.mark_stage_running(stage_id);
                                 (Vec::new(), None)
@@ -1300,8 +1300,17 @@ fn process_daemon_plugin_actions<'a>(
                                 let adv = preg.advance_on_terminal(stage_id);
                                 (adv.dispatch, adv.retry_after)
                             }
-                        }
+                        };
+                        let snapshot = preg.stage_snapshot(stage_id);
+                        (dispatch, retry_after, snapshot)
                     };
+                    if let Some((pipeline_id, state)) = snapshot {
+                        let _ = event_tx.send(DaemonEvent::PipelineStageChanged {
+                            pipeline_id,
+                            stage_id,
+                            state,
+                        });
+                    }
                     dispatch_stage_batch(
                         dispatches,
                         registry,
@@ -1349,6 +1358,25 @@ async fn dispatch_stage_batch(
     if dispatches.is_empty() {
         return;
     }
+    // `dispatch_ready` (the sole producer of `StageDispatch`es, whether
+    // called from SubmitPipeline, an advance_on_*, or a retry) already
+    // stamped each of these stages `Running` before returning them —
+    // publish that transition before the verb call actually runs so
+    // SSE subscribers see "running" promptly rather than after the
+    // (possibly slow) plugin work completes.
+    for d in &dispatches {
+        let snapshot = {
+            let preg = pipeline_registry.lock().await;
+            preg.stage_snapshot(d.stage_id)
+        };
+        if let Some((pipeline_id, state)) = snapshot {
+            let _ = event_tx.send(DaemonEvent::PipelineStageChanged {
+                pipeline_id,
+                stage_id: d.stage_id,
+                state,
+            });
+        }
+    }
     let ctx = crate::plugin::VerbContext {
         recordings,
         plugin_toggles,
@@ -1393,11 +1421,24 @@ fn schedule_stage_retry(
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(backoff).await;
-        let dispatches = {
+        let (dispatches, snapshot) = {
             let mut preg = pipeline_registry.lock().await;
             preg.retry_stage(stage_id, None);
-            preg.dispatch_ready()
+            // Snapshot right after the reset-to-Pending, before
+            // `dispatch_ready` potentially flips it straight back to
+            // Running — so SSE subscribers see the retry as a distinct
+            // Pending transition rather than losing it to the
+            // immediately-following Running event from dispatch_stage_batch.
+            let snapshot = preg.stage_snapshot(stage_id);
+            (preg.dispatch_ready(), snapshot)
         };
+        if let Some((pipeline_id, state)) = snapshot {
+            let _ = event_tx.send(DaemonEvent::PipelineStageChanged {
+                pipeline_id,
+                stage_id,
+                state,
+            });
+        }
         dispatch_stage_batch(
             dispatches,
             &registry,
@@ -1612,5 +1653,137 @@ mod tests {
         }
         st.evict_old_terminal();
         assert_eq!(st.recordings.len(), 10);
+    }
+
+    // M2.P2.S1.T3 — a plugin whose `on_verb` immediately reports each
+    // dispatched stage `Done`, so driving `process_daemon_plugin_actions`
+    // with a real `SubmitPipeline` exercises the daemon's actual
+    // dispatch/advance path end to end (not a reimplementation of it).
+    struct DoneOnDispatchPlugin;
+
+    impl crate::plugin::Plugin for DoneOnDispatchPlugin {
+        fn name(&self) -> &'static str {
+            "test-plugin"
+        }
+        fn display_name(&self) -> &str {
+            "test-plugin"
+        }
+        fn init(&mut self, _ctx: &crate::plugin::PluginContext) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn on_verb(
+            &mut self,
+            _verb: &str,
+            selection: &[Uuid],
+            _ctx: &crate::plugin::VerbContext,
+        ) -> Vec<crate::plugin::PluginAction> {
+            vec![crate::plugin::PluginAction::UpdateStage {
+                stage_id: selection[0],
+                new_state: crate::plugin::PipelineStageUpdate::Done,
+            }]
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "creator")]
+    fn pipeline_sse() {
+        use crate::pipeline::{Pipeline, PipelineId, PipelineRegistry, Stage, StageKind, StageState};
+        use crate::plugin::PluginAction as PA;
+        use crate::plugin::registry::PluginRegistry;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut plugin_registry = PluginRegistry::new();
+            plugin_registry.register(Box::new(DoneOnDispatchPlugin));
+            let registry = Arc::new(tokio::sync::Mutex::new(plugin_registry));
+            let pipeline_registry = Arc::new(tokio::sync::Mutex::new(PipelineRegistry::new()));
+            let recordings: HashMap<Uuid, RecordingJob> = HashMap::new();
+            let plugin_toggles: std::collections::BTreeMap<String, crate::config::PluginToggle> =
+                std::collections::BTreeMap::new();
+            let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DaemonEvent>();
+
+            // a (Extract) -> b (Subtitle): the plugin marks each Done the
+            // instant it's dispatched, so we see a's Running/Done, b's
+            // dependency-triggered dispatch, then b's Running/Done — a
+            // full pipeline sweep, not a single isolated transition.
+            let mut pipeline = Pipeline::new("t").with_owner("test-plugin");
+            let a = pipeline.add_stage(Stage::new("a", StageKind::Extract));
+            let b = pipeline.add_stage(Stage::new("b", StageKind::Subtitle).with_inputs(vec![a]));
+            let pipeline_id: PipelineId = pipeline.id;
+
+            process_daemon_plugin_actions(
+                vec![PA::SubmitPipeline(pipeline)],
+                &registry,
+                &pipeline_registry,
+                &recordings,
+                &plugin_toggles,
+                &event_tx,
+            )
+            .await;
+
+            let mut events = Vec::new();
+            while let Ok(ev) = event_rx.try_recv() {
+                events.push(ev);
+            }
+
+            let stage_events: Vec<(Uuid, StageState)> = events
+                .into_iter()
+                .map(|ev| match ev {
+                    DaemonEvent::PipelineStageChanged {
+                        pipeline_id: pid,
+                        stage_id,
+                        state,
+                    } => {
+                        assert_eq!(pid, pipeline_id, "event must carry the owning pipeline id");
+                        (stage_id, state)
+                    }
+                    other => panic!("unexpected event on the SSE channel: {other:?}"),
+                })
+                .collect();
+
+            assert!(
+                stage_events
+                    .iter()
+                    .any(|(sid, st)| *sid == a && matches!(st, StageState::Running { .. })),
+                "expected a Running transition for stage a; got {stage_events:?}"
+            );
+            assert!(
+                stage_events
+                    .iter()
+                    .any(|(sid, st)| *sid == a && matches!(st, StageState::Done)),
+                "expected a Done transition for stage a; got {stage_events:?}"
+            );
+            assert!(
+                stage_events
+                    .iter()
+                    .any(|(sid, st)| *sid == b && matches!(st, StageState::Running { .. })),
+                "stage b should only dispatch once its dependency a is Done; got {stage_events:?}"
+            );
+            assert!(
+                stage_events
+                    .iter()
+                    .any(|(sid, st)| *sid == b && matches!(st, StageState::Done)),
+                "expected a Done transition for stage b; got {stage_events:?}"
+            );
+
+            // Running must be observed strictly before Done for each stage.
+            let a_running = stage_events
+                .iter()
+                .position(|(sid, st)| *sid == a && matches!(st, StageState::Running { .. }))
+                .unwrap();
+            let a_done = stage_events
+                .iter()
+                .position(|(sid, st)| *sid == a && matches!(st, StageState::Done))
+                .unwrap();
+            assert!(a_running < a_done, "a must run before it's done");
+        });
     }
 }

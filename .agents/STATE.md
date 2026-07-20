@@ -4,8 +4,36 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: AUDIT
-- CURRENT_MILESTONE: M2
+- MILESTONE_PHASE: NORMAL
+- CURRENT_MILESTONE: M3
+
+## tick 2026-07-19g — AUDIT (M2): PASS → advance to M3
+
+Preflight CLEAN. Governance: no directives, not paused, 0 unread. Sole-turn
+Opus audit, no workers. **VERDICT: PASS.** All 4 M2 gates green with
+non-vacuous test matches (M2G1: 4 tests; M2G3: 2 tests; M2G2 grep clean;
+M2G4 suite green + clippy 0-warn). `ledger.py check --rerun` all-pass (19
+todos, 10 M2). Substance-verified WIRED, not stubbed:
+- **Signal store (AX-6):** canonical read/write path. `insights` +5 web
+  handlers (`insights_words/topics/speakers/export/compare`) read via
+  `SignalStore` query API; `crunchr` writes all 4 kinds via `write_signals`
+  from the real transcription path. No `crunchr.db` reach-ins outside
+  crunchr's own subtree.
+- **Pipeline executor (AX-3):** `SubmitPipeline`→`submit_and_dispatch`→ready-
+  stage dispatch→`mark_stage_done/failed` (ResourceLock + max_attempts/backoff)
+  →`PipelineStageChanged` SSE, traced end-to-end from daemon startup to
+  `/events`. PVR default build stays clean (`signal_store` `creator`-gated).
+- **Watch item (not an M2 defect):** no production plugin yet *submits* a real
+  pipeline — crunchr still uses `SpawnTask`. Real pipeline producers are
+  correctly scoped to M3.P2 (extraction adapters). Carry into M3.
+
+**Promotion: deferred-to-operator.** `main` is a clean ancestor of
+`integration` (ff-able, 0 divergence) BUT is checked out in the operator's
+worktree (`/home/revelri/Dev/chorosyne/strivo [main]`) — per protocol, do not
+touch the operator's checkout. `integration` remains the line of record;
+operator fast-forwards `main` when they choose. Pushed `integration` to origin.
+
+CONTROL advanced: AUDIT(M2) → NORMAL(M3).
 
 ## tick 2026-07-19f — NORMAL (M2): signal-migration (T1+T3)
 
@@ -406,6 +434,4 @@ Preflight `RECOVER:extra-worktrees;integration-behind-main`. Actioned:
   need to exclude the primary repo worktree (by common-dir, not `--show-toplevel`) before
   normal ticks can run.
 
-## enrollment
-Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`

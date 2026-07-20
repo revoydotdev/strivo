@@ -56,6 +56,8 @@ use serde_json::Value;
 
 use crate::signal_store::{NewSignal, SignalStore, SignalStoreError};
 
+pub mod events;
+
 /// Minimal input an [`Extractor`] needs to run.
 ///
 /// Extractors are domain-agnostic: this carries only the identity of the

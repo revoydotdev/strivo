@@ -202,5 +202,7 @@ pub fn run_extractor<E: Extractor + ?Sized>(
     Ok(ids)
 }
 
+pub mod ocr;
+
 #[cfg(test)]
 mod tests;

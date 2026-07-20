@@ -20,7 +20,7 @@
 pub mod executor;
 pub mod stage;
 
-pub use executor::{PipelineRegistry, ResourceRegistry};
+pub use executor::{PipelineRegistry, ResourceRegistry, StageAdvance, StageDispatch};
 pub use stage::{Pipeline, PipelineId, PipelineState, Stage, StageId, StageKind, StageState};
 
 #[cfg(test)]

@@ -111,7 +111,7 @@ daemon never drives it — the highest-leverage Creator gap.
 
 - **M2G1** — signal store round-trips (write → query). → *Check:* `cargo test --workspace --features creator signal_store`
 - **M2G2** — no plugin reaches into a sibling plugin's SQLite. → *Check:* `bash -c '! git grep -qn "crunchr.db" -- crates/strivo-plugins/src'`
-- **M2G3** — a submitted pipeline runs to completion driven by the daemon. → *Check:* `cargo test --workspace --features creator pipeline_submit_dispatch pipeline_advance_backoff`
+- **M2G3** — a submitted pipeline runs to completion driven by the daemon. → *Check:* `cargo test --workspace --features creator -- pipeline_submit_dispatch pipeline_advance_backoff`
 - **M2G4** — workspace+creator green & strict clippy clean. → *Check:* `bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'`
 
 ### M2.P9.S1 — Gate-closing todos

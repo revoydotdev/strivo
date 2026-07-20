@@ -26,6 +26,27 @@ Picked 2 INDEPENDENT concerns (disjoint files):
 insights-migrate (M2.P1.S2.T1) deferred — depends on the signal-store query API;
 pipeline-sse (M2.P2.S1.T3) deferred — depends on pipeline-exec.
 
+**RESULT — both concerns integrated & recorded (rerun on integrated tree):**
+- **signal-store** `162563d` — DONE `M2.P1.S1.T1/T2/T3`. `src/signal_store/`
+  (creator-gated): rusqlite append-only `signals` table (PRAGMA user_version
+  migration), typed `write_signals` (rejects confidence∉[0,1] / empty
+  source_plugin), `query_signals` by recording/kind/range-overlap. M2G1 rerun
+  green: `signal_store` → 3 passed.
+- **pipeline-exec** — DONE `M2.P2.S1.T1/T2`. Daemon now owns an
+  `Arc<Mutex<PipelineRegistry>>`; `process_daemon_plugin_actions` handles
+  `SubmitPipeline`→`submit_and_dispatch` (new `dispatch_ready` reserves
+  ResourceLocks, stamps Running, dispatches via `PluginRegistry::dispatch_verb`)
+  and `UpdateStage`→advance (done/failure honour `max_attempts`+`backoff_after`,
+  free locks, recompute ready). M2G3 rerun green (2 passed) — note the ROADMAP
+  M2G3 check was malformed (`cargo test … a b` rejects the 2nd positional);
+  corrected to `… -- a b`.
+- Pre-existing regression fixed `c687cdb`: operator hmac revert re-surfaced a
+  deprecated `GenericArray::as_slice` in `strivo-web/auth.rs` failing M2G4 strict
+  clippy — replaced with slice indexing. **M2G4 now green** (workspace+creator
+  test + `clippy -D warnings` exit 0); default PVR `cargo test` still green.
+- M2 remaining: insights-migrate (M2.P1.S2.T1), pipeline-sse (M2.P2.S1.T3),
+  gate-m2g4 (M2.P9.S1.T1) → next ticks. Phase stays NORMAL/M2.
+
 ## tick 2026-07-20a — RECOVER (integration-behind-main) → STOP, surface to operator
 Preflight `RECOVER:integration-behind-main`. `main` (operator worktree
 `/home/revelri/Dev/chorosyne/strivo`, ahead of `origin/main` by 6 unpushed) has

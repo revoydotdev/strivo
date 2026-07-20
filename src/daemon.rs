@@ -266,6 +266,16 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
     // init_all otherwise). tokio Mutex — dispatch is sync and brief.
     let registry = std::sync::Arc::new(tokio::sync::Mutex::new(host.registry));
 
+    // M2.P2.S1 — the host's DAG registry. Plugins submit a `Pipeline`
+    // via `PluginAction::SubmitPipeline` and drive per-stage state via
+    // `PluginAction::UpdateStage`; the daemon is the only thing that
+    // actually walks the DAG (dispatches ready stages, retries with
+    // backoff, frees resource locks). tokio Mutex for the same reason
+    // as `registry` above — every operation is sync and brief.
+    let pipeline_registry = std::sync::Arc::new(tokio::sync::Mutex::new(
+        crate::pipeline::PipelineRegistry::new(),
+    ));
+
     // Open the persistence db (jobs / catalog / crunchr_queue) and recover any
     // jobs that were marked running when the daemon last died. Recovery is
     // intentionally minimal: we mark orphans as 'interrupted' so the audit log
@@ -668,6 +678,7 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
 
                         let client_config = config.clone();
                         let client_registry = registry.clone();
+                        let client_pipeline_registry = pipeline_registry.clone();
                         let client_recordings = state.recordings.clone();
                         let client_event_tx = event_tx.clone();
                         let client_persist_db = persist_db.clone();
@@ -682,6 +693,7 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
                                 bulk_tx_ref,
                                 client_config,
                                 client_registry,
+                                client_pipeline_registry,
                                 client_recordings,
                                 client_event_tx,
                                 poll_notify,
@@ -782,6 +794,7 @@ async fn handle_client(
     bulk_tx: Option<mpsc::UnboundedSender<crate::recording::bulk::BulkCommand>>,
     config: AppConfig,
     registry: Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
+    pipeline_registry: Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
     recordings: HashMap<Uuid, RecordingJob>,
     event_tx: mpsc::UnboundedSender<DaemonEvent>,
     poll_notify: Option<Arc<tokio::sync::Notify>>,
@@ -1152,7 +1165,15 @@ async fn handle_client(
                     action_count = actions.len(),
                     "daemon: dispatched plugin verb"
                 );
-                process_daemon_plugin_actions(actions, &registry, &event_tx);
+                process_daemon_plugin_actions(
+                    actions,
+                    &registry,
+                    &pipeline_registry,
+                    &recordings,
+                    &config.plugin_toggles,
+                    &event_tx,
+                )
+                .await;
             }
             ClientMessage::Unknown => {
                 // Forward-compatibility: a message variant added in a newer
@@ -1175,45 +1196,218 @@ async fn handle_client(
 /// multi-stage verb runs to completion. SetStatus/Notify become daemon
 /// notifications (visible to connected TUI/web clients). TUI-only actions
 /// (pane activation, mpv playback) are no-ops in the daemon.
-fn process_daemon_plugin_actions(
+///
+/// M2.P2.S1 — `SubmitPipeline`/`UpdateStage` drive the host's
+/// `PipelineRegistry`: submitting/advancing the DAG and dispatching
+/// whatever stages become ready back through this same function (a
+/// stage dispatch is itself a `dispatch_verb` call that can return
+/// further `PluginAction`s, e.g. `SpawnTask` for the actual work).
+/// Async recursion needs boxing to keep the future's size finite —
+/// see `dispatch_stage_batch` and the `SpawnTask` arm below.
+fn process_daemon_plugin_actions<'a>(
     actions: Vec<crate::plugin::PluginAction>,
+    registry: &'a Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
+    pipeline_registry: &'a Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
+    recordings: &'a HashMap<Uuid, RecordingJob>,
+    plugin_toggles: &'a std::collections::BTreeMap<String, crate::config::PluginToggle>,
+    event_tx: &'a mpsc::UnboundedSender<DaemonEvent>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        use crate::plugin::PluginAction as PA;
+        for action in actions {
+            match action {
+                PA::SetStatus(s) => {
+                    let _ = event_tx.send(DaemonEvent::Notification {
+                        title: "Plugin".to_string(),
+                        body: s,
+                    });
+                }
+                PA::Notify { title, body } => {
+                    let _ = event_tx.send(DaemonEvent::Notification { title, body });
+                }
+                PA::SpawnTask {
+                    plugin_name,
+                    future,
+                } => {
+                    let reg = registry.clone();
+                    let preg = pipeline_registry.clone();
+                    let etx = event_tx.clone();
+                    let recs = recordings.clone();
+                    let toggles = plugin_toggles.clone();
+                    tokio::spawn(async move {
+                        let result = future.await;
+                        let next = {
+                            let mut r = reg.lock().await;
+                            r.dispatch_plugin_event(plugin_name, result)
+                        };
+                        // Recurse: the follow-up actions may spawn further
+                        // stages (e.g. transcription pipeline steps).
+                        process_daemon_plugin_actions(next, &reg, &preg, &recs, &toggles, &etx)
+                            .await;
+                    });
+                }
+                PA::SubmitPipeline(pipeline) => {
+                    let dispatches = {
+                        let mut preg = pipeline_registry.lock().await;
+                        match preg.submit_and_dispatch(pipeline) {
+                            Ok((_id, dispatches)) => dispatches,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "daemon: pipeline submit rejected (cyclic DAG)"
+                                );
+                                Vec::new()
+                            }
+                        }
+                    };
+                    dispatch_stage_batch(
+                        dispatches,
+                        registry,
+                        pipeline_registry,
+                        recordings,
+                        plugin_toggles,
+                        event_tx,
+                    )
+                    .await;
+                }
+                PA::UpdateStage {
+                    stage_id,
+                    new_state,
+                } => {
+                    use crate::plugin::PipelineStageUpdate as U;
+                    let (dispatches, retry_after) = {
+                        let mut preg = pipeline_registry.lock().await;
+                        match new_state {
+                            U::Running => {
+                                preg.mark_stage_running(stage_id);
+                                (Vec::new(), None)
+                            }
+                            U::Done => {
+                                let adv = preg.advance_on_done(stage_id);
+                                (adv.dispatch, adv.retry_after)
+                            }
+                            U::Failed(err) => {
+                                let adv = preg.advance_on_failure(stage_id, err);
+                                (adv.dispatch, adv.retry_after)
+                            }
+                            U::Cancelled => {
+                                preg.mark_stage_cancelled(stage_id);
+                                let adv = preg.advance_on_terminal(stage_id);
+                                (adv.dispatch, adv.retry_after)
+                            }
+                            U::Skipped => {
+                                preg.skip_stage(stage_id);
+                                let adv = preg.advance_on_terminal(stage_id);
+                                (adv.dispatch, adv.retry_after)
+                            }
+                        }
+                    };
+                    dispatch_stage_batch(
+                        dispatches,
+                        registry,
+                        pipeline_registry,
+                        recordings,
+                        plugin_toggles,
+                        event_tx,
+                    )
+                    .await;
+                    if let Some((sid, backoff)) = retry_after {
+                        schedule_stage_retry(
+                            sid,
+                            backoff,
+                            registry.clone(),
+                            pipeline_registry.clone(),
+                            recordings.clone(),
+                            plugin_toggles.clone(),
+                            event_tx.clone(),
+                        );
+                    }
+                }
+                // No daemon equivalent (no TUI panes / mpv / config persistence
+                // path here); the TUI handles these when it dispatches verbs.
+                _ => {}
+            }
+        }
+    })
+}
+
+/// Turn each ready [`crate::pipeline::StageDispatch`] into an actual
+/// `PluginRegistry::dispatch_verb` call — `stage_id` travels as the
+/// verb's `selection` (a `StageId` is a `Uuid`) so the owning plugin's
+/// `on_verb` knows which stage it's being asked to run. Any actions the
+/// verb returns (typically `SpawnTask` for the real work, or an
+/// immediate `UpdateStage` for synchronous stages) are pumped back
+/// through `process_daemon_plugin_actions`.
+async fn dispatch_stage_batch(
+    dispatches: Vec<crate::pipeline::StageDispatch>,
     registry: &Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
+    pipeline_registry: &Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
+    recordings: &HashMap<Uuid, RecordingJob>,
+    plugin_toggles: &std::collections::BTreeMap<String, crate::config::PluginToggle>,
     event_tx: &mpsc::UnboundedSender<DaemonEvent>,
 ) {
-    use crate::plugin::PluginAction as PA;
-    for action in actions {
-        match action {
-            PA::SetStatus(s) => {
-                let _ = event_tx.send(DaemonEvent::Notification {
-                    title: "Plugin".to_string(),
-                    body: s,
-                });
-            }
-            PA::Notify { title, body } => {
-                let _ = event_tx.send(DaemonEvent::Notification { title, body });
-            }
-            PA::SpawnTask {
-                plugin_name,
-                future,
-            } => {
-                let reg = registry.clone();
-                let etx = event_tx.clone();
-                tokio::spawn(async move {
-                    let result = future.await;
-                    let next = {
-                        let mut r = reg.lock().await;
-                        r.dispatch_plugin_event(plugin_name, result)
-                    };
-                    // Recurse: the follow-up actions may spawn further
-                    // stages (e.g. transcription pipeline steps).
-                    process_daemon_plugin_actions(next, &reg, &etx);
-                });
-            }
-            // No daemon equivalent (no TUI panes / mpv / config persistence
-            // path here); the TUI handles these when it dispatches verbs.
-            _ => {}
-        }
+    if dispatches.is_empty() {
+        return;
     }
+    let ctx = crate::plugin::VerbContext {
+        recordings,
+        plugin_toggles,
+    };
+    for d in dispatches {
+        let actions = {
+            let mut reg = registry.lock().await;
+            reg.dispatch_verb(&d.owner, &d.verb, std::slice::from_ref(&d.stage_id), &ctx)
+        };
+        tracing::info!(
+            pipeline_id = %d.pipeline_id,
+            stage_id = %d.stage_id,
+            owner = %d.owner,
+            verb = %d.verb,
+            action_count = actions.len(),
+            "daemon: dispatched pipeline stage"
+        );
+        process_daemon_plugin_actions(
+            actions,
+            registry,
+            pipeline_registry,
+            recordings,
+            plugin_toggles,
+            event_tx,
+        )
+        .await;
+    }
+}
+
+/// Schedule a delayed retry for a `Failed` (not yet `Exhausted`) stage,
+/// honouring [`crate::pipeline::stage::Stage::backoff_after`]. After the
+/// backoff elapses, resets the stage to `Pending` via the registry's
+/// already-tested `retry_stage` and re-dispatches whatever is ready.
+fn schedule_stage_retry(
+    stage_id: crate::pipeline::StageId,
+    backoff: std::time::Duration,
+    registry: Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
+    pipeline_registry: Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
+    recordings: HashMap<Uuid, RecordingJob>,
+    plugin_toggles: std::collections::BTreeMap<String, crate::config::PluginToggle>,
+    event_tx: mpsc::UnboundedSender<DaemonEvent>,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(backoff).await;
+        let dispatches = {
+            let mut preg = pipeline_registry.lock().await;
+            preg.retry_stage(stage_id, None);
+            preg.dispatch_ready()
+        };
+        dispatch_stage_batch(
+            dispatches,
+            &registry,
+            &pipeline_registry,
+            &recordings,
+            &plugin_toggles,
+            &event_tx,
+        )
+        .await;
+    });
 }
 
 /// Fire a desktop banner for notification-worthy daemon events, honouring the

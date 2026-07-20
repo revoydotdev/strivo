@@ -49,6 +49,27 @@ impl StageKind {
             Self::Custom(s) => format!("custom({s})"),
         }
     }
+
+    /// Canonical plugin verb this stage kind dispatches to, used by the
+    /// host executor to call `PluginRegistry::dispatch_verb`. Distinct
+    /// from [`Self::label`] (human display string): provider-bearing
+    /// kinds omit the provider here so one plugin verb handles e.g.
+    /// every `Transcribe` regardless of provider (the provider travels
+    /// with the stage itself, not the verb name). `Custom(id)` dispatches
+    /// to the plugin-registered `id` directly.
+    pub fn verb(&self) -> &str {
+        match self {
+            Self::Extract => "extract",
+            Self::Transcribe { .. } => "transcribe",
+            Self::Diarize { .. } => "diarize",
+            Self::Subtitle => "subtitle",
+            Self::Analyze { .. } => "analyze",
+            Self::ExportClip => "export_clip",
+            Self::Concat => "concat",
+            Self::Archive => "archive",
+            Self::Custom(id) => id,
+        }
+    }
 }
 
 /// Resource lock a stage needs. Held while the stage runs, released when
@@ -195,6 +216,13 @@ pub struct Pipeline {
     pub state: PipelineState,
     pub started_at_secs: Option<u64>,
     pub completed_at_secs: Option<u64>,
+    /// Name of the plugin that owns this pipeline's stages — the host
+    /// executor dispatches each ready stage to this plugin's `on_verb`
+    /// via `PluginRegistry::dispatch_verb`. Empty for pipelines built
+    /// outside the plugin-submission path (e.g. ad hoc EDL renders that
+    /// never go through `SubmitPipeline`).
+    #[serde(default)]
+    pub owner: String,
     /// Sub-millisecond timestamp for stable ordering in the registry. Not
     /// persisted — `started_at_secs` is enough for the UI.
     #[serde(skip, default = "Instant::now")]
@@ -210,8 +238,16 @@ impl Pipeline {
             state: PipelineState::Pending,
             started_at_secs: None,
             completed_at_secs: None,
+            owner: String::new(),
             created_at: Instant::now(),
         }
+    }
+
+    /// Set the owning plugin name (see [`Self::owner`]). Called by the
+    /// plugin building the pipeline before `SubmitPipeline`.
+    pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = owner.into();
+        self
     }
 
     /// Append a stage and return its id so subsequent stages can reference

@@ -26,3 +26,4 @@
 {"commit":"0ff019b","concern":"extractor-contract","milestone":"M3","todo":"M3.P2.S1.T1","ts":"2026-07-20T00:11:20-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator extractor_contract","exit":0}}
 {"commit":"c4bfcea","concern":"corpus-service","milestone":"M3","todo":"M3.P1.S1.T1","ts":"2026-07-20T00:13:07-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator corpus_hydrate","exit":0}}
 {"commit":"8fbdfa4","concern":"extractor-events","milestone":"M3","todo":"M3.P2.S2.T1","ts":"2026-07-20T00:34:08-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator extractor_events","exit":0}}
+{"commit":"1cb3eea","concern":"extractor-ocr","milestone":"M3","todo":"M3.P2.S2.T2","ts":"2026-07-20T00:34:51-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator extractor_ocr","exit":0}}

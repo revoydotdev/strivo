@@ -34,6 +34,8 @@ pub mod playback;
 pub mod plugin;
 pub mod recording;
 pub mod search;
+#[cfg(feature = "creator")]
+pub mod signal_store;
 pub mod state;
 pub mod stream;
 pub mod tasks;

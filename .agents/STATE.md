@@ -7,6 +7,25 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## tick 2026-07-20b — NORMAL (M2) first tick: gate-decomp + 2 concerns
+Preflight CLEAN (operator merged main→integration at `f293d77`, divergence
+resolved). Governance: no directives, not paused, 0 unread. First NORMAL tick of
+M2 (`ledger status --milestone M2` = 0 done). **Gate-decomposition:** M2G1 owned
+by signal-store todos (M2.P1.S1.T1–T3), M2G2 by M2.P1.S2.T1, M2G3 by
+M2.P2.S1.T1–T2; added `M2.P9.S1.T1` (concern gate-m2g4) for the milestone-wide
+quality gate to ROADMAP.
+
+Picked 2 INDEPENDENT concerns (disjoint files):
+- CLAIMED `M2.P1.S1.T1`+`M2.P1.S1.T2`+`M2.P1.S1.T3` — **signal-store**: new
+  creator-gated `src/signal_store/` canonical append-only store (schema+migration,
+  typed write API w/ provenance, range/kind/recording query API).
+- CLAIMED `M2.P2.S1.T1`+`M2.P2.S1.T2` — **pipeline-exec**: wire a
+  `PipelineRegistry` into the daemon; handle `SubmitPipeline`→`submit` dispatching
+  ready stages, and `mark_stage_done`/`mark_stage_failed` advancing the DAG
+  honouring `ResourceLock` + `max_attempts`/backoff.
+insights-migrate (M2.P1.S2.T1) deferred — depends on the signal-store query API;
+pipeline-sse (M2.P2.S1.T3) deferred — depends on pipeline-exec.
+
 ## tick 2026-07-20a — RECOVER (integration-behind-main) → STOP, surface to operator
 Preflight `RECOVER:integration-behind-main`. `main` (operator worktree
 `/home/revelri/Dev/chorosyne/strivo`, ahead of `origin/main` by 6 unpushed) has

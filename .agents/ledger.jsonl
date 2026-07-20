@@ -7,3 +7,6 @@
 {"commit":"573b1f4","concern":"gate-m1g1","milestone":"M1","todo":"M1.P9.S1.T1","ts":"2026-07-19T19:48:22-0400","type":"done","verified_by":{"cmd":"cargo test","exit":0}}
 {"commit":"573b1f4","concern":"gate-m1g2","milestone":"M1","todo":"M1.P9.S1.T2","ts":"2026-07-19T19:48:25-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator","exit":0}}
 {"commit":"12fab7d9adc5d8362111a0e3a3bb67b1ab6699fe","concern":"clippy-creator","milestone":"M1","todo":"M1.P3.S1.T1","ts":"2026-07-19T20:03:40-0400","type":"done","verified_by":{"cmd":"cargo clippy --workspace --features creator --all-targets -- -D warnings","exit":0}}
+{"commit":"118dfc8","concern":"signal-store","milestone":"M2","todo":"M2.P1.S1.T1","ts":"2026-07-19T22:17:45-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator signal_store_schema","exit":0}}
+{"commit":"118dfc8","concern":"signal-store","milestone":"M2","todo":"M2.P1.S1.T2","ts":"2026-07-19T22:17:45-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator signal_store_write","exit":0}}
+{"commit":"118dfc8","concern":"signal-store","milestone":"M2","todo":"M2.P1.S1.T3","ts":"2026-07-19T22:17:46-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator signal_store_query","exit":0}}

@@ -260,6 +260,11 @@ difficulty = 30
 priority = "HIGH"
 
 [[todo]]
+line = "Cache ffprobe results keyed by path+mtime to eliminate re-analysis on every /probe call"
+difficulty = 20
+priority = "MED"
+
+[[todo]]
 line = "Clean 44 Creator-crate clippy warnings (across tool crates); gate on cargo clippy --features creator"
 difficulty = 25
 priority = "LOW"

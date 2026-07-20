@@ -97,6 +97,9 @@ Replace fragmented per-plugin SQLite with one append-only signal store:
 
 ### M2.P1.S2 — Retire per-plugin SQLite reach-ins
 - **`M2.P1.S2.T1`** — Migrate `insights` off its hardcoded `crunchr.db` reach-in to the query API. → *Artifact:* `bash -c 'cargo test --workspace --features creator insights_via_signal_store && ! git grep -qn "crunchr.db" -- crates/strivo-plugins/src/insights'` · *Concern:* insights-migrate
+  - **Blocked on `T2`+`T3`** (found tick 2026-07-19c): moving the read side alone regresses the live webui Insights surface to empty, because nothing populates `signals.db` yet and the webui reads these analytics through the same functions. Land the producer + webui call-site migration first, then retry `T1`.
+- **`M2.P1.S2.T2`** — Producer: have `crunchr` write its analytics (`word_frequency`, segment/airtime, `video_analysis` sentiment/topics) into the canonical `SignalStore` via `write_signals`, so the store is populated with the kinds `insights` will read (`word_frequency`, `speaker_segment`, `sentiment`, `topic`). → *Artifact:* `cargo test --workspace --features creator crunchr_writes_signals` · *Concern:* crunchr-signals
+- **`M2.P1.S2.T3`** — Migrate the webui analytics call sites (`crates/strivo-web/src/routes/plugins.rs` + `crates/strivo-web/tests/plugins_data.rs`, ~9 sites) off the raw `crunchr.db` `rusqlite::Connection` to `SignalStore::open(data_dir/signals.db)` + the query API, in lockstep with `insights` `T1`. → *Artifact:* `bash -c 'cargo test --workspace --features creator insights_via_signal_store && ! git grep -qn "crunchr.db" -- crates/strivo-web/src'` · *Concern:* webui-signals
 
 ## M2.P2 — Drive the DAG executor from the daemon (CE-P3)
 

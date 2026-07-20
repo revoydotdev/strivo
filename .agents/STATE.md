@@ -317,3 +317,4 @@ Preflight `RECOVER:extra-worktrees;integration-behind-main`. Actioned:
 
 ## enrollment
 Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
+- 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`

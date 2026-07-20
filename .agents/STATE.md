@@ -7,6 +7,35 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M4
 
+## tick 2026-07-20f — RECOVERY (M4): salvage killed tick 20e
+
+Preflight **DIRTY:2** — killed-tick residue, not operator work. Prior tick 20e
+died holding the lock (>25min stale) after dispatching two M4 workers. Ran
+recovery, not feature dispatch; no new concerns claimed.
+
+Residue reverted: `.agents/{STATE,ledger}` carried two self-heal-check *false
+positives* — `--record` reported PASS for `M4.P1.S1.T1`/`M4.P3.S1.T1` on
+brand-new artifact filters that matched **0 tests** (the tick-20a/20c vacuous
+trap, recurring inside `self-heal-check.sh --record` itself), plus their two
+`kill` retractions and a CLAIMED narrative. All uncommitted → reverted to
+clean committed state. **Gotcha persists: never trust `self-heal-check.sh
+--record` PASS on a new filter — confirm passed-count > 0 first.**
+
+Salvage of the two orphaned workers:
+- **concern/analytics** (34da4b0): worker had **committed** real work
+  (`experiment_registry.rs` + 254-line test, 5 tests). Rebased onto
+  `integration`, gate `experiment_registry` **5 passed** (non-vacuous),
+  ff-merged (3de1b42). Recorded `M4.P1.S1.T1` **done** (`ledger.py done
+  --run`, exit 0). **M4G1 closed.** Branch+worktree removed.
+- **concern/clip-export**: worker left ~35k of **uncommitted, unverified**
+  WIP (`clip_export/mod.rs`+`work.rs`, daemon wiring) for `M4.P3.S1.T1`.
+  Not integrated (incomplete). Preserved to
+  `.agents/salvage/clip-export-20260720/` (code + `tracked-wip.patch`) for a
+  future M4.P3 tick; worktree force-removed, branch deleted.
+
+`main` (655ddab, operator checkout) is ancestor of `integration` — no
+reconcile, left untouched. Tree back to CLEAN. Phase stays NORMAL/M4.
+
 ## tick 2026-07-20d — AUDIT (M3): PASS → advance to M4
 
 Sole-turn Opus audit, no workers. **VERDICT: PASS.**
@@ -491,33 +520,9 @@ the swarm's ffprobe cache + dep migration stay reverted; if so, land those
 reverts onto `integration` (or the swarm drops them next tick under direction),
 then reconcile. Lock cleared; tick STOP.
 
-## tick 2026-07-19f — AUDIT (M1) → advance
-Sole-turn Opus audit, no workers. Re-verified the prior PASS still holds on the
-integrated tree (HEAD `c2b4d77`, harness-protocol fix committed after tick `e`:
-PASS now advances the milestone regardless; ff-to-main is TRY-only, deferred to
-the operator when blocked). **VERDICT: PASS.** Gates rerun green: **M1G1**
-`cargo test` ✓ (42+8 unit/integration, 0 failed), **M1G2**
-`cargo test --workspace --features creator` ✓ (0 failed across all workspace
-crates), **M1G3** `cargo clippy --workspace --features creator --all-targets -- -D warnings` ✓
-(exit 0, clean), **M1G4** no `TODO(licence-verify)` in `*.rs` ✓. `ledger.py check --rerun`
-✓ — "9 done todos, structural+rerun". Axioms re-confirmed in code: **AX-7** ES256
-verify-before-trust on both paths — `routes/licence.rs:373` `verify_licence_token`
-(`?`) runs before `Licence` is built at :391; `client.rs::refresh_now` verifies at
-:210 before building `Licence` at :222, fail-closed when no pubkey resolves; tamper
-tests present both sides. **AX-6** viewguard single path — `viewguard/mod.rs:152`
-`ctx.data_dir.clone()`, `plugins.rs:47-49` `viewguard_db()` one `PathBuf`, no dual-path
-probe. **AX-2/3** `PROBE_CACHE` keyed `(path,mtime,size)` wired live into
-`recording_probe` (api.rs), mtime/size invalidation tested.
-**M1 COMPLETE; advanced M1→M2.** ff-to-main TRIED and deferred-to-operator: `git -C
-/home/revelri/Dev/chorosyne/strivo merge --ff-only integration` aborted cleanly
-(foreign WIP still present: staged Cargo.toml/ci.yml/db.rs/auth.rs/plugins.rs/patreon.rs,
-untracked routes/multistream.rs, `.omo/` — untouched, not clobbered). No new unread
-governance messages (0) — the standing blocker from tick `e` still applies, no
-duplicate posted. `integration` is the line of record at `c2b4d77`; `origin` untouched,
-pushed this tick's state commit only.
-
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`
 - 2026-07-20T04:33:39Z — integrated `concern/extractor-events` into `integration` at `8fbdfa4`
 - 2026-07-20T04:34:29Z — integrated `concern/extractor-ocr` into `integration` at `1cb3eea`
 - 2026-07-20T04:35:21Z — integrated `concern/corpus-web` into `integration` at `0fedc49`
 - 2026-07-20T04:46:53Z — integrated `concern/extractor-backpressure` into `integration` at `ca12543`
+- 2026-07-20T05:33:29Z — integrated `concern/analytics` into `integration` at `34da4b0`

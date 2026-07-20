@@ -110,3 +110,29 @@ ff-only merge is valid once that tree is clean, but I did NOT touch that WIP (ne
 didn't create). `git -C .../chorosyne/strivo merge --ff-only integration` aborted cleanly; no push.
 Phase left at **AUDIT**; posted a `blocker` message to the operator (commit/stash/relocate that WIP,
 then a subsequent AUDIT tick fast-forwards + pushes and advances M1→M2). Remote `origin` untouched.
+
+<!-- rotated  : 1 entries + 0 intlog lines -->
+## tick 2026-07-19f — AUDIT (M1) → advance
+Sole-turn Opus audit, no workers. Re-verified the prior PASS still holds on the
+integrated tree (HEAD `c2b4d77`, harness-protocol fix committed after tick `e`:
+PASS now advances the milestone regardless; ff-to-main is TRY-only, deferred to
+the operator when blocked). **VERDICT: PASS.** Gates rerun green: **M1G1**
+`cargo test` ✓ (42+8 unit/integration, 0 failed), **M1G2**
+`cargo test --workspace --features creator` ✓ (0 failed across all workspace
+crates), **M1G3** `cargo clippy --workspace --features creator --all-targets -- -D warnings` ✓
+(exit 0, clean), **M1G4** no `TODO(licence-verify)` in `*.rs` ✓. `ledger.py check --rerun`
+✓ — "9 done todos, structural+rerun". Axioms re-confirmed in code: **AX-7** ES256
+verify-before-trust on both paths — `routes/licence.rs:373` `verify_licence_token`
+(`?`) runs before `Licence` is built at :391; `client.rs::refresh_now` verifies at
+:210 before building `Licence` at :222, fail-closed when no pubkey resolves; tamper
+tests present both sides. **AX-6** viewguard single path — `viewguard/mod.rs:152`
+`ctx.data_dir.clone()`, `plugins.rs:47-49` `viewguard_db()` one `PathBuf`, no dual-path
+probe. **AX-2/3** `PROBE_CACHE` keyed `(path,mtime,size)` wired live into
+`recording_probe` (api.rs), mtime/size invalidation tested.
+**M1 COMPLETE; advanced M1→M2.** ff-to-main TRIED and deferred-to-operator: `git -C
+/home/revelri/Dev/chorosyne/strivo merge --ff-only integration` aborted cleanly
+(foreign WIP still present: staged Cargo.toml/ci.yml/db.rs/auth.rs/plugins.rs/patreon.rs,
+untracked routes/multistream.rs, `.omo/` — untouched, not clobbered). No new unread
+governance messages (0) — the standing blocker from tick `e` still applies, no
+duplicate posted. `integration` is the line of record at `c2b4d77`; `origin` untouched,
+pushed this tick's state commit only.

@@ -4,8 +4,61 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: NORMAL
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M3
+
+## tick 2026-07-20c — NORMAL (M3): backpressure queue + M3G3 gate → M3 candidate-complete
+
+Preflight CLEAN, worktrees clean. Governance: no directives, not paused, 0
+unread. Not first M3 tick (5/7 done) → no re-decomposition. Exactly two
+sequential todos remained: `M3.P2.S1.T2` (backpressure) had to land before
+`M3.P9.S1.T1` (gate-m3g3) could pass, so one sonnet worker, no parallel
+dispatch.
+
+Self-heal-check for `M3.P2.S1.T2` reported a bare "PASS" — the classic
+tick-2026-07-20a vacuous-pass trap (`cargo test ... extractor_backpressure`
+matches 0 tests today, exits 0 anyway). Did NOT `--record`; confirmed by
+grep (no queue/backpressure module anywhere) and by running the raw cmd
+(0 tests, 42+ filtered out) before dispatching.
+
+- **`M3.P2.S1.T2` extractor-backpressure** — `src/extraction/queue.rs`:
+  `ExtractionQueue`/`ExtractionConsumer` over `mpsc::sync_channel(capacity)`;
+  `push` blocks once full (real back-pressure, not drop-or-grow);
+  `drain_one` runs the dequeued `WorkItem` through the existing
+  `run_extractor` into a real `SignalStore`. 2 tests
+  (`extractor_backpressure_blocks_producer_until_consumer_drains`,
+  `extractor_backpressure_drained_items_persist_through_run_extractor`),
+  clippy clean. Independently re-verified in the worker's worktree and
+  again post-integration (non-vacuous both times).
+
+**Gotchas for future ticks:**
+- `scripts/worktree.sh destroy` deletes the local branch, not just the
+  worktree dir — running it before `integrate.sh` cost the
+  `concern/extractor-backpressure` branch ref for a moment (commit object
+  survived unreachable, recovered via `git branch <name> <sha>`; confirmed
+  intact via `git fsck`/`cat-file` before recreating). Destroy worktrees
+  only *after* integration succeeds, never to unblock a checkout conflict.
+- `integrate.sh`'s rebase-failure path runs `git reset --hard
+  $PRE_REBASE_SHA` as cleanup — this also wipes *any* unrelated uncommitted
+  changes sitting in the root worktree at the time (it cost this tick's
+  CLAIMED-entry note, harmless since ledger.jsonl is the real source of
+  truth, but worth knowing). Commit or stash local edits before calling
+  `integrate.sh`, don't leave them dangling uncommitted.
+
+- **`M3.P9.S1.T1` gate-m3g3** — full gate run on integrated `integration`
+  (HEAD `39298e3`): `cargo test --workspace --features creator` → 795
+  passed, 0 failed; `cargo clippy --workspace --features creator
+  --all-targets -- -D warnings` → clean. Recorded via `ledger.py done --run`
+  (refuses unless the chained cmd exits 0).
+
+M3 now 7/7 done (`ledger.py next --milestone M3` → 0 unclaimed). Re-ran
+M3G1 (`corpus_hydrate`, 5 tests) and M3G2 (`extractor_contract`, 3 tests) to
+confirm both still green alongside M3G3. **M3 candidate-complete** — CONTROL
+advanced NORMAL(M3) → AUDIT(M3). Audit itself deferred to next tick (not
+performed this tick). Integrated via `integrate.sh` (rebase+gate+ff-merge);
+ledger `done --run` re-verified on `integration`; `extractor-backpressure`'s
+`ledger.jsonl` entry and this STATE.md tick + CONTROL edit fold into the
+same `chore: integrate` commit.
 
 ## tick 2026-07-20b — NORMAL (M3): SPA corpus consume + events/OCR extractors
 
@@ -419,21 +472,6 @@ ff-only merge is valid once that tree is clean, but I did NOT touch that WIP (ne
 didn't create). `git -C .../chorosyne/strivo merge --ff-only integration` aborted cleanly; no push.
 Phase left at **AUDIT**; posted a `blocker` message to the operator (commit/stash/relocate that WIP,
 then a subsequent AUDIT tick fast-forwards + pushes and advances M1→M2). Remote `origin` untouched.
-
-## tick 2026-07-19d — NORMAL (M1)
-Preflight CLEAN; worktrees clean; no governance directives / operator messages.
-M1: 8→9 done. **DONE** `M1.P3.S1.T1` (clippy-creator, `12fab7d9`) — self-heal found the
-todo not yet clean (one `clippy::type_complexity` error on `RESOLUTION_CACHE` in
-`crates/strivo-web/src/routes/plugins.rs:486`, introduced by the ffprobe-cache landing;
-the roadmap's "~44 warnings" note was stale, prior ticks had already cleared the rest).
-Dispatched one worker: factored the nested generic into a `ResolutionCache` type alias,
-no behavior change. Verified diff was single-file / minimal before integrating; ff-merged
-onto `integration`, re-ran the gate clean on the integrated tree.
-Gates re-verified on the integrated tree: **M1G1** `cargo test` ✓, **M1G2**
-`cargo test --workspace --features creator` ✓, **M1G3**
-`cargo clippy --workspace --features creator --all-targets -- -D warnings` ✓ (exit 0),
-**M1G4** no `TODO(licence-verify)` in `*.rs` ✓. **M1 remaining: 0 — candidate-complete.**
-`MILESTONE_PHASE` flipped to `AUDIT` (no audit run this tick, per protocol).
 
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`
 - 2026-07-20T04:33:39Z — integrated `concern/extractor-events` into `integration` at `8fbdfa4`

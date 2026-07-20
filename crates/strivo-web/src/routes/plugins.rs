@@ -4143,6 +4143,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/chat/send", axum::routing::post(chat_send_message))
         .route("/api/v1/dataviz/run", axum::routing::post(dataviz_run))
+        .route("/api/v1/dataviz/corpus", get(dataviz_corpus))
         .route(
             "/api/v1/plugins/loudness/{id}",
             axum::routing::post(loudness_measure),
@@ -4229,6 +4230,79 @@ async fn dataviz_run(
     }
     let series = strivo_dataviz::run(&body.corpus, &body.experiment);
     Json(json!({ "series": series })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CorpusQuery {
+    /// "recording" | "playlist" | "channel"
+    scope: String,
+    /// Scope target: recording id, playlist id, or channel name (matches
+    /// whichever `scope` selects).
+    id: String,
+    #[serde(default)]
+    date_from: Option<String>,
+    #[serde(default)]
+    date_to: Option<String>,
+}
+
+/// `GET /api/v1/dataviz/corpus?scope=recording|playlist|channel&id=<id>[&date_from=&date_to=]`
+/// — hydrate a [`strivo_dataviz::Corpus`] server-side from the signal store,
+/// scoped by recording/playlist/channel and an optional date range. This is
+/// what a Data Viz hub should call instead of hand-assembling the corpus
+/// client-side before `POST /api/v1/dataviz/run`.
+///
+/// Recording metadata (title/channel/date) comes from the crunchr `videos`
+/// table — the same source `crunchr_search` and `insights` already read.
+/// Playlist membership has no first-party data source yet, so `scope=playlist`
+/// currently always yields an empty corpus; the scope is still accepted so
+/// the SPA/API contract doesn't need to change once a playlist source exists.
+async fn dataviz_corpus(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(q): Query<CorpusQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let scope = match q.scope.as_str() {
+        "recording" => crate::corpus::CorpusScope::Recording { id: q.id.clone() },
+        "playlist" => crate::corpus::CorpusScope::Playlist { id: q.id.clone() },
+        "channel" => crate::corpus::CorpusScope::Channel { name: q.id.clone() },
+        other => {
+            return Problem::bad_request(format!(
+                "scope must be recording|playlist|channel, got {other}"
+            ))
+            .into_response()
+        }
+    };
+    let Some(conn) = open_ro(&crunchr_db()) else {
+        return Json(json!({ "available": false, "corpus": null })).into_response();
+    };
+    let recordings: Vec<crate::corpus::RecordingMeta> =
+        match strivo_plugins::crunchr::db::list_videos(&conn) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|v| crate::corpus::RecordingMeta {
+                    id: v.recording_id,
+                    title: v.title,
+                    date: v.created_at,
+                    channel: v.channel_name,
+                    playlist: None,
+                })
+                .collect(),
+            Err(e) => return Problem::internal(e.to_string()).into_response(),
+        };
+    let Some(store) = open_signal_store() else {
+        return Json(json!({ "available": false, "corpus": null })).into_response();
+    };
+    let date_range = match (q.date_from.as_deref(), q.date_to.as_deref()) {
+        (Some(from), Some(to)) => Some((from, to)),
+        _ => None,
+    };
+    match crate::corpus::hydrate_corpus(&store, &recordings, &scope, date_range) {
+        Ok(corpus) => Json(json!({ "available": true, "corpus": corpus })).into_response(),
+        Err(e) => Problem::internal(e.to_string()).into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

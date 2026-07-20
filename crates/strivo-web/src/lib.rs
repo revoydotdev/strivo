@@ -6,6 +6,10 @@
 
 pub mod assets;
 pub mod auth;
+// Server-side `strivo_dataviz::Corpus` hydration from the signal store —
+// Creator Edition only (needs `strivo-core/creator` + `strivo-dataviz`).
+#[cfg(feature = "creator")]
+pub mod corpus;
 pub mod csrf;
 pub mod ipc_client;
 pub mod problem;

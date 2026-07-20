@@ -7,6 +7,41 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M3
 
+## tick 2026-07-20a — NORMAL (M3): gate-decompose + T1s (corpus, extractor)
+
+Preflight CLEAN, worktrees clean. Governance: no directives, not paused, 0
+unread. First NORMAL tick of M3 → **gate-decomposition first**: M3G1 owned by
+`M3.P1.S1.T1` (corpus_hydrate), M3G2 by `M3.P2.S1.T1` (extractor_contract);
+added milestone-wide gate todo **`M3.P9.S1.T1`** (gate-m3g3) to ROADMAP. Ledger
+now 7 M3 todos.
+
+**Self-heal trap caught:** `bash scripts/self-heal-check.sh` with a `cargo test
+<filter>` cmd exits 0 when the filter matches ZERO tests (vacuous pass). It
+falsely recorded `M3.P1.S1.T1` + `M3.P2.S1.T1` done before either feature
+existed. Both **`ledger.py kill`-retracted**; every gate re-verified below with
+an asserted nonzero test count. (Do not trust a filtered `cargo test` as a
+liveness probe unless the named test is proven to exist.)
+
+Two INDEPENDENT, file-disjoint concerns built by sonnet workers, integrated +
+re-verified on the integrated tree (non-vacuous):
+- **`M3.P1.S1.T1` corpus-service** — `hydrate_corpus(store, recordings, scope,
+  date_range)` assembles a `dataviz::Corpus` from `speaker_segment` signals,
+  scoped `recording | playlist | channel + date-range`, behind
+  `GET /api/v1/dataviz/corpus`. 5 tests (`corpus_hydrate`), clippy clean.
+- **`M3.P2.S1.T1` extractor-contract** — `Extractor` trait + `run_extractor`
+  in `strivo-core::extraction`; runner stamps provenance (`source_plugin`) from
+  the trait and rejects out-of-range confidence pre-write (invalid state
+  unrepresentable). 3 tests (`extractor_contract`), clippy clean.
+
+**Watch item (carry to M3 audit):** playlist scope has no upstream data — the
+codebase persists no recording→playlist mapping (`bulk.rs` playlist_id is
+transient ingestion scope only), so `scope=playlist` returns an empty corpus.
+`CorpusScope::Playlist` is implemented + tested; the endpoint contract won't
+change once a playlist source lands. Not a stub — honest data gap.
+
+Remaining M3: T2s (corpus-web, extractor-backpressure), S2 extractors
+(events, ocr), gate-m3g3. Phase stays NORMAL(M3). Pushed integration.
+
 ## tick 2026-07-19g — AUDIT (M2): PASS → advance to M3
 
 Preflight CLEAN. Governance: no directives, not paused, 0 unread. Sole-turn
@@ -382,56 +417,5 @@ Gates verified on the integrated tree and recorded: **M1G1** `cargo test` ✓,
 clean (no `TODO(licence-verify)` in `*.rs`). Deferred `M1.P3.S1.T1` (clippy-creator, M1G3)
 to its own tick: it may edit `src/licence/client.rs` (non-disjoint with T4) and warrants a
 full tick now that T4 has landed. **M1 remaining: 1** (clippy-creator).
-
-## tick 2026-07-19b — NORMAL (M1, first feature tick)
-Preflight CLEAN; no governance directives / operator messages. First NORMAL tick of
-M1 (0 done) → **gate-decomposition:** appended explicit gate-closing todos
-`M1.P9.S1.T1` (M1G1) / `M1.P9.S1.T2` (M1G2) to ROADMAP+STATE; M1G3/M1G4 already owned
-by feature todos (clippy-creator, licence-verify T3).
-
-Recon findings folded into worker briefs:
-- **licence-verify** (`M1.P1.S1.T1/T2/T3`): production P-256 pubkey does **not** exist
-  in-repo (`licence-backend/*.pem` gitignored; backend pre-launch). Verification made
-  real + fail-closed with an operator-supplied key (embedded const, `STRIVO_LICENCE_PUBKEY`
-  env override); test injects an ephemeral keypair. JWT claims: `sub`=machine_hash,
-  `tier`, `exp`, optional `licence_exp`. Also clears repo-wide `TODO(licence-verify)`
-  (client.rs, cache.rs) for M1G4.
-- **viewguard-path** (`M1.P3.S2.T1`): root cause = `src/plugin/registry.rs:153`
-  pre-scopes `ctx.data_dir` to `plugins/<name>`; `viewguard/mod.rs:150` re-joins
-  `plugins/viewguard` → double nest. Fix = match crunchr's `ctx.data_dir.clone()`; drop
-  the two-path probe in `plugins.rs`. (Noted: `archiver/mod.rs:65` has the identical
-  double-join bug — out of scope this todo, flagged for a future concern.)
-- **ffprobe-cache** (`M1.P2.S1.T1`): `api.rs:135 recording_probe` shells `ffprobe` every
-  call; add `(path,mtime,size)`-keyed in-process cache.
-
-CLAIMED (3 disjoint-file concerns; clippy-creator deferred — workspace-wide, conflicts):
-- DONE `M1.P1.S1.T1/T2/T3` · concern licence-verify (worker `f075b2e`) · verified `licence_verify` + `licence_reject` + `! git grep TODO(licence-verify) -- crates/strivo-web`. Real ES256 gate in `persist_and_reply` via `jsonwebtoken`: fail-closed on missing key / bad sig / `sub`≠machine / expired `exp`/`licence_exp` — no `Licence` built and no tier granted on failure. Key operator-supplied (`STRIVO_LICENCE_PUBKEY` env / embedded `LICENCE_PUBKEY_PEM` const, empty pre-launch). M1G4 rescoped to `*.rs` (ROADMAP legitimately names the todo). **Follow-up captured `M1.P1.S1.T4`:** daemon refresh path (`src/licence/client.rs`) still trusts the payload — not covered here.
-- DONE `M1.P2.S1.T1` · concern ffprobe-cache (worker `46f08ae`) · verified `cargo test -p strivo-web ffprobe_cache`. Process-global `(path,mtime,size)`→normalised-summary cache in front of the `recording_probe` ffprobe spawn; changed mtime/size invalidates; only success values cached. Manifest conflict with licence-verify (`once_cell` vs `jsonwebtoken`) resolved by unioning `Cargo.toml` + regenerating `Cargo.lock`.
-
-**Tick result:** 3 concerns integrated onto `integration` (`eed0939` viewguard, `93c0c05` licence, this commit ffprobe); 5 todos closed (`M1.P1.S1.T1/T2/T3`, `M1.P2.S1.T1`, `M1.P3.S2.T1`). Remaining M1: `M1.P1.S1.T4` (daemon verify, new), `M1.P3.S1.T1` clippy-creator (deferred — workspace-wide), `M1.P9.S1.T1/T2` (M1G1/M1G2 build-green, audit-time). No push (no remote on `integration` worktree). MILESTONE_PHASE stays NORMAL.
-- DONE `M1.P3.S2.T1` · concern viewguard-path · verified `cargo test -p strivo-web --features creator viewguard_data_path` (worker `789bca8`). Root-cause fix in `viewguard/mod.rs` (`ctx.data_dir.clone()` — registry already scopes); two-path probe dropped in `plugins.rs`. `archiver/mod.rs:65` carries the identical double-join bug — left for a future concern.
-
-
-Preflight `RECOVER:extra-worktrees;integration-behind-main`. Actioned:
-- **Reconciled** `integration` onto `main` via rebase — `main` had 7 revoy/dependabot
-  commits (dep migration, ffprobe cache #29) that `integration` lacked; the 3 swarm
-  scaffold commits (VISION, ADRs, ROADMAP rewrite, `.agents/`) now sit on top of
-  `744af45`. Sole conflict: `ROADMAP.md` — took the swarm rewrite (ADR-0005 supersedes
-  the revoy block; both outstanding revoy todos — licence ES256, Creator clippy — are
-  captured as M1.P1.S1 / M1.P3.S1). `integration` is now a clean FF-able descendant of
-  `main` (0 behind / 3 ahead). `main == origin/main`, nothing to push.
-- No stale lock; no `concern/*` branches; 0 landed gates to re-verify.
-- **NOT actioned (boundary):** the remaining `extra-worktrees` flag points at
-  `/home/revelri/Dev/chorosyne/strivo` — the **primary repo** (its `.git` is the common
-  dir; our swarm dir is a linked worktree) holding **23 modified/staged files + untracked
-  new files** of live revoy work. `worktree-check` mislabels it "orphaned-landed / safe
-  to remove" because it treats the *current* toplevel as `active`, not the primary. It is
-  **not** killed-tick residue; removing it would clobber uncommitted work (and git refuses
-  the primary worktree). Left untouched.
-- **Harness note for operator:** with the swarm running from a linked worktree while the
-  primary always coexists, `preflight.sh` (`extra-worktrees` on any `>1` worktree) will
-  report `RECOVER` **every tick**, permanently blocking normal work. preflight/worktree-check
-  need to exclude the primary repo worktree (by common-dir, not `--show-toplevel`) before
-  normal ticks can run.
 
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`

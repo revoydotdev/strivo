@@ -2081,90 +2081,6 @@ async fn chat_parse(
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct MultistreamQuery {
-    /// Container width in CSS pixels. SPA reports its own viewport so the
-    /// tile maths stay client-driven without a round-trip on every resize.
-    container_w: u32,
-    container_h: u32,
-    /// JSON-encoded `LayoutMode`. Defaults to `{"mode":"auto"}` when absent.
-    #[serde(default)]
-    mode: Option<String>,
-    /// Host the iframe is served from — Twitch embeds need this in `parent=`.
-    host: String,
-}
-
-/// `GET /api/v1/plugins/multistream/tiles?container_w=…&container_h=…&host=…`
-/// — fetch the list of currently live followed channels from the daemon
-/// and emit the tile layout for the given container, plus a ready-to-mount
-/// embed URL per stream. Pro-gated.
-async fn multistream_tiles(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    Query(q): Query<MultistreamQuery>,
-) -> impl IntoResponse {
-    if authed(&headers, &state).is_err() {
-        return Problem::unauthorized().into_response();
-    }
-    if let Err(r) = gate_pro("multistream") {
-        return r;
-    }
-    let channels = match state.ipc.snapshot().await {
-        Ok(strivo_core::ipc::ServerMessage::StateSnapshot { channels, .. }) => channels,
-        Ok(_) => vec![],
-        Err(e) => return Problem::internal(format!("snapshot: {e}")).into_response(),
-    };
-    let streams: Vec<strivo_multistream::Stream> = channels
-        .into_iter()
-        .filter(|c| c.is_live)
-        .filter_map(|c| {
-            let platform = match c.platform {
-                strivo_core::platform::PlatformKind::Twitch => {
-                    Some(strivo_multistream::Platform::Twitch)
-                }
-                strivo_core::platform::PlatformKind::YouTube => {
-                    Some(strivo_multistream::Platform::YouTube)
-                }
-                strivo_core::platform::PlatformKind::Patreon => None,
-            }?;
-            Some(strivo_multistream::Stream {
-                id: format!("{:?}:{}", c.platform, c.id),
-                channel_name: if c.display_name.is_empty() {
-                    c.name.clone()
-                } else {
-                    c.display_name
-                },
-                platform,
-                embed_key: c.name,
-                viewer_count: c.viewer_count.map(|v| v as u32),
-            })
-        })
-        .collect();
-    let mode: strivo_multistream::LayoutMode = q
-        .mode
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or(strivo_multistream::LayoutMode::Auto);
-    let tiles = strivo_multistream::compute_tiles(&streams, q.container_w, q.container_h, &mode);
-    let embeds: Vec<serde_json::Value> = streams
-        .iter()
-        .map(|s| {
-            serde_json::json!({
-                "stream_id": s.id,
-                "channel_name": s.channel_name,
-                "platform": s.platform,
-                "viewer_count": s.viewer_count,
-                "embed_url": strivo_multistream::embed_url(s, &q.host),
-            })
-        })
-        .collect();
-    Json(json!({
-        "streams": embeds,
-        "tiles": tiles,
-    }))
-    .into_response()
-}
-
-#[derive(Debug, Deserialize)]
 pub(super) struct SidechainBody {
     pub voice_intervals: Vec<strivo_vad::VoiceInterval>,
     pub total_duration_sec: f32,
@@ -4215,7 +4131,6 @@ pub fn router() -> Router<AppState> {
             "/api/v1/plugins/branding/{id}",
             get(branding_load).post(branding_save),
         )
-        .route("/api/v1/plugins/multistream/tiles", get(multistream_tiles))
         .route("/api/v1/plugins/chat/rooms", get(chat_rooms))
         .route(
             "/api/v1/plugins/chat/parse",

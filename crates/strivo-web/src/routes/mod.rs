@@ -3,6 +3,9 @@ pub mod assets;
 pub mod events;
 pub mod licence;
 pub mod login;
+// Multi-stream tile layout for the watch player. Core (single + multi view),
+// not a Pro plugin — always compiled so the PVR build's player works.
+pub mod multistream;
 // First-party plugin routes (Crunchr/Archiver/Insights/Viewguard + the
 // recording captions VTT endpoint) — Creator Edition only. The licence
 // runtime gate still filters locked Pro plugins for non-entitled clients

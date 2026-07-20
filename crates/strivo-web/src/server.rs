@@ -79,6 +79,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
         .merge(routes::licence::router())
         .merge(routes::recordings::router())
         .merge(routes::login::router())
+        .merge(routes::multistream::router())
         .merge(routes::assets::router());
     // Creator Edition mounts the plugin/tooling routes; the PVR build omits them.
     #[cfg(feature = "creator")]

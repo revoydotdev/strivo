@@ -37,7 +37,6 @@ creator = [
     "dep:strivo-chat-density",
     "dep:strivo-deadair",
     "dep:strivo-branding",
-    "dep:strivo-multistream",
     "dep:strivo-chat",
     "dep:strivo-loudness",
     "dep:strivo-structure",
@@ -78,7 +77,9 @@ strivo-broll = { path = "../broll", optional = true }
 strivo-chat-density = { path = "../chat-density", optional = true }
 strivo-deadair = { path = "../deadair", optional = true }
 strivo-branding = { path = "../branding", optional = true }
-strivo-multistream = { path = "../multistream", optional = true }
+# Multi-stream tiling is a core player mode (single + multi view), not a
+# Pro plugin — kept always-on so the watch player works in the PVR build.
+strivo-multistream = { path = "../multistream" }
 strivo-chat = { path = "../chat", optional = true }
 strivo-loudness = { path = "../loudness", optional = true }
 strivo-structure = { path = "../structure", optional = true }

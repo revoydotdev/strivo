@@ -419,3 +419,4 @@ to its own tick: it may edit `src/licence/client.rs` (non-disjoint with T4) and 
 full tick now that T4 has landed. **M1 remaining: 1** (clippy-creator).
 
 - 2026-07-20T03:42:04Z — integrated `concern/signal-migration` into `integration` at `02f4c38`
+- 2026-07-20T04:33:39Z — integrated `concern/extractor-events` into `integration` at `8fbdfa4`

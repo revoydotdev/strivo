@@ -17,3 +17,10 @@
 {"commit":"02f4c38","concern":"insights-migrate","milestone":"M2","todo":"M2.P1.S2.T1","ts":"2026-07-19T23:43:36-0400","type":"done","verified_by":{"cmd":"bash -c \"cargo test --workspace --features creator insights_via_signal_store && ! git grep -qn \\\"crunchr.db\\\" -- crates/strivo-plugins/src/insights\"","exit":0}}
 {"commit":"02f4c38","concern":"webui-signals","milestone":"M2","todo":"M2.P1.S2.T3","ts":"2026-07-19T23:43:36-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator insights_via_signal_store","exit":0}}
 {"commit":"02f4c38","concern":"gate-m2g4","milestone":"M2","todo":"M2.P9.S1.T1","ts":"2026-07-19T23:44:10-0400","type":"done","verified_by":{"cmd":"bash -c 'cargo test --workspace --features creator && cargo clippy --workspace --features creator --all-targets -- -D warnings'","exit":0}}
+{"commit":"","concern":"","milestone":"M3","todo":"M3.P1.S1.T1","ts":"2026-07-20T00:00:11-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator corpus_hydrate","exit":0}}
+{"commit":"","concern":"","milestone":"M3","todo":"M3.P2.S1.T1","ts":"2026-07-20T00:00:11-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator extractor_contract","exit":0}}
+{"milestone":"M3","reason":"vacuous self-heal: cargo filter corpus_hydrate matched 0 tests (no such test exists); feature unimplemented","todo":"M3.P1.S1.T1","ts":"2026-07-20T00:00:41-0400","type":"kill"}
+{"milestone":"M3","reason":"vacuous self-heal: cargo filter extractor_contract matched 0 tests (no such test exists); feature unimplemented","todo":"M3.P2.S1.T1","ts":"2026-07-20T00:00:41-0400","type":"kill"}
+{"concern":"corpus-service","milestone":"M3","todo":"M3.P1.S1.T1","ts":"2026-07-20T00:03:10-0400","type":"claimed"}
+{"concern":"extractor-contract","milestone":"M3","todo":"M3.P2.S1.T1","ts":"2026-07-20T00:03:10-0400","type":"claimed"}
+{"commit":"0ff019b","concern":"extractor-contract","milestone":"M3","todo":"M3.P2.S1.T1","ts":"2026-07-20T00:11:20-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --features creator extractor_contract","exit":0}}

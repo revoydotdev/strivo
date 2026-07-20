@@ -23,6 +23,8 @@ pub mod config;
 pub mod daemon;
 pub mod edl;
 pub mod events;
+#[cfg(feature = "creator")]
+pub mod extraction;
 pub mod intents;
 pub mod ipc;
 pub mod licence;

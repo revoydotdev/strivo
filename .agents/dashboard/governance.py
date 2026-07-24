@@ -44,6 +44,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent  # dashboard -> .agents -> 
 GOV = ROOT / ".agents" / "governance"
 FEED = GOV / "feed.jsonl"
 DIRECTIVES = GOV / "directives.json"
+LEARNINGS = ROOT / ".agents" / "learnings.jsonl"  # accumulated per-project gotchas (ADR-0024)
 
 SAFE_KEYS = {"paused", "focus_milestone", "priority_note", "weights", "infra_gates", "budget"}
 RISKY_KEYS = {"force_phase", "force_milestone"}
@@ -144,6 +145,42 @@ def resolve_a2a(request_id, frm, text, **extra):
     """Close the loop on a pending request — same-tick respondent answer, or an
     operator reply relayed back in by request_id (the OpenClaw relay's job)."""
     return post(frm, text, kind="a2a-resolved", request_id=request_id, **extra)
+
+
+# ------------------------------------------------------------- learnings (ADR-0024)
+def add_learning(text, milestone="", todo_id="", tags=""):
+    """Append one distilled gotcha to the per-project learnings store — 'what bit us
+    and why', so a future tick's worker brief can carry it forward instead of the swarm
+    rediscovering the same trap. Absorbed from revoy's `gotchas` loop, kept lightweight:
+    a git-tracked jsonl folded into briefs, not a governance framework. No-op on empty."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    ev = {"ts": _ts(), "text": text, "milestone": milestone, "todo_id": todo_id, "tags": tags}
+    LEARNINGS.parent.mkdir(parents=True, exist_ok=True)
+    with LEARNINGS.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(ev, separators=(",", ":"), sort_keys=True) + "\n")
+    return ev
+
+
+def get_learnings(milestone=None, n=None):
+    """Distilled gotchas, newest last. Filter to a milestone when briefing a worker on it
+    (a milestone-scoped learning is most relevant); omit for the whole store."""
+    if not LEARNINGS.exists():
+        return []
+    out = []
+    for line in LEARNINGS.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if milestone and e.get("milestone") not in (milestone, ""):
+            continue
+        out.append(e)
+    return out[-n:] if n else out
 
 
 # ------------------------------------------------------------- directives
@@ -249,6 +286,14 @@ def main():
     ares.add_argument("--from", dest="frm", required=True)
     ares.add_argument("--text", required=True)
 
+    ln = sub.add_parser("learnings")
+    ln.add_argument("action", choices=["add", "get"])
+    ln.add_argument("--text", default="")
+    ln.add_argument("--milestone", default="")
+    ln.add_argument("--todo", dest="todo_id", default="")
+    ln.add_argument("--tags", default="")
+    ln.add_argument("--n", type=int, default=None)
+
     a = p.parse_args()
     if a.cmd == "feed":
         for e in read_feed(a.n):
@@ -296,6 +341,16 @@ def main():
     elif a.cmd == "a2a-resolve":
         ev = resolve_a2a(a.request_id, a.frm, a.text)
         print(f"resolved {a.request_id}: {ev['text']}")
+    elif a.cmd == "learnings":
+        if a.action == "add":
+            ev = add_learning(a.text, a.milestone, a.todo_id, a.tags)
+            print(f"learned: {ev['text']}" if ev else "(empty — nothing added)")
+        else:
+            ls = get_learnings(a.milestone or None, a.n)
+            print(f"{len(ls)} learning(s)" + (f" for {a.milestone}" if a.milestone else ""))
+            for e in ls:
+                m = f" [{e['milestone']}]" if e.get("milestone") else ""
+                print(f"  {e.get('ts','')}{m} {e.get('text','')}")
 
 
 if __name__ == "__main__":

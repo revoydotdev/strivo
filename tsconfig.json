@@ -26,8 +26,9 @@
   "include": [
     "next-env.d.ts",
     ".next/types/**/*.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "next.config.ts",
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [

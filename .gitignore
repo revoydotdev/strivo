@@ -1,8 +1,11 @@
 # Build
 /target
+/.next/
+/node_modules/
+/.open-next/
+/*.tsbuildinfo
 /website/.next/
 /website/node_modules/
-/website/.open-next/
 /website/*.tsbuildinfo
 Cargo.lock.backup
 **/*.rs.bk

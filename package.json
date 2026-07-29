@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && cp -R out dist",
+    "build": "next build && cp -R out dist && cp -R server dist/server && cp -R .openai dist/.openai",
     "start": "next start",
     "lint": "next lint"
   },

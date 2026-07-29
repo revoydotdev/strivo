@@ -64,3 +64,16 @@ jobs:
 
       - name: test (Creator Edition)
         run: cargo test --release -p strivo-web -p strivo-bin --features creator --all-targets --locked
+
+      - name: Licence backend typecheck
+        working-directory: licence-backend
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
+
+      - name: Web UI browser smoke tests
+        working-directory: crates/strivo-web/e2e
+        run: |
+          npm ci
+          npx playwright install chromium
+          npm test

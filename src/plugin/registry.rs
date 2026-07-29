@@ -146,6 +146,7 @@ impl PluginRegistry {
     pub fn init_all(&mut self, config: &AppConfig) -> anyhow::Result<()> {
         let base_data = AppConfig::data_dir();
         let base_cache = AppConfig::cache_dir();
+        let mut failures = Vec::new();
 
         for (idx, plugin) in self.plugins.iter_mut().enumerate() {
             let ctx = PluginContext {
@@ -165,11 +166,19 @@ impl PluginRegistry {
                         *s = PluginStatus::Error(msg.clone());
                     }
                     tracing::error!(plugin = %plugin.name(), error = %msg, "plugin init failed");
-                    return Err(e);
+                    failures.push(format!("{}: {msg}", plugin.name()));
                 }
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "{} plugin(s) failed to initialize: {}",
+                failures.len(),
+                failures.join("; ")
+            )
+        }
     }
 
     pub fn shutdown_all(&mut self) {

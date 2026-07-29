@@ -33,19 +33,21 @@ async fn main() -> Result<()> {
 /// for users; advanced setups still split daemon and webui across
 /// processes with `strivo daemon` + `strivo serve` as before.
 async fn run_default_webui(args: cli::Args) -> Result<()> {
-    let _ = config::AppConfig::load(args.config.as_deref()).ok();
+    config::AppConfig::load(args.config.as_deref()).context("load config")?;
+    let config_path = args.config.clone();
 
     if !ipc::is_daemon_running() {
         // Same plugin host bring-up as `Command::Daemon`. Spawned as a
         // task so the webui can run alongside in the same process; the
         // task outlives the await below and only exits when the daemon
         // shuts down.
+        let daemon_config_path = config_path.clone();
         tokio::spawn(async move {
             #[allow(unused_mut)]
             let mut host = strivo_core::daemon::DaemonPluginHost::new();
             #[cfg(feature = "creator")]
             register_first_party_plugins(&mut host.registry);
-            if let Err(e) = daemon::run_with_plugins(host).await {
+            if let Err(e) = daemon::run_with_plugins_at(host, daemon_config_path.as_deref()).await {
                 tracing::error!("daemon exited: {e}");
             }
         });
@@ -61,7 +63,7 @@ async fn run_default_webui(args: cli::Args) -> Result<()> {
         }
     }
 
-    handle_serve("127.0.0.1:8181", None).await
+    handle_serve("127.0.0.1:8181", None, config_path.as_deref()).await
 }
 
 async fn handle_command(cmd: &Command, config_path: Option<&std::path::Path>) -> Result<()> {
@@ -74,16 +76,18 @@ async fn handle_command(cmd: &Command, config_path: Option<&std::path::Path>) ->
             let mut host = strivo_core::daemon::DaemonPluginHost::new();
             #[cfg(feature = "creator")]
             register_first_party_plugins(&mut host.registry);
-            daemon::run_with_plugins(host).await
+            daemon::run_with_plugins_at(host, config_path).await
         }
-        Command::Enable => handle_enable().await,
+        Command::Enable => handle_enable(config_path).await,
         Command::Disable => handle_disable().await,
         Command::Status => handle_status(),
         Command::Config { action } => handle_config_command(action, config_path),
         Command::Log { action } => handle_log_command(action).await,
         Command::Search { query } => handle_search(query, config_path),
         Command::Doctor => handle_doctor().await,
-        Command::Serve { bind, api_key } => handle_serve(bind, api_key.as_deref()).await,
+        Command::Serve { bind, api_key } => {
+            handle_serve(bind, api_key.as_deref(), config_path).await
+        }
         Command::Chapter { file, every } => handle_chapter(file, *every),
         Command::Import { source } => handle_import(source, config_path),
         Command::Merge { output, sources } => handle_merge(output, sources),
@@ -460,14 +464,18 @@ fn handle_chapter(file: &std::path::Path, every: u64) -> Result<()> {
     Ok(())
 }
 
-async fn handle_serve(bind: &str, api_key: Option<&str>) -> Result<()> {
+async fn handle_serve(
+    bind: &str,
+    api_key: Option<&str>,
+    config_path: Option<&std::path::Path>,
+) -> Result<()> {
     let addr: std::net::SocketAddr = bind
         .parse()
         .with_context(|| format!("invalid --bind {bind}"))?;
 
     // Key precedence: explicit --api-key > config.toml `[web] api_key`
     // > freshly generated + saved.
-    let mut cfg = config::AppConfig::load(None).context("load config")?;
+    let mut cfg = config::AppConfig::load(config_path).context("load config")?;
     let api_key = if let Some(k) = api_key {
         strivo_web::auth::ApiKey(k.to_string())
     } else if let Some(k) = cfg.web.api_key.clone() {
@@ -475,7 +483,7 @@ async fn handle_serve(bind: &str, api_key: Option<&str>) -> Result<()> {
     } else {
         let generated = strivo_web::auth::ApiKey::generate();
         cfg.web.api_key = Some(generated.as_str().to_string());
-        if let Err(e) = cfg.save(None) {
+        if let Err(e) = cfg.save(config_path) {
             tracing::warn!("could not persist [web] api_key to config.toml: {e}");
         }
         generated
@@ -489,6 +497,7 @@ async fn handle_serve(bind: &str, api_key: Option<&str>) -> Result<()> {
     strivo_web::serve(strivo_web::ServeConfig {
         bind: addr,
         api_key,
+        config_path: config_path.map(std::path::Path::to_path_buf),
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))
@@ -641,8 +650,11 @@ fn handle_status() -> Result<()> {
     Ok(())
 }
 
-async fn handle_enable() -> Result<()> {
+async fn handle_enable(config_path: Option<&std::path::Path>) -> Result<()> {
     let exe = std::env::current_exe()?;
+    let config_arg = config_path
+        .map(|path| format!(" --config {}", systemd_quote(path.as_os_str())))
+        .unwrap_or_default();
     let unit_content = format!(
         "[Unit]\n\
          Description=StriVo Live Stream PVR Daemon\n\
@@ -650,13 +662,14 @@ async fn handle_enable() -> Result<()> {
          \n\
          [Service]\n\
          Type=simple\n\
-         ExecStart={} daemon\n\
+         ExecStart={}{} daemon\n\
          Restart=on-failure\n\
          RestartSec=5\n\
          \n\
          [Install]\n\
          WantedBy=default.target\n",
-        exe.display()
+        systemd_quote(exe.as_os_str()),
+        config_arg,
     );
 
     let systemd_dir = dirs_home().join(".config/systemd/user");
@@ -681,6 +694,11 @@ async fn handle_enable() -> Result<()> {
 
     println!("StriVo daemon enabled and started");
     Ok(())
+}
+
+fn systemd_quote(value: &std::ffi::OsStr) -> String {
+    let value = value.to_string_lossy();
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 async fn handle_disable() -> Result<()> {
@@ -1207,4 +1225,21 @@ fn register_first_party_plugins(registry: &mut plugin::registry::PluginRegistry)
     registry.register(Box::new(strivo_plugins::insights::InsightsPlugin::new()));
     registry.register(Box::new(strivo_plugins::editor::EditorPlugin::new()));
     registry.register(Box::new(strivo_plugins::viewguard::ViewguardPlugin::new()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn systemd_quote_preserves_custom_config_paths() {
+        let quoted = systemd_quote(std::ffi::OsStr::new("/tmp/Strivo configs/custom.toml"));
+        assert_eq!(quoted, "\"/tmp/Strivo configs/custom.toml\"");
+    }
+
+    #[test]
+    fn systemd_quote_escapes_quotes_and_backslashes() {
+        let quoted = systemd_quote(std::ffi::OsStr::new("/tmp/a\\b\"c"));
+        assert_eq!(quoted, "\"/tmp/a\\\\b\\\"c\"");
+    }
 }

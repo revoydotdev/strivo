@@ -71,7 +71,7 @@ fn bound_and_active(lic: &Licence) -> bool {
     // Refuse it. This is a soft guard — the activation server is the
     // hard one, signing tokens per machine_hash — but it stops the
     // accidental copy-the-file case immediately.
-    lic.machine_hash == hashed_machine_id()
+    lic.machine_hash == hashed_machine_id() && super::verify::verify_token(&lic.token).is_ok()
 }
 
 #[cfg(test)]

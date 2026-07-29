@@ -230,6 +230,20 @@ const server = createServer(async (req, res) => {
       });
     if (p === "/gantt") return json(res, 200, { items: [] });
     if (p === "/schedule") return json(res, 200, { schedule: SCHEDULE });
+    if (p === "/monitor")
+      return json(res, 200, {
+        auto_record: [
+          {
+            key: "Twitch:twitch:offlinechan",
+            channel_id: "twitch:offlinechan",
+            channel_name: "Alpha",
+            platform: "Twitch",
+            format: "",
+            profile: "",
+          },
+        ],
+        auto_download: [],
+      });
     if (p === "/settings")
       return json(res, 200, {
         twitch_configured: true,
@@ -239,6 +253,12 @@ const server = createServer(async (req, res) => {
         auto_record_channels: [],
         poll_interval_secs: 60,
         schedule: [],
+        creator_enabled: true,
+        capture_profiles: [],
+        monitor_limits: {
+          max_concurrent_recordings: 3,
+          disk_budget_reserved_gb: 20,
+        },
       });
 
     // ── Plugin data surface (read-only) ──────────────────────────────

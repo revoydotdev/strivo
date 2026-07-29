@@ -2,7 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{middleware, Router};
+use axum::http::{header, HeaderValue, Request};
+use axum::{middleware, response::Response, Router};
 use tower_http::trace::TraceLayer;
 
 use crate::auth::ApiKey;
@@ -14,6 +15,10 @@ use crate::routes;
 pub struct AppState {
     pub ipc: Arc<IpcClient>,
     pub api_key: ApiKey,
+    /// Configuration selected at startup; shared by every HTTP handler.
+    pub config_path: Option<Arc<std::path::PathBuf>>,
+    /// Serialize read-modify-write configuration updates in this web process.
+    pub config_write_lock: Arc<tokio::sync::Mutex<()>>,
     /// HMAC secret for browser-session cookies (W3). Loaded from
     /// `WebConfig.session_secret`, or generated + persisted at startup
     /// (see `serve`), so it always exists.
@@ -22,10 +27,17 @@ pub struct AppState {
     pub login_limiter: crate::ratelimit::LoginLimiter,
 }
 
+impl AppState {
+    pub fn config_path(&self) -> Option<&std::path::Path> {
+        self.config_path.as_deref().map(|path| path.as_path())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
     pub bind: SocketAddr,
     pub api_key: ApiKey,
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 impl Default for ServeConfig {
@@ -33,6 +45,7 @@ impl Default for ServeConfig {
         Self {
             bind: "127.0.0.1:8181".parse().expect("hardcoded addr parses"),
             api_key: ApiKey::generate(),
+            config_path: None,
         }
     }
 }
@@ -44,7 +57,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     // from config, else generate + persist now (don't defer to /login —
     // that left AppState's copy out of sync with the signed cookie).
     let session_secret = {
-        let mut cfg_file = strivo_core::config::AppConfig::load(None).ok();
+        let mut cfg_file = strivo_core::config::AppConfig::load(cfg.config_path.as_deref()).ok();
         let existing = cfg_file.as_ref().and_then(|c| c.web.session_secret.clone());
         match existing {
             Some(s) => s,
@@ -52,7 +65,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
                 let s = crate::auth::generate_session_secret();
                 if let Some(ref mut c) = cfg_file {
                     c.web.session_secret = Some(s.clone());
-                    if let Err(e) = c.save(None) {
+                    if let Err(e) = c.save(cfg.config_path.as_deref()) {
                         tracing::warn!("could not persist [web].session_secret: {e}");
                     }
                 }
@@ -63,6 +76,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     let state = AppState {
         ipc,
         api_key: cfg.api_key,
+        config_path: cfg.config_path.map(Arc::new),
+        config_write_lock: Arc::new(tokio::sync::Mutex::new(())),
         session_secret,
         login_limiter: crate::ratelimit::LoginLimiter::new(),
     };
@@ -96,6 +111,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     // It exposes only a verification echo and a poll-trigger, no data.
     let app = guarded
         .merge(routes::websub::router())
+        .layer(middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -111,4 +127,26 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+async fn security_headers(request: Request<axum::body::Body>, next: middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("SAMEORIGIN"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    response
 }

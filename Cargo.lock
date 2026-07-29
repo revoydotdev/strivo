@@ -3179,6 +3179,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "chrono",
  "cron",
  "directories",
@@ -3190,6 +3191,7 @@ dependencies = [
  "libloading",
  "notify-rust",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

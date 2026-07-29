@@ -194,17 +194,17 @@ template (highlight/retention rollups + publish-ready clips).
 
 | Item | State | Disposition |
 |---|---|---|
-| SPA not edition-aware (creator UI in PVR build) | 🟡 | **PVR / Web UI** — top PVR priority |
+| SPA edition awareness (creator UI hidden in PVR build) | ✅ | `creator_enabled` boot probe gates routes, nav, and actions |
 | Daemon doesn't drive the pipeline executor | 🟡 | **CE-P3** |
 | Per-plugin SQLite fragmentation; `insights` hardcoded `crunchr.db` reach-in | 🟡 | **CE-P1** |
 | `viewguard` `data_dir` double-nest (web probes two paths) | 🟡 | **CE-P1** |
 | Corpus assembled client-side, not server-side | 🟡 | **CE-P2** |
-| Licence JWT ES256 signature **not verified** (`TODO(licence-verify)`, `routes/licence.rs:239`) | 🟡 | Security — verify before any paid Creator launch |
+| Licence JWT ES256 signature and claims verified | ✅ | ES256 signature, issuer, machine, expiry, licence expiry, and tier fail closed |
 | `crunchr::queue_recording` headless stub; auto-transcribe relies on the webui RPC verb — confirm it enqueues end-to-end | 🟡 | **CE-P3/P4** |
 | ffprobe results uncached — re-analyses on every `/probe` | ⬜ | Perf; cache keyed by path+mtime |
 | Dynamic cdylib plugin loading coded but never triggered; no hot-reload | ⬜ | Deferred until third-party plugins are real |
 | `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |
-| Creator-crate clippy warnings (44, across tool crates) | ⬜ | Cleanup pass within Creator Edition scope |
+| Creator Edition clippy gate | ✅ | CI runs `-D warnings` with the Creator feature |
 
 ### Adversarial-review wounds (from the 2026-05-29 review, folded in)
 1. **Identity collapse** — resolved: the PVR is now the product, the engine is
@@ -253,11 +253,6 @@ to the next phase when these land. Keep in sync with the tables above.
 <!-- revoy:begin -->
 ```toml
 phase = "post-near-term hardening (v0.5.x)"
-
-[[todo]]
-line = "Verify Licence JWT ES256 signature (TODO(licence-verify) in routes/licence.rs) before any Creator Edition commercial launch"
-difficulty = 30
-priority = "HIGH"
 
 [[todo]]
 line = "Cache ffprobe results keyed by path+mtime to eliminate re-analysis on every /probe call"

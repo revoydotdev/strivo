@@ -309,7 +309,8 @@ async fn schedule_add(
     if <cron::Schedule as std::str::FromStr>::from_str(&cron_expr).is_err() {
         return crate::problem::Problem::bad_request("invalid cron expression").into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -339,7 +340,8 @@ async fn schedule_delete(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -358,7 +360,7 @@ async fn schedule(headers: HeaderMap, State(state): State<AppState>) -> impl Int
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    match strivo_core::config::AppConfig::load(None) {
+    match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(cfg) => {
             // Annotate each entry with its next fire time (RFC3339) so the
             // webui "Upcoming" row can sort + display it. Mirrors the cron
@@ -394,7 +396,7 @@ async fn settings(headers: HeaderMap, State(state): State<AppState>) -> impl Int
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    match strivo_core::config::AppConfig::load(None) {
+    match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(cfg) => {
             // Strip secrets — never expose client_secret / cookies_path.
             // We surface only the existence (`configured: bool`) of each
@@ -447,7 +449,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let db_ok = strivo_core::recording::persist::PersistDb::open(&db_path).is_ok();
 
     // Free disk on the recording filesystem.
-    let (disk, disk_ok) = match strivo_core::config::AppConfig::load(None) {
+    let (disk, disk_ok) = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(cfg) => {
             let (total, avail) = statvfs_bytes(&cfg.recording_dir).unwrap_or((0, 0));
             (
@@ -565,7 +567,7 @@ async fn health_checks(headers: HeaderMap, State(state): State<AppState>) -> imp
     }
 
     // Storage — free space on the recording filesystem.
-    let cfg = strivo_core::config::AppConfig::load(None);
+    let cfg = strivo_core::config::AppConfig::load(state.config_path());
     match &cfg {
         Ok(cfg) => {
             let (total, avail) = statvfs_bytes(&cfg.recording_dir).unwrap_or((0, 0));
@@ -639,7 +641,7 @@ async fn storage(headers: HeaderMap, State(state): State<AppState>) -> impl Into
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let cfg = match strivo_core::config::AppConfig::load(None) {
+    let cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => {
             return crate::problem::Problem::internal(e.to_string()).into_response();
@@ -1114,7 +1116,7 @@ async fn set_poll_interval(
     }
     let secs = body.secs.max(15);
     // Persist to config.toml so the change survives a restart.
-    match strivo_core::config::AppConfig::load(None) {
+    match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(mut cfg) => {
             cfg.poll_interval_secs = secs;
             let path = cfg.config_path.clone();
@@ -1163,7 +1165,8 @@ async fn update_setting(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -1345,7 +1348,8 @@ async fn set_platform(
         return crate::problem::Problem::bad_request("client_id and client_secret are required")
             .into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -1504,7 +1508,10 @@ async fn backup_create(headers: HeaderMap, State(state): State<AppState>) -> imp
         return crate::problem::Problem::internal(format!("create backup dir: {e}"))
             .into_response();
     }
-    let cfg = strivo_core::config::AppConfig::config_path();
+    let cfg = state
+        .config_path()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(strivo_core::config::AppConfig::config_path);
     let db = strivo_core::config::AppConfig::data_dir().join("jobs.db");
     let mut copied = Vec::new();
     if cfg.exists() {
@@ -1634,7 +1641,11 @@ async fn backup_restore(
     let mut restored = Vec::new();
     let cfg_src = src.join("config.toml");
     if cfg_src.exists() {
-        if let Err(e) = std::fs::copy(&cfg_src, strivo_core::config::AppConfig::config_path()) {
+        let cfg_dest = state
+            .config_path()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(strivo_core::config::AppConfig::config_path);
+        if let Err(e) = std::fs::copy(&cfg_src, cfg_dest) {
             return crate::problem::Problem::internal(format!("restore config: {e}"))
                 .into_response();
         }
@@ -1806,7 +1817,8 @@ async fn put_auto_record(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => {
             return crate::problem::Problem::internal(e.to_string()).into_response();
@@ -1872,7 +1884,7 @@ async fn put_auto_record(
         }
         _ => {}
     }
-    if let Err(e) = cfg.save(None) {
+    if let Err(e) = cfg.save(state.config_path()) {
         return crate::problem::Problem::internal(e.to_string()).into_response();
     }
     let _ = state.ipc.send_command(ClientMessage::PollNow).await;
@@ -1911,7 +1923,8 @@ async fn put_archiver_tandem(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -1950,7 +1963,8 @@ async fn put_archiver_playlists(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -2013,7 +2027,8 @@ async fn create_capture_profile(
         .and_then(|v| v.as_u64())
         .map(|n| n as u32);
 
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -2031,7 +2046,7 @@ async fn create_capture_profile(
             transcript,
             cutoff_episodes,
         });
-    if let Err(e) = cfg.save(None) {
+    if let Err(e) = cfg.save(state.config_path()) {
         return crate::problem::Problem::internal(e.to_string()).into_response();
     }
     (
@@ -2051,7 +2066,8 @@ async fn update_capture_profile(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -2088,7 +2104,7 @@ async fn update_capture_profile(
             v.as_u64().map(|n| n as u32)
         };
     }
-    if let Err(e) = cfg.save(None) {
+    if let Err(e) = cfg.save(state.config_path()) {
         return crate::problem::Problem::internal(e.to_string()).into_response();
     }
     Json(json!({ "ok": true, "name": name })).into_response()
@@ -2103,7 +2119,8 @@ async fn delete_capture_profile(
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -2112,7 +2129,7 @@ async fn delete_capture_profile(
     if cfg.capture_profiles.len() == before {
         return crate::problem::Problem::not_found("capture profile not found").into_response();
     }
-    if let Err(e) = cfg.save(None) {
+    if let Err(e) = cfg.save(state.config_path()) {
         return crate::problem::Problem::internal(e.to_string()).into_response();
     }
     Json(json!({ "ok": true })).into_response()
@@ -2126,7 +2143,7 @@ async fn channels_export(headers: HeaderMap, State(state): State<AppState>) -> i
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let cfg = match strivo_core::config::AppConfig::load(None) {
+    let cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -2176,7 +2193,8 @@ async fn channels_import(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let mut cfg = match strivo_core::config::AppConfig::load(None) {
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
@@ -2214,7 +2232,7 @@ async fn channels_import(
         }
     }
 
-    if let Err(e) = cfg.save(None) {
+    if let Err(e) = cfg.save(state.config_path()) {
         return crate::problem::Problem::internal(e.to_string()).into_response();
     }
     (
@@ -2237,7 +2255,7 @@ async fn monitor_state(headers: HeaderMap, State(state): State<AppState>) -> imp
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
-    let cfg = match strivo_core::config::AppConfig::load(None) {
+    let cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c,
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };

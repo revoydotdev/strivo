@@ -4,6 +4,12 @@ import { test, expect } from "@playwright/test";
 // Updated for the TUI-style 3-pane redesign: channel-list left rail,
 // channel-detail center, recordings dashboard, no Activity surface.
 
+test.beforeEach(async ({ page }) => {
+  // The welcome tour has its own focused coverage. Keep unrelated journey
+  // tests deterministic and free of the intentional modal overlay.
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+});
+
 test("login page renders and accepts a key", async ({ page }) => {
   await page.goto("/app#/login");
   await expect(page.locator("#login-form")).toBeVisible();
@@ -16,8 +22,8 @@ test("login page renders and accepts a key", async ({ page }) => {
 test("left rail lists channels, live first", async ({ page }) => {
   await page.goto("/app#/library");
   await expect(page.locator("#channel-list")).toBeVisible();
-  await expect(page.getByText("Live Channel")).toBeVisible();
-  await expect(page.getByText("Offline Channel")).toBeVisible();
+  await expect(page.locator("#channel-list .ch-row", { hasText: "Live Channel" })).toBeVisible();
+  await expect(page.locator("#channel-list .ch-row", { hasText: "Offline Channel" })).toBeVisible();
   // LIVE section header appears for the live channel.
   await expect(page.locator(".ch-section-title", { hasText: "LIVE" })).toBeVisible();
 });
@@ -95,8 +101,11 @@ test("recordings density toggle + multi-select mass bar", async ({ page }) => {
 test("settings page renders real config sections", async ({ page }) => {
   await page.goto("/app#/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Platforms" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Recording" })).toBeVisible();
+  await expect(page.locator('.stg-rail a[href="#/settings/platforms"]')).toBeVisible();
+  await expect(page.locator('.stg-rail a[href="#/settings/recording"]')).toBeVisible();
+  await page.locator('.stg-rail a[href="#/settings/platforms"]').click();
+  await expect(page.getByRole("heading", { name: "Twitch" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "YouTube" })).toBeVisible();
 });
 
 test("system page renders health + tasks", async ({ page }) => {
@@ -125,11 +134,13 @@ test("logs page renders with level selector and lines", async ({ page }) => {
   await expect(page.locator("#logs-output")).toContainText("StriVo daemon starting");
 });
 
-test("schedule page renders the upcoming agenda", async ({ page }) => {
+test("monitor page renders capture controls and calendar", async ({ page }) => {
   await page.goto("/app#/schedule");
-  await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
-  await expect(page.locator(".cfg-grid")).toContainText("Alpha");
-  await expect(page.locator(".agenda-time").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Monitor" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Capture limits" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Record when live" })).toBeVisible();
+  await expect(page.locator(".cal-strip")).toBeVisible();
+  await expect(page.locator(".task-row", { hasText: "Alpha" }).first()).toBeVisible();
 });
 
 test("history page renders durable jobs from the DB", async ({ page }) => {
@@ -192,7 +203,7 @@ test("crunchr view lists recordings, searches, and opens a transcript", async ({
     .click();
   await expect(page).toHaveURL(/#\/plugins\/crunchr\/rec\//);
   await expect(page.getByRole("heading", { name: "Analysis" })).toBeVisible();
-  await expect(page.locator(".pg-seg").first()).toContainText("welcome back");
+  await expect(page.locator(".cr-line").first()).toContainText("welcome back");
   await expect(page.locator("#retranscribe")).toBeVisible();
 });
 
@@ -261,23 +272,17 @@ test("recordings: ⓘ Info opens modal with stats + plugin actions; Esc closes",
   await expect(modal).toHaveCount(0);
 });
 
-test("recordings: ▶ Play opens the in-app player with controls", async ({ page }) => {
+test("recordings: ▶ Play opens the in-app watch player", async ({ page }) => {
   await page.goto("/app#/recordings");
   const row = page.locator("tr[data-rec-row]", { hasText: "Zebra stream" });
   await row.locator("[data-action=rec-play]").click();
-  const modal = page.locator("#rec-player-modal");
-  await expect(modal).toBeVisible();
-  await expect(modal.locator("video")).toBeVisible();
-  await expect(modal.locator("#rec-pc-play")).toBeVisible();
-  await expect(modal.locator("#rec-pc-seek")).toBeVisible();
-  await expect(modal.locator("#rec-pc-speed-sel")).toBeVisible();
-  await expect(modal.locator("#rec-pc-fs")).toBeVisible();
-  await expect(modal.locator("#rec-pc-help")).toBeVisible();
-  // Keyboard help opens via "?".
-  await page.keyboard.press("?");
-  await expect(modal.locator("#rec-player-help")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/watch/);
+  const tile = page.locator(".ms-leaf-rec").first();
+  await expect(tile).toBeVisible();
+  await expect(tile.locator("video.ms-video")).toBeVisible();
+  await expect(tile.locator(".ms-solo")).toBeVisible();
+  await expect(tile.locator(".ms-fs")).toBeVisible();
+  await expect(tile.locator(".ms-remove")).toBeVisible();
 });
 
 test("last-live label uses Xh/Xd precision and renders for YouTube too", async ({ page }) => {

@@ -6,8 +6,7 @@
 //! crate. The web crate's route handlers and the daemon's background
 //! task both call into these functions.
 //!
-//! No JWT verification yet — see `TODO(licence-verify)` in
-//! `routes::licence`.
+//! Every returned JWT is verified before it reaches the local cache.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -19,8 +18,6 @@ use super::machine_id::hashed_machine_id;
 struct BackendTokenResponse {
     token: String,
     tier: String,
-    #[serde(default)]
-    expires_at: Option<String>,
 }
 
 /// Read the activation backend URL from `STRIVO_LICENCE_URL`. Returns
@@ -80,7 +77,12 @@ pub async fn refresh_now() -> Result<Licence> {
     }
     let parsed: BackendTokenResponse =
         serde_json::from_str(&raw).context("parse backend response")?;
-    let tier = match parsed.tier.as_str() {
+    let claims = super::verify::verify_token(&parsed.token)
+        .context("licence backend returned an unverifiable token")?;
+    if claims.tier != parsed.tier {
+        anyhow::bail!("licence backend tier does not match signed claims");
+    }
+    let tier = match claims.tier.as_str() {
         "pro" => Tier::Pro,
         "trial" => Tier::Trial,
         _ => cache.tier,
@@ -88,7 +90,7 @@ pub async fn refresh_now() -> Result<Licence> {
     let lic = Licence {
         tier,
         machine_hash: hashed_machine_id(),
-        expires_at: parsed.expires_at,
+        expires_at: claims.licence_exp,
         last_refreshed: chrono::Utc::now().to_rfc3339(),
         token: parsed.token,
         licence_key: cache.licence_key.clone(),

@@ -12,10 +12,8 @@
 //! account sees a clean "backend not configured" rather than a
 //! confusing network error.
 //!
-//! JWT signature verification is intentionally deferred: the cache is
-//! bound to `machine_hash` (so a lifted file fails immediately), and
-//! the server is consulted every 72h refresh anyway. Adding full
-//! ES256 verify is a hardening task tracked in TODO(licence-verify).
+//! Tokens are verified as ES256 JWTs before persistence. Verification
+//! covers issuer, machine binding, expiry, licence expiry, and signed tier.
 
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -89,9 +87,6 @@ struct ActivateRequest {
 struct BackendTokenResponse {
     token: String,
     tier: String,
-    /// Set only for trials.
-    #[serde(default)]
-    expires_at: Option<String>,
 }
 
 async fn activate(
@@ -131,38 +126,9 @@ async fn trial(State(_state): State<AppState>) -> impl IntoResponse {
         };
         return persist_and_reply(resp, Tier::Trial, String::new()).await;
     }
-    // No backend configured — fall back to a self-issued local trial
-    // so free clones / unmanaged installs can still kick the tyres.
-    // 72h validity matches the backend default; machine_hash binding
-    // keeps the trial single-machine. Once-only per machine: if a
-    // local trial already exists we refuse to mint another.
-    if let Ok(Some(existing)) = LicenceCache::load() {
-        if matches!(existing.tier, Tier::Trial) {
-            return crate::problem::Problem::bad_request(
-                "trial already issued for this machine — wait for expiry or activate a key",
-            )
-            .into_response();
-        }
-    }
-    let expires = (chrono::Utc::now() + chrono::Duration::hours(72)).to_rfc3339();
-    let lic = Licence {
-        tier: Tier::Trial,
-        machine_hash: machine_id::hashed_machine_id(),
-        expires_at: Some(expires.clone()),
-        last_refreshed: chrono::Utc::now().to_rfc3339(),
-        token: format!("local-trial.{}", machine_id::hashed_machine_id()),
-        licence_key: String::new(),
-    };
-    if let Err(e) = LicenceCache::save(&lic) {
-        return crate::problem::Problem::internal(format!("save cache: {e}")).into_response();
-    }
-    Json(json!({
-        "ok": true,
-        "tier": "trial",
-        "expires_at": expires,
-        "local_trial": true,
-        "note": "STRIVO_LICENCE_URL unset — issued a local 72h trial. Run the Cloudflare Worker in licence-backend/ and set STRIVO_LICENCE_URL to enable hosted activation / Lemon Squeezy purchases.",
-    }))
+    crate::problem::Problem::unavailable(
+        "licence backend not configured; a server-issued token is required",
+    )
     .into_response()
 }
 
@@ -242,13 +208,25 @@ async fn persist_and_reply(
         "trial" => Tier::Trial,
         _ => fallback_tier,
     };
-    // TODO(licence-verify): verify JWT signature with embedded P-256
-    // public key before trusting the payload. Until then we rely on
-    // the machine_hash binding + the 72h forced-refresh window.
+    let claims = match strivo_core::licence::verify::verify_token(&parsed.token) {
+        Ok(claims) => claims,
+        Err(e) => {
+            return crate::problem::Problem::unavailable(format!(
+                "licence server returned an unverifiable token: {e}"
+            ))
+            .into_response()
+        }
+    };
+    if claims.tier != parsed.tier {
+        return crate::problem::Problem::unavailable(
+            "licence server tier does not match signed claims",
+        )
+        .into_response();
+    }
     let lic = Licence {
         tier,
         machine_hash: machine_id::hashed_machine_id(),
-        expires_at: parsed.expires_at.clone(),
+        expires_at: claims.licence_exp.clone(),
         last_refreshed: chrono::Utc::now().to_rfc3339(),
         token: parsed.token,
         licence_key,
@@ -259,7 +237,7 @@ async fn persist_and_reply(
     Json(json!({
         "ok": true,
         "tier": parsed.tier,
-        "expires_at": parsed.expires_at,
+        "expires_at": claims.licence_exp,
     }))
     .into_response()
 }

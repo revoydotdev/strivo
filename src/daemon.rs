@@ -183,10 +183,18 @@ impl Default for DaemonPluginHost {
 }
 
 pub async fn run() -> Result<()> {
-    run_with_plugins(DaemonPluginHost::new()).await
+    run_with_plugins_at(DaemonPluginHost::new(), None).await
 }
 
 pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
+    run_with_plugins_at(host, None).await
+}
+
+/// Run the daemon with the configuration selected by the process entrypoint.
+pub async fn run_with_plugins_at(
+    host: DaemonPluginHost,
+    config_path: Option<&std::path::Path>,
+) -> Result<()> {
     // Initialize logging
     let state_dir = AppConfig::state_dir();
     std::fs::create_dir_all(&state_dir)?;
@@ -233,7 +241,7 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
     crate::check_external_tools();
 
     // Load config
-    let config = AppConfig::load(None)?;
+    let config = AppConfig::load(config_path)?;
     tracing::info!("Config loaded");
     for w in config.config_warnings() {
         tracing::warn!("config: {w}");
@@ -256,7 +264,7 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "daemon: plugin host init failed; continuing without plugin features"
+                    "daemon: some plugins failed to initialize; healthy plugins remain available"
                 );
             }
         }
@@ -265,6 +273,9 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
     // PluginRpc over IPC can actually dispatch on_verb (it's idle after
     // init_all otherwise). tokio Mutex — dispatch is sync and brief.
     let registry = std::sync::Arc::new(tokio::sync::Mutex::new(host.registry));
+    let pipelines = std::sync::Arc::new(tokio::sync::Mutex::new(
+        crate::pipeline::PipelineRegistry::new(),
+    ));
 
     // Open the persistence db (jobs / catalog / crunchr_queue) and recover any
     // jobs that were marked running when the daemon last died. Recovery is
@@ -668,6 +679,7 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
 
                         let client_config = config.clone();
                         let client_registry = registry.clone();
+                        let client_pipelines = pipelines.clone();
                         let client_recordings = state.recordings.clone();
                         let client_event_tx = event_tx.clone();
                         let client_persist_db = persist_db.clone();
@@ -682,6 +694,7 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
                                 bulk_tx_ref,
                                 client_config,
                                 client_registry,
+                                client_pipelines,
                                 client_recordings,
                                 client_event_tx,
                                 poll_notify,
@@ -782,6 +795,7 @@ async fn handle_client(
     bulk_tx: Option<mpsc::UnboundedSender<crate::recording::bulk::BulkCommand>>,
     config: AppConfig,
     registry: Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
+    pipelines: Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
     recordings: HashMap<Uuid, RecordingJob>,
     event_tx: mpsc::UnboundedSender<DaemonEvent>,
     poll_notify: Option<Arc<tokio::sync::Notify>>,
@@ -1152,7 +1166,7 @@ async fn handle_client(
                     action_count = actions.len(),
                     "daemon: dispatched plugin verb"
                 );
-                process_daemon_plugin_actions(actions, &registry, &event_tx);
+                process_daemon_plugin_actions(actions, &registry, &pipelines, &event_tx);
             }
             ClientMessage::Unknown => {
                 // Forward-compatibility: a message variant added in a newer
@@ -1178,6 +1192,7 @@ async fn handle_client(
 fn process_daemon_plugin_actions(
     actions: Vec<crate::plugin::PluginAction>,
     registry: &Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
+    pipelines: &Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
     event_tx: &mpsc::UnboundedSender<DaemonEvent>,
 ) {
     use crate::plugin::PluginAction as PA;
@@ -1197,6 +1212,7 @@ fn process_daemon_plugin_actions(
                 future,
             } => {
                 let reg = registry.clone();
+                let pipes = pipelines.clone();
                 let etx = event_tx.clone();
                 tokio::spawn(async move {
                     let result = future.await;
@@ -1206,8 +1222,32 @@ fn process_daemon_plugin_actions(
                     };
                     // Recurse: the follow-up actions may spawn further
                     // stages (e.g. transcription pipeline steps).
-                    process_daemon_plugin_actions(next, &reg, &etx);
+                    process_daemon_plugin_actions(next, &reg, &pipes, &etx);
                 });
+            }
+            PA::SubmitPipeline(pipeline) => {
+                let pipes = pipelines.clone();
+                let etx = event_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = pipes.lock().await.submit(pipeline) {
+                        let _ =
+                            etx.send(DaemonEvent::Error(format!("plugin pipeline rejected: {e}")));
+                    }
+                });
+            }
+            PA::UpdateStage {
+                stage_id,
+                new_state,
+            } => {
+                let pipes = pipelines.clone();
+                tokio::spawn(async move {
+                    pipes.lock().await.update_stage(stage_id, new_state);
+                });
+            }
+            PA::UpdateConfig { plugin_name, .. } => {
+                let _ = event_tx.send(DaemonEvent::Error(format!(
+                    "plugin {plugin_name} requested a configuration update that the daemon cannot apply"
+                )));
             }
             // No daemon equivalent (no TUI panes / mpv / config persistence
             // path here); the TUI handles these when it dispatches verbs.

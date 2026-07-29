@@ -74,5 +74,11 @@ openssl ecparam -genkey -name prime256v1 -noout -out jwt-private.pem
 openssl ec -in jwt-private.pem -pubout -out jwt-public.pem
 
 # The PRIVATE key goes into the Worker secret JWT_PRIVATE_KEY.
-# The PUBLIC key is embedded in the StriVo client to verify tokens.
+# Give the PUBLIC key to the StriVo service as
+# STRIVO_LICENCE_PUBLIC_KEY (the PEM contents).
 ```
+
+The client fails closed if either `STRIVO_LICENCE_URL` or
+`STRIVO_LICENCE_PUBLIC_KEY` is absent. Local self-issued trials are not
+supported: trials use the same signed, once-per-machine backend flow as paid
+activations.

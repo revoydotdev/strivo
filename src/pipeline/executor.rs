@@ -85,6 +85,35 @@ impl PipelineRegistry {
         None
     }
 
+    pub fn update_stage(
+        &mut self,
+        stage_id: StageId,
+        update: crate::plugin::PipelineStageUpdate,
+    ) -> Option<PipelineId> {
+        use crate::plugin::PipelineStageUpdate;
+        for (pid, pipe) in &mut self.pipelines {
+            if let Some(stage) = pipe.stages.iter_mut().find(|stage| stage.id == stage_id) {
+                stage.state = match update {
+                    PipelineStageUpdate::Running => StageState::Running {
+                        started_at_ms: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|duration| duration.as_millis())
+                            .unwrap_or(0),
+                    },
+                    PipelineStageUpdate::Done => StageState::Done,
+                    PipelineStageUpdate::Failed(error) => StageState::Failed {
+                        error,
+                        attempt: stage.attempts.saturating_add(1),
+                    },
+                    PipelineStageUpdate::Cancelled => StageState::Cancelled,
+                    PipelineStageUpdate::Skipped => StageState::Skipped,
+                };
+                return Some(*pid);
+            }
+        }
+        None
+    }
+
     /// Manually reset a Failed / Exhausted / Cancelled stage so the
     /// executor will pick it up again on the next tick. Resets the
     /// state to `Pending` and re-arms the cancellation token. If

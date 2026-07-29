@@ -218,7 +218,7 @@ async fn download(
     };
     // Containment check before opening: canonicalise against the configured
     // recording root and refuse anything that escapes it.
-    let root = match strivo_core::config::AppConfig::load(None) {
+    let root = match strivo_core::config::AppConfig::load(state.config_path()) {
         Ok(c) => c.recording_dir,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };

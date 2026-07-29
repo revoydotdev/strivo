@@ -66,7 +66,7 @@ request workflow) is parked behind explicit user demand.
   Insights, plus every editor-stack plugin (Branding, Automation,
   Loudness, Sidechain, Insert FX, Pitch, Scenes, Captions).
 
-Local-only licence cache; no internet kill switch; trials work
+Verified local licence cache; no internet kill switch; trials require the activation backend
 fully offline.
 
 ## Install

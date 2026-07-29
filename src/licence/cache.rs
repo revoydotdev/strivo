@@ -3,14 +3,11 @@
 //! File: `~/.local/share/strivo/licence.json`.
 //!
 //! Written by `/api/v1/licence/{activate,trial,refresh}` (Phase 3b).
-//! Read by `gate::is_entitled` on every plugin-load decision, and by
-//! the `/api/v1/licence/status` route (Phase 3b wires this; today it
-//! still returns the hardcoded stub).
+//! Read by `gate::is_entitled` on every plugin-load decision and by
+//! the `/api/v1/licence/status` route.
 //!
 //! Schema: see [`Licence`]. The activation server signs `token` with
-//! ES256; client-side verification of that signature is Phase 3b. For
-//! now we trust the cache because only the daemon (running as the
-//! user) can write it.
+//! ES256; the entitlement gate verifies it on every read.
 
 use std::fs;
 use std::path::PathBuf;
@@ -41,8 +38,7 @@ pub struct Licence {
     /// refresh rule is applied on top of this; if the server has
     /// been unreachable for >72h the cache is still honoured.
     pub last_refreshed: String,
-    /// JWT ES256 token from the activation server. Empty in dev
-    /// caches and Phase 3 stubs.
+    /// JWT ES256 token from the activation server.
     #[serde(default)]
     pub token: String,
     /// Original Lemon Squeezy licence key used to activate. Empty

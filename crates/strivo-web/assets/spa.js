@@ -1258,6 +1258,10 @@ function renderLogin(errorMsg) {
       } catch (_) {}
       events.start(); // (re)connect the now-authorized SSE stream
       route("library");
+      // The first-run tour belongs to the authenticated application
+      // chrome. Starting it during the login paint blocks the sign-in
+      // form with an overlay and leaves the spotlight without targets.
+      setTimeout(startOnboardingTour, 600);
     } catch (err) {
       renderLogin("Invalid API key");
     }
@@ -6442,6 +6446,7 @@ async function renderPluginHub() {
         ? `<span class="cfg-badge ok">ready</span>`
         : `<span class="cfg-badge">idle</span>`;
       const href = p.available ? `#/plugins/${p.name}` : null;
+      const cardHref = href || p.route || `#/plugins/${encodeURIComponent(p.name)}`;
       // Get-started guidance fills the stats footprint while there's
       // nothing to count yet — replaces the bland "no data yet" stub.
       const statsHtml = statBits
@@ -6463,7 +6468,7 @@ async function renderPluginHub() {
       const body = `
         <div class="pg-card-head">
           <span class="pg-icon pg-icon-${p.name}" aria-hidden="true">${htmlEscape((p.display || p.name)[0])}</span>
-          <span class="pg-card-name">${htmlEscape(p.display || p.name)}</span>
+          <a class="pg-card-name" href="${cardHref}">${htmlEscape(p.display || p.name)}</a>
           ${status}
           <a class="pg-card-gear" href="#/settings/plugins"
              title="Open plugin manager"
@@ -6476,10 +6481,9 @@ async function renderPluginHub() {
       // Idle/locked cards still need to be reachable so users can read
       // the upsell. Route to the plugin's hash anyway; the renderer
       // shows the Pro upsell card for gated routes.
-      const idleHref = p.route || `#/plugins/${encodeURIComponent(p.name)}`;
       return href
-        ? `<a class="pg-card" href="${href}" data-plugin="${p.name}">${body}</a>`
-        : `<a class="pg-card pg-card-idle" href="${idleHref}" data-plugin="${p.name}" title="Open the upsell — this plugin is part of StriVo Pro">${body}<span class="pg-card-lock" aria-hidden="true">🔒</span></a>`;
+        ? `<article class="pg-card" data-plugin="${p.name}" data-href="${cardHref}" tabindex="0">${body}</article>`
+        : `<article class="pg-card pg-card-idle" data-plugin="${p.name}" data-href="${cardHref}" tabindex="0" title="Open the upsell — this plugin is part of StriVo Pro">${body}<span class="pg-card-lock" aria-hidden="true">🔒</span></article>`;
     })
     .join("");
   // Capability matrix + marketplace both render lazily so the plugin
@@ -6499,6 +6503,18 @@ async function renderPluginHub() {
     }</div>
   `);
   setupChromeHandlers();
+  document.querySelectorAll(".pg-card[data-href]").forEach((card) => {
+    const open = () => { location.hash = card.dataset.href.slice(1); };
+    card.addEventListener("click", (event) => {
+      if (!event.target.closest("a, button, input, select")) open();
+    });
+    card.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && event.target === card) {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
   wireUpgradeCard();
 }
 
@@ -6606,14 +6622,10 @@ function renderMarketplaceSection(payload) {
 }
 
 // Upgrade card — shown on the Plugins hub when the user is not entitled.
-// Phase 1: stubbed backend, so the "Activate" button is disabled until
-// the licence service implements (returns `implemented: false`). The
-// trial CTA is wired to a placeholder endpoint that returns 501 today;
-// the surface stays so the design is locked in.
+// Activation and trial endpoints report actionable backend errors when
+// the deployment has not configured the external licence service.
 function renderUpgradeCard(licence) {
   if (!licence || licence.entitled) return ""; // dev unlock + future paid users
-  const implemented = licence.implemented === true;
-  const trialDisabled = implemented ? "" : "disabled";
   return `
     <section class="upgrade-card" data-tier="${htmlEscape(licence.tier || "free")}">
       <img class="upgrade-logo" src="/assets/img/chorosyne-logo.png" alt="Chorosyne" />
@@ -6626,10 +6638,9 @@ function renderUpgradeCard(licence) {
           <li>3-day free trial — no card required.</li>
         </ul>
         <div class="upgrade-actions">
-          <button class="upgrade-trial btn-primary" ${trialDisabled}>Start 3-day trial</button>
-          <button class="upgrade-activate btn-ghost" ${trialDisabled}>I have a key</button>
+          <button class="upgrade-trial btn-primary">Start 3-day trial</button>
+          <button class="upgrade-activate btn-ghost">I have a key</button>
         </div>
-        ${implemented ? "" : '<p class="upgrade-hint">Activation backend wires up in the next phase — surface preview only.</p>'}
       </div>
     </section>
   `;
@@ -10984,7 +10995,10 @@ async function renderSchedule() {
       API.settings().catch(() => ({})),
       API.health().catch(() => ({})),
     ]);
-    monitor = m;
+    monitor = {
+      auto_record: Array.isArray(m?.auto_record) ? m.auto_record : [],
+      auto_download: Array.isArray(m?.auto_download) ? m.auto_download : [],
+    };
     channels = c;
     cronEntries = s;
     settings = st;
@@ -12581,5 +12595,7 @@ fetchEdition()
   .finally(() => {
     // Fire the welcome tour once per machine — runs after the first
     // paint settles so the topnav slots have their bounding rects.
-    setTimeout(startOnboardingTour, 600);
+    if (currentRoute() !== "login") {
+      setTimeout(startOnboardingTour, 600);
+    }
   });

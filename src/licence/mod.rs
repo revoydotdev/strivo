@@ -22,6 +22,7 @@ pub mod cache;
 pub mod client;
 pub mod gate;
 pub mod machine_id;
+pub mod verify;
 
 pub use cache::{Licence, LicenceCache, Tier};
 pub use client::{spawn_refresh_loop, DEFAULT_REFRESH_INTERVAL};

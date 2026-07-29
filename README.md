@@ -122,25 +122,27 @@ strivo              # starts daemon + webui on http://127.0.0.1:8181
 ```bash
 git clone https://github.com/Chorosyne/strivo.git
 cd strivo
-cargo build --release                                    # StriVo (pure PVR)
-cargo build --release -p strivo-bin --features creator   # StriVo Creator Edition
+scripts/install.sh --check                 # tailored prerequisite guidance
+scripts/install.sh --edition pvr           # focused live-stream PVR
+scripts/install.sh --edition creator       # research + transcription edition
+strivo doctor
+strivo
 ```
 
-The default build is the pure PVR. The `creator` feature adds the
+The installer uses `~/.local` by default, never overwrites your configuration,
+and supports `--prefix`, `--debug`, and `--uninstall`. The default edition is
+the pure PVR. The `creator` feature adds the
 transcription/analysis/editor toolkit (the `strivo-plugins` host and the
 in-tree tool crates); see [the edition split in ROADMAP.md](./ROADMAP.md#the-edition-split--shipped).
 
 ### Dev install (current checkout → `~/.local/bin/strivo`)
 
-For hacking on a clone: build the latest from the working tree and drop
-`strivo` on your `PATH`. The script builds **Creator Edition** (it enables
-the `crunchr` + `archiver` plugins in the generated config), so it passes
-`--features creator`.
+For hacking on a clone, `install-dev.sh` remains a shortcut for
+`install.sh --edition creator`:
 
 ```bash
 scripts/install-dev.sh                # release build
 scripts/install-dev.sh --debug        # faster iteration build
-scripts/install-dev.sh --reconfigure  # rewrite the managed plugin block
 scripts/install-dev.sh --uninstall    # remove installed bits (config kept)
 ```
 
@@ -150,12 +152,10 @@ The script:
 - ships the `whisperx_diarize.py` orchestrator next to it (auto-discovered
   by the `whisperx-local` backend),
 - generates bash/zsh/fish completions and a manpage into
-  `~/.local/share/strivo/`,
-- writes `~/.config/strivo/config.toml` enabling `crunchr` + `archiver` on
-  first run only (subsequent runs leave your edits alone unless you pass
-  `--reconfigure`, which refreshes only the marker-bracketed block).
+  `~/.local/share/strivo/`.
 
-Override paths with `STRIVO_BIN_DIR`, `STRIVO_SHARE_DIR`, `STRIVO_CONFIG_DIR`.
+Override the layout with `--prefix` or `STRIVO_PREFIX` (and the more specific
+`STRIVO_BIN_DIR`, `STRIVO_SHARE_DIR`, and `STRIVO_MAN_DIR`).
 
 (The previous `git submodule update --init` step is no longer needed —
 the first-party plugins live in `crates/strivo-plugins/` in this repo.)
@@ -163,6 +163,18 @@ the first-party plugins live in `crates/strivo-plugins/` in this repo.)
 The binary lands at `target/release/strivo`. Copy it onto your `PATH`.
 
 ### Platform credentials
+
+For YouTube or Patreon, Strivo can securely import the session from a browser
+you are already signed into. It delegates browser/keyring support to yt-dlp,
+stores only a private Netscape cookie jar, and writes its path to your config:
+
+```bash
+strivo setup cookies youtube --browser firefox
+strivo setup cookies patreon --browser vivaldi --profile Default
+```
+
+Close the browser and retry if its cookie database is locked. Use `--force` to
+refresh an expired session. Raw cookie values are never printed.
 
 Complete the web UI's setup flow on first launch, or configure manually:
 

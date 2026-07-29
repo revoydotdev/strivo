@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -70,6 +70,11 @@ pub enum Command {
 
     /// Check that required external tools are installed
     Doctor,
+    /// Guided account and credential setup
+    Setup {
+        #[command(subcommand)]
+        action: SetupAction,
+    },
     /// Run the *arr-style web UI. Talks to a running daemon over IPC.
     Serve {
         /// Bind address.
@@ -139,6 +144,36 @@ pub enum Command {
     },
     /// Print man page (roff) to stdout
     Man,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CookiePlatform {
+    Youtube,
+    Patreon,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SetupAction {
+    /// Import a signed-in browser session without manually juggling cookies.txt
+    Cookies {
+        /// Account whose browser session should be imported
+        #[arg(value_enum)]
+        platform: CookiePlatform,
+        /// Browser to import from (brave, chrome, chromium, edge, firefox,
+        /// opera, safari, vivaldi, or whale)
+        #[arg(long)]
+        browser: String,
+        /// Optional browser profile name/path (for example "Default")
+        #[arg(long)]
+        profile: Option<String>,
+        /// Linux Chromium keyring override (basictext, gnomekeyring, kwallet,
+        /// kwallet5, or kwallet6)
+        #[arg(long)]
+        keyring: Option<String>,
+        /// Replace an existing managed cookie file
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -14,7 +14,7 @@ use strivo_core::plugin;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 
-use crate::cli::{Command, ConfigAction, LogAction};
+use crate::cli::{Command, ConfigAction, CookiePlatform, LogAction, SetupAction};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -85,6 +85,7 @@ async fn handle_command(cmd: &Command, config_path: Option<&std::path::Path>) ->
         Command::Log { action } => handle_log_command(action).await,
         Command::Search { query } => handle_search(query, config_path),
         Command::Doctor => handle_doctor().await,
+        Command::Setup { action } => handle_setup(action, config_path).await,
         Command::Serve { bind, api_key } => {
             handle_serve(bind, api_key.as_deref(), config_path).await
         }
@@ -119,6 +120,173 @@ async fn handle_command(cmd: &Command, config_path: Option<&std::path::Path>) ->
             .await
         }
     }
+}
+
+async fn handle_setup(action: &SetupAction, config_path: Option<&std::path::Path>) -> Result<()> {
+    match action {
+        SetupAction::Cookies {
+            platform,
+            browser,
+            profile,
+            keyring,
+            force,
+        } => {
+            import_browser_cookies(
+                *platform,
+                browser,
+                profile.as_deref(),
+                keyring.as_deref(),
+                *force,
+                config_path,
+            )
+            .await
+        }
+    }
+}
+
+async fn import_browser_cookies(
+    platform: CookiePlatform,
+    browser: &str,
+    profile: Option<&str>,
+    keyring: Option<&str>,
+    force: bool,
+    config_path: Option<&std::path::Path>,
+) -> Result<()> {
+    use std::process::Stdio;
+    use strivo_core::config::{AppConfig, PatreonConfig, YouTubeConfig};
+
+    const BROWSERS: &[&str] = &[
+        "brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale",
+    ];
+    const KEYRINGS: &[&str] = &[
+        "basictext",
+        "gnomekeyring",
+        "kwallet",
+        "kwallet5",
+        "kwallet6",
+    ];
+
+    let browser = browser.trim().to_ascii_lowercase();
+    anyhow::ensure!(
+        BROWSERS.contains(&browser.as_str()),
+        "unsupported browser '{browser}'; choose one of: {}",
+        BROWSERS.join(", ")
+    );
+    if let Some(value) = keyring {
+        anyhow::ensure!(
+            KEYRINGS.contains(&value),
+            "unsupported keyring '{value}'; choose one of: {}",
+            KEYRINGS.join(", ")
+        );
+    }
+    anyhow::ensure!(
+        profile.map_or(true, |value| !value.trim().is_empty()),
+        "--profile cannot be empty"
+    );
+
+    let mut source = browser;
+    if let Some(value) = keyring {
+        source.push('+');
+        source.push_str(value);
+    }
+    if let Some(value) = profile {
+        source.push(':');
+        source.push_str(value.trim());
+    }
+
+    let mut cfg = AppConfig::load(config_path).context("load config")?;
+    let cookie_dir = AppConfig::config_dir().join("cookies");
+    std::fs::create_dir_all(&cookie_dir)
+        .with_context(|| format!("create {}", cookie_dir.display()))?;
+    let platform_name = match platform {
+        CookiePlatform::Youtube => "youtube",
+        CookiePlatform::Patreon => "patreon",
+    };
+    let output = cookie_dir.join(format!("{platform_name}.txt"));
+    anyhow::ensure!(
+        force || !output.exists(),
+        "{} already exists; use --force to refresh it",
+        output.display()
+    );
+
+    println!("Importing {platform_name} session from {source}…");
+    println!("Your browser may need to be closed briefly if its cookie database is locked.");
+    let probe_url = match platform {
+        CookiePlatform::Youtube => "https://www.youtube.com/feed/subscriptions",
+        CookiePlatform::Patreon => "https://www.patreon.com/home",
+    };
+    let output_arg = output.to_string_lossy().into_owned();
+    let status = tokio::process::Command::new("yt-dlp")
+        .args([
+            "--cookies-from-browser",
+            &source,
+            "--cookies",
+            &output_arg,
+            "--skip-download",
+            "--playlist-items",
+            "0",
+            probe_url,
+        ])
+        .stdin(Stdio::null())
+        .status()
+        .await
+        .context("run yt-dlp (install it first, then retry `strivo setup cookies`)")?;
+    if !status.success() || !output.is_file() {
+        // yt-dlp may create a partial jar before browser decryption or the
+        // account probe fails. Do not make the next retry require --force.
+        let _ = std::fs::remove_file(&output);
+        anyhow::bail!(
+            "browser session import failed; close the browser, confirm you are signed in, and retry"
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("secure {}", output.display()))?;
+    }
+
+    match platform {
+        CookiePlatform::Youtube => {
+            let current = cfg.youtube.take();
+            cfg.youtube = Some(YouTubeConfig {
+                client_id: current
+                    .as_ref()
+                    .map(|v| v.client_id.clone())
+                    .unwrap_or_default(),
+                client_secret: current
+                    .as_ref()
+                    .map(|v| v.client_secret.clone())
+                    .unwrap_or_default(),
+                cookies_path: Some(output.clone()),
+                websub_callback_url: current.and_then(|v| v.websub_callback_url),
+            });
+        }
+        CookiePlatform::Patreon => {
+            let current = cfg.patreon.take();
+            cfg.patreon = Some(PatreonConfig {
+                client_id: current
+                    .as_ref()
+                    .map(|v| v.client_id.clone())
+                    .unwrap_or_default(),
+                client_secret: current
+                    .as_ref()
+                    .map(|v| v.client_secret.clone())
+                    .unwrap_or_default(),
+                poll_interval_secs: current
+                    .as_ref()
+                    .map(|v| v.poll_interval_secs)
+                    .unwrap_or(300),
+                cookies_path: Some(output.clone()),
+            });
+        }
+    }
+    cfg.save(config_path)
+        .context("save cookie path to config")?;
+    println!("✓ Session imported and configured at {}", output.display());
+    println!("  Re-run this command with --force whenever the browser session expires.");
+    Ok(())
 }
 
 fn parse_since(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {

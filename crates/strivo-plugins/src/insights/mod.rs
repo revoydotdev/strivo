@@ -48,7 +48,8 @@ impl Plugin for InsightsPlugin {
     fn init(&mut self, ctx: &PluginContext) -> anyhow::Result<()> {
         self.db_path = ctx
             .data_dir
-            .join("plugins")
+            .parent()
+            .unwrap_or(&ctx.data_dir)
             .join("crunchr")
             .join("crunchr.db");
         Ok(())

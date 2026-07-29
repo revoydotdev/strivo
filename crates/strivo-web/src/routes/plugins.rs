@@ -44,10 +44,14 @@ fn archiver_db() -> PathBuf {
     plugins_root().join("archiver").join("archiver.db")
 }
 
-/// Viewguard's `init` joins `plugins/viewguard` onto a data_dir that already
-/// ends in `plugins/viewguard`, so the live DB nests twice. Prefer that path
-/// but fall back to the un-nested location so this keeps working if the plugin
-/// ever corrects the join.
+fn research_db() -> PathBuf {
+    strivo_core::config::AppConfig::data_dir()
+        .join("research")
+        .join("research.db")
+}
+
+/// Prefer the corrected plugin-scoped path. Keep the historical nested path as
+/// a read/migration fallback for installations created before schema-v1.
 fn viewguard_db() -> Option<PathBuf> {
     let nested = plugins_root()
         .join("viewguard")
@@ -55,10 +59,10 @@ fn viewguard_db() -> Option<PathBuf> {
         .join("viewguard")
         .join("viewguard.db");
     let flat = plugins_root().join("viewguard").join("viewguard.db");
-    if nested.exists() {
-        Some(nested)
-    } else if flat.exists() {
+    if flat.exists() {
         Some(flat)
+    } else if nested.exists() {
+        Some(nested)
     } else {
         None
     }
@@ -4139,6 +4143,50 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/chat/send", axum::routing::post(chat_send_message))
         .route("/api/v1/dataviz/run", axum::routing::post(dataviz_run))
         .route(
+            "/api/v1/research/projects",
+            get(research_projects).post(research_create_project),
+        )
+        .route(
+            "/api/v1/research/projects/{id}",
+            get(research_project_detail),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/codes",
+            axum::routing::post(research_create_code),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/sources",
+            axum::routing::post(research_create_source),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/cases",
+            axum::routing::post(research_create_case),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/codings",
+            axum::routing::post(research_create_coding),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/memos",
+            axum::routing::post(research_create_memo),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/relationships",
+            axum::routing::post(research_create_relationship),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/signals",
+            get(research_signals),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/migrate/crunchr",
+            axum::routing::post(research_migrate_crunchr),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/migrate/legacy",
+            axum::routing::post(research_migrate_legacy),
+        )
+        .route(
             "/api/v1/plugins/loudness/{id}",
             axum::routing::post(loudness_measure),
         )
@@ -4208,6 +4256,453 @@ pub fn router() -> Router<AppState> {
 pub(super) struct DatavizBody {
     pub corpus: strivo_dataviz::Corpus,
     pub experiment: strivo_dataviz::Experiment,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateProjectBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCodeBody {
+    parent_id: Option<uuid::Uuid>,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "default_code_color")]
+    color: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSourceBody {
+    recording_id: Option<uuid::Uuid>,
+    kind: strivo_research::SourceKind,
+    title: String,
+    uri: Option<String>,
+    duration_ms: Option<u64>,
+    #[serde(default = "empty_object")]
+    attributes: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCaseBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "empty_object")]
+    attributes: Value,
+    #[serde(default)]
+    source_ids: Vec<uuid::Uuid>,
+}
+
+fn empty_object() -> Value {
+    json!({})
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateMemoBody {
+    source_id: Option<uuid::Uuid>,
+    coding_id: Option<uuid::Uuid>,
+    title: String,
+    body: String,
+    author: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRelationshipBody {
+    from_kind: String,
+    from_id: uuid::Uuid,
+    to_kind: String,
+    to_id: uuid::Uuid,
+    relation: String,
+    #[serde(default)]
+    note: String,
+    author: String,
+}
+
+fn default_code_color() -> String {
+    "#7c5cff".into()
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCodingBody {
+    source_id: uuid::Uuid,
+    code_id: uuid::Uuid,
+    start_ms: u64,
+    end_ms: u64,
+    #[serde(default)]
+    excerpt: String,
+    #[serde(default)]
+    note: String,
+    author: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResearchSignalQuery {
+    source_id: Option<uuid::Uuid>,
+    kind: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn research_projects(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(|| {
+        strivo_research::ResearchStore::open(research_db())?.list_projects()
+    })
+    .await
+    {
+        Ok(Ok(projects)) => Json(json!({ "projects": projects })).into_response(),
+        Ok(Err(error)) => Problem::internal(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_project(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(body): Json<CreateProjectBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?
+            .create_project(&body.name, &body.description)
+    })
+    .await
+    {
+        Ok(Ok(project)) => {
+            (StatusCode::CREATED, Json(json!({ "project": project }))).into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_project_detail(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.export_project(id)
+    })
+    .await
+    {
+        Ok(Ok(project)) => Json(json!({ "project": project })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_code(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateCodeBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let code = strivo_research::Code {
+        id: uuid::Uuid::new_v4(),
+        project_id,
+        parent_id: body.parent_id,
+        name: body.name,
+        description: body.description,
+        color: body.color,
+    };
+    let response_code = code.clone();
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.create_code(&code)
+    })
+    .await
+    {
+        Ok(Ok(())) => (StatusCode::CREATED, Json(json!({ "code": response_code }))).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_source(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateSourceBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let source = strivo_research::NewSource {
+        id: uuid::Uuid::new_v4(),
+        project_id,
+        recording_id: body.recording_id,
+        kind: body.kind,
+        title: body.title,
+        uri: body.uri,
+        duration_ms: body.duration_ms,
+        attributes: body.attributes,
+    };
+    let response_source = source.clone();
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.upsert_source(&source)
+    })
+    .await
+    {
+        Ok(Ok(())) => (
+            StatusCode::CREATED,
+            Json(json!({ "source": response_source })),
+        )
+            .into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_case(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateCaseBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let case = strivo_research::ResearchCase {
+        id: uuid::Uuid::new_v4(),
+        project_id,
+        name: body.name,
+        description: body.description,
+        attributes: body.attributes,
+    };
+    let response_case = case.clone();
+    match tokio::task::spawn_blocking(move || {
+        let mut store = strivo_research::ResearchStore::open(research_db())?;
+        store.create_case_with_sources(&case, &body.source_ids)
+    })
+    .await
+    {
+        Ok(Ok(())) => (StatusCode::CREATED, Json(json!({ "case": response_case }))).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_coding(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateCodingBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let coding = strivo_research::NewCoding {
+        id: uuid::Uuid::new_v4(),
+        project_id,
+        source_id: body.source_id,
+        code_id: body.code_id,
+        start_ms: body.start_ms,
+        end_ms: body.end_ms,
+        excerpt: body.excerpt,
+        note: body.note,
+        author: body.author,
+        origin: strivo_research::CodingOrigin::Human,
+        confidence: None,
+        provenance_id: None,
+    };
+    let id = coding.id;
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.add_coding(&coding)
+    })
+    .await
+    {
+        Ok(Ok(())) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_memo(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateMemoBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let memo = strivo_research::Memo {
+        id: uuid::Uuid::new_v4(),
+        project_id,
+        source_id: body.source_id,
+        coding_id: body.coding_id,
+        title: body.title,
+        body: body.body,
+        author: body.author,
+    };
+    let id = memo.id;
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.add_memo(&memo)
+    })
+    .await
+    {
+        Ok(Ok(())) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_create_relationship(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateRelationshipBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let relationship = strivo_research::Relationship {
+        id: uuid::Uuid::new_v4(),
+        project_id,
+        from_kind: body.from_kind,
+        from_id: body.from_id,
+        to_kind: body.to_kind,
+        to_id: body.to_id,
+        relation: body.relation,
+        note: body.note,
+        author: body.author,
+    };
+    let id = relationship.id;
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.add_relationship(&relationship)
+    })
+    .await
+    {
+        Ok(Ok(())) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_signals(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchSignalQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_signals(
+            project_id,
+            query.source_id,
+            query.kind.as_deref(),
+            query.limit.unwrap_or(200),
+            query.offset.unwrap_or(0),
+        )
+    })
+    .await
+    {
+        Ok(Ok(signals)) => Json(json!({ "signals": signals })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_migrate_crunchr(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let path = crunchr_db();
+    if !path.exists() {
+        return Problem::not_found("Crunchr database has not been created").into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.migrate_crunchr(path, project_id)
+    })
+    .await
+    {
+        Ok(Ok(report)) => Json(json!({ "report": report })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+async fn research_migrate_legacy(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let crunchr = crunchr_db();
+    let cuepoints = plugins_root().join("cuepoints").join("cuepoints.db");
+    let viewguard = viewguard_db();
+    match tokio::task::spawn_blocking(move || {
+        let mut store = strivo_research::ResearchStore::open(research_db())?;
+        let mut reports = Vec::new();
+        if crunchr.exists() {
+            reports.push(store.migrate_crunchr(crunchr, project_id)?);
+        }
+        if cuepoints.exists() {
+            reports.push(store.migrate_cuepoints(cuepoints, project_id)?);
+        }
+        if let Some(path) = viewguard {
+            reports.push(store.migrate_viewguard(path, project_id)?);
+        }
+        Ok::<_, strivo_research::ResearchError>(reports)
+    })
+    .await
+    {
+        Ok(Ok(reports)) => Json(json!({ "reports": reports })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
 }
 
 /// `POST /api/v1/dataviz/run` — run a single experiment over an

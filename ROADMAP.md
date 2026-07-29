@@ -145,13 +145,14 @@ The phased engine plan, preserved. This is the Creator Edition's destination; it
 builds on the PVR substrate and ships only under `--features creator`. Each phase
 lists concrete blockers; none is ✅ until wired end-to-end with tests.
 
-### CE-P1 · Unified signal spine ⬜ *(foundation)*
+### CE-P1 · Unified signal spine ✅ *(foundation)*
 Replace fragmented per-plugin SQLite with one canonical, append-only **signal
 store** every extractor writes and every analytic reads:
 `(recording_id, t_start, t_end, kind, label, payload JSON, confidence, source_plugin)`.
-- **Blockers:** schema + migration; plugin write API; analytic query API; retire
-  `insights`' hardcoded `crunchr.db` reach-in; fix the `viewguard` `data_dir`
-  double-nest (web probes two paths as a workaround).
+- **Shipped:** canonical project/source/case/code/coding/memo/relationship and
+  append-only signal/provenance schema; bounded query/export API; authenticated
+  Creator routes; deterministic, checksummed Crunchr/Cuepoints/Viewguard
+  adapters; corrected Insights sibling-store and Viewguard plugin paths.
 - **Unblocks:** cross-signal joins, the sports event spine (CE-P4), real corpus
   assembly (CE-P2).
 
@@ -209,8 +210,8 @@ template (highlight/retention rollups + publish-ready clips).
 |---|---|---|
 | SPA edition awareness (creator UI hidden in PVR build) | ✅ | `creator_enabled` boot probe gates routes, nav, and actions |
 | Daemon doesn't drive the pipeline executor | ✅ | durable daemon runtime + executable Crunchr adapter |
-| Per-plugin SQLite fragmentation; `insights` hardcoded `crunchr.db` reach-in | 🟡 | **CE-P1** |
-| `viewguard` `data_dir` double-nest (web probes two paths) | 🟡 | **CE-P1** |
+| Per-plugin SQLite fragmentation; canonical cross-signal exchange | ✅ | **CE-P1** research spine + migration adapters |
+| `viewguard` `data_dir` double-nest | ✅ | Corrected; nested path retained read-only for migration |
 | Corpus assembled client-side, not server-side | 🟡 | **CE-P2** |
 | Licence JWT ES256 signature and claims verified | ✅ | ES256 signature, issuer, machine, expiry, licence expiry, and tier fail closed |
 | Crunchr headless auto-transcribe | ✅ | recording-finished events reach resident plugins and enqueue the same durable DAG used by manual runs |

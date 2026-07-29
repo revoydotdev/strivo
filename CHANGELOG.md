@@ -47,7 +47,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   stream-native qualitative-research roadmap and the first `strivo-research`
   kernel: versioned projects and multimodal sources, hierarchical codebooks,
   time-ranged codings, append-only normalized signals, immutable provenance,
-  cases/memos schema, SQLite integrity constraints, and contract tests.
+  cases, memos, relationships, SQLite integrity constraints, bounded
+  query/export APIs, authenticated Creator routes, and deterministic,
+  checksummed Crunchr/Cuepoints/Viewguard migration adapters.
 - **Durable Creator publish DAG.** Creator Edition now ships a daemon-owned,
   restart-safe ten-stage workflow spanning transcription intelligence, visual
   cuepoints, chapters, captions, brand-safety analysis, highlight scoring,

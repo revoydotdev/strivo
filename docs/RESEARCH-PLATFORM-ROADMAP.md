@@ -128,8 +128,12 @@ Quality gate:
 - 1 million signals insert in bounded batches and indexed source/time queries
   meet the recorded local budget.
 
-Status: **in progress**. `strivo-research` schema version 1 now implements the
-first project/source/code/coding/provenance/signal contracts with tests.
+Status: **complete**. Schema version 1 implements the canonical contracts,
+bounded query/export APIs, authenticated Creator routes, deterministic and
+checksummed Crunchr/Cuepoints/Viewguard adapters, corrected plugin data paths,
+and integrity/idempotency tests. Live chat-density signals enter through the
+same append API when produced; there was no durable legacy chat-density store
+to migrate.
 
 ## Phase 2 — corpus assembly and analytical storage
 

@@ -49,6 +49,7 @@ creator = [
     "dep:strivo-insert-fx",
     "dep:strivo-pitch",
     "dep:strivo-dataviz",
+    "dep:strivo-research",
 ]
 
 [dependencies]
@@ -92,6 +93,7 @@ strivo-sidechain = { path = "../sidechain", optional = true }
 strivo-insert-fx = { path = "../insert-fx", optional = true }
 strivo-pitch = { path = "../pitch", optional = true }
 strivo-dataviz = { path = "../dataviz", optional = true }
+strivo-research = { path = "../research", optional = true }
 rusqlite = { version = "0.33", features = ["bundled"] }
 
 # HTTP

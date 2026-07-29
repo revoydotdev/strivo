@@ -3,6 +3,7 @@
 /.next/
 /node_modules/
 /.open-next/
+/out/
 /*.tsbuildinfo
 /website/.next/
 /website/node_modules/

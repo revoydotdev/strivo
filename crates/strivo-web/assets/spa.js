@@ -3538,16 +3538,28 @@ async function renderPipelines() {
   });
   document.querySelectorAll(".pl-cancel").forEach((button) => {
     button.addEventListener("click", async () => {
-      await API.pipelineCancel(button.dataset.run);
-      Toast.success("Pipeline cancellation requested");
-      renderPipelines();
+      button.disabled = true;
+      try {
+        await API.pipelineCancel(button.dataset.run);
+        Toast.success("Pipeline cancellation requested");
+        renderPipelines();
+      } catch (error) {
+        button.disabled = false;
+        Toast.error(`Could not cancel pipeline: ${error.message}`);
+      }
     });
   });
   document.querySelectorAll(".pl-retry").forEach((button) => {
     button.addEventListener("click", async () => {
-      await API.pipelineRetryStage(button.dataset.stage);
-      Toast.success("Stage re-queued");
-      renderPipelines();
+      button.disabled = true;
+      try {
+        await API.pipelineRetryStage(button.dataset.stage);
+        Toast.success("Stage re-queued");
+        renderPipelines();
+      } catch (error) {
+        button.disabled = false;
+        Toast.error(`Could not retry stage: ${error.message}`);
+      }
     });
   });
 }

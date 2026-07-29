@@ -10,12 +10,15 @@
 //! holds it.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, Semaphore};
 
 use super::stage::{Pipeline, PipelineId, PipelineState, ResourceLock, Stage, StageId, StageState};
+
+const MAX_PIPELINE_HISTORY: usize = 500;
 
 /// Shared registry of every Pipeline submitted this session. Cloned via
 /// `Arc<Mutex<…>>` from `AppState` into anything that wants to read or
@@ -37,6 +40,37 @@ impl PipelineRegistry {
     }
 
     pub fn submit(&mut self, pipeline: Pipeline) -> Result<PipelineId, &'static str> {
+        Self::validate(&pipeline)?;
+        let id = pipeline.id;
+        if self.pipelines.contains_key(&id) {
+            return Err("pipeline id already exists");
+        }
+        if self.iter().any(|existing| {
+            !existing.is_terminal()
+                && existing.name == pipeline.name
+                && existing.subject_id == pipeline.subject_id
+        }) {
+            return Err("an equivalent pipeline is already active for this subject");
+        }
+        while self.pipelines.len() >= MAX_PIPELINE_HISTORY {
+            let Some(oldest_terminal) = self
+                .order
+                .iter()
+                .find(|id| self.pipelines.get(id).is_some_and(Pipeline::is_terminal))
+                .copied()
+            else {
+                return Err("pipeline history is full of active runs");
+            };
+            self.order.retain(|id| *id != oldest_terminal);
+            self.pipelines.remove(&oldest_terminal);
+        }
+        self.order.push(id);
+        self.pipelines.insert(id, pipeline);
+        self.persist_best_effort();
+        Ok(id)
+    }
+
+    fn validate(pipeline: &Pipeline) -> Result<(), &'static str> {
         pipeline.assert_acyclic()?;
         if pipeline.stages.is_empty() {
             return Err("pipeline must contain at least one stage");
@@ -53,21 +87,23 @@ impl PipelineRegistry {
         {
             return Err("pipeline references an unknown input stage");
         }
-        let id = pipeline.id;
-        if self.pipelines.contains_key(&id) {
-            return Err("pipeline id already exists");
-        }
-        if self.iter().any(|existing| {
-            !existing.is_terminal()
-                && existing.name == pipeline.name
-                && existing.subject_id == pipeline.subject_id
+        if pipeline.stages.iter().any(|stage| {
+            stage.max_attempts == 0
+                || stage
+                    .requires
+                    .iter()
+                    .any(|lock| matches!(lock, ResourceLock::Api { cap: 0, .. }))
         }) {
-            return Err("an equivalent pipeline is already active for this subject");
+            return Err("pipeline contains a zero retry or resource capacity");
         }
-        self.order.push(id);
-        self.pipelines.insert(id, pipeline);
-        self.persist_best_effort();
-        Ok(id)
+        if pipeline.stages.iter().any(|stage| {
+            stage.dispatch.as_ref().is_some_and(|dispatch| {
+                dispatch.plugin.trim().is_empty() || dispatch.verb.trim().is_empty()
+            })
+        }) {
+            return Err("pipeline contains an empty dispatch target");
+        }
+        Ok(())
     }
 
     /// Open the durable registry. Interrupted running stages are re-queued:
@@ -77,8 +113,14 @@ impl PipelineRegistry {
         let path = path.into();
         let mut registry = if path.exists() {
             let bytes = std::fs::read(&path)?;
-            let pipelines: Vec<Pipeline> = match serde_json::from_slice(&bytes) {
-                Ok(pipelines) => pipelines,
+            let pipelines: Vec<Pipeline> = match serde_json::from_slice::<Vec<Pipeline>>(&bytes) {
+                Ok(pipelines)
+                    if pipelines
+                        .iter()
+                        .all(|pipeline| Self::validate(pipeline).is_ok()) =>
+                {
+                    pipelines
+                }
                 Err(error) => {
                     let quarantine =
                         path.with_file_name(format!("pipelines.corrupt-{}.json", unix_secs()));
@@ -91,10 +133,23 @@ impl PipelineRegistry {
                     );
                     Vec::new()
                 }
+                Ok(_) => {
+                    let quarantine =
+                        path.with_file_name(format!("pipelines.invalid-{}.json", unix_secs()));
+                    std::fs::rename(&path, &quarantine)?;
+                    tracing::error!(
+                        path = %path.display(),
+                        quarantine = %quarantine.display(),
+                        "invalid pipeline registry quarantined"
+                    );
+                    Vec::new()
+                }
             };
             let mut map = HashMap::new();
             let mut order = Vec::new();
             for mut pipeline in pipelines {
+                Self::validate(&pipeline)
+                    .map_err(|error| anyhow::anyhow!("invalid persisted pipeline: {error}"))?;
                 for stage in &mut pipeline.stages {
                     if matches!(stage.state, StageState::Running { .. }) {
                         stage.state = StageState::Pending;
@@ -136,8 +191,19 @@ impl PipelineRegistry {
         let payload: Vec<&Pipeline> = self.iter().collect();
         let bytes = serde_json::to_vec_pretty(&payload)?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(tmp, path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        if let Some(parent) = path.parent() {
+            if let Ok(directory) = std::fs::File::open(parent) {
+                let _ = directory.sync_all();
+            }
+        }
         Ok(())
     }
 
@@ -214,6 +280,9 @@ impl PipelineRegistry {
         else {
             return false;
         };
+        if !matches!(stage.state, StageState::Running { .. }) {
+            return false;
+        }
         stage.state = StageState::Done;
         stage.artifacts = artifacts;
         Self::recompute_pipeline(pipeline);
@@ -283,13 +352,22 @@ impl PipelineRegistry {
     /// caller can decide what to do next (advance dependent stages,
     /// finalize the pipeline if all stages are terminal).
     pub fn mark_stage_done(&mut self, stage_id: StageId) -> Option<PipelineId> {
+        let mut found = None;
         for (pid, pipe) in &mut self.pipelines {
             if let Some(stage) = pipe.stages.iter_mut().find(|s| s.id == stage_id) {
+                if !matches!(stage.state, StageState::Running { .. }) {
+                    return None;
+                }
                 stage.state = StageState::Done;
-                return Some(*pid);
+                Self::recompute_pipeline(pipe);
+                found = Some(*pid);
+                break;
             }
         }
-        None
+        if found.is_some() {
+            self.persist_best_effort();
+        }
+        found
     }
 
     pub fn update_stage(
@@ -301,6 +379,22 @@ impl PipelineRegistry {
         let mut found = None;
         for (pid, pipe) in &mut self.pipelines {
             if let Some(stage) = pipe.stages.iter_mut().find(|stage| stage.id == stage_id) {
+                let allowed = match &update {
+                    PipelineStageUpdate::Running => {
+                        matches!(stage.state, StageState::Pending | StageState::Failed { .. })
+                    }
+                    PipelineStageUpdate::Done
+                    | PipelineStageUpdate::Failed(_)
+                    | PipelineStageUpdate::Cancelled => {
+                        matches!(stage.state, StageState::Running { .. })
+                    }
+                    PipelineStageUpdate::Skipped => {
+                        matches!(stage.state, StageState::Pending | StageState::Failed { .. })
+                    }
+                };
+                if !allowed {
+                    return None;
+                }
                 stage.state = match update {
                     PipelineStageUpdate::Running => StageState::Running {
                         started_at_ms: std::time::SystemTime::now()
@@ -340,7 +434,19 @@ impl PipelineRegistry {
     ) -> Option<PipelineId> {
         let mut found = None;
         for (pid, pipe) in &mut self.pipelines {
-            if let Some(stage) = pipe.stages.iter_mut().find(|s| s.id == stage_id) {
+            if let Some(index) = pipe.stages.iter().position(|stage| stage.id == stage_id) {
+                let was_exhausted =
+                    matches!(pipe.stages[index].state, StageState::Exhausted { .. });
+                let stage = &mut pipe.stages[index];
+                if !matches!(
+                    stage.state,
+                    StageState::Failed { .. } | StageState::Exhausted { .. }
+                ) {
+                    return None;
+                }
+                if matches!(stage.state, StageState::Exhausted { .. }) {
+                    stage.attempts = 0;
+                }
                 stage.state = StageState::Pending;
                 stage.cancel = tokio_util::sync::CancellationToken::new();
                 if let Some(prov) = provider_override {
@@ -353,6 +459,23 @@ impl PipelineRegistry {
                         _ => {}
                     }
                 }
+                if was_exhausted {
+                    for sibling in &mut pipe.stages {
+                        if sibling.id != stage_id
+                            && matches!(
+                                sibling.state,
+                                StageState::Failed { .. }
+                                    | StageState::Exhausted { .. }
+                                    | StageState::Cancelled
+                                    | StageState::Skipped
+                            )
+                        {
+                            sibling.state = StageState::Pending;
+                            sibling.attempts = 0;
+                            sibling.cancel = tokio_util::sync::CancellationToken::new();
+                        }
+                    }
+                }
                 // A pipeline that had any retryable stage flips back
                 // to Running so the executor wakes; the executor
                 // re-checks the post-condition once stages settle.
@@ -361,6 +484,31 @@ impl PipelineRegistry {
                 }
                 pipe.completed_at_secs = None;
                 pipe.error = None;
+                found = Some(*pid);
+                break;
+            }
+        }
+        if found.is_some() {
+            self.persist_best_effort();
+        }
+        found
+    }
+
+    /// Requeue only an automatically retryable failure. Unlike a manual retry,
+    /// this preserves the attempt counter and cannot resurrect a cancelled,
+    /// exhausted, running, or completed stage.
+    pub fn retry_failed_stage(&mut self, stage_id: StageId) -> Option<PipelineId> {
+        let mut found = None;
+        for (pid, pipe) in &mut self.pipelines {
+            if !matches!(pipe.state, PipelineState::Running | PipelineState::Pending) {
+                continue;
+            }
+            if let Some(stage) = pipe.stages.iter_mut().find(|stage| stage.id == stage_id) {
+                if !matches!(stage.state, StageState::Failed { .. }) {
+                    return None;
+                }
+                stage.state = StageState::Pending;
+                stage.cancel = tokio_util::sync::CancellationToken::new();
                 found = Some(*pid);
                 break;
             }
@@ -418,12 +566,22 @@ impl PipelineRegistry {
     pub fn mark_stage_failed(&mut self, stage_id: StageId, error: String) -> Option<PipelineId> {
         let mut owning_pipeline = None;
         for (pid, pipe) in &mut self.pipelines {
-            if let Some(stage) = pipe.stages.iter_mut().find(|s| s.id == stage_id) {
+            if let Some(index) = pipe.stages.iter().position(|stage| stage.id == stage_id) {
+                let stage = &mut pipe.stages[index];
+                if !matches!(stage.state, StageState::Running { .. }) {
+                    return None;
+                }
                 stage.attempts = stage.attempts.saturating_add(1);
                 if stage.attempts >= stage.max_attempts {
                     stage.state = StageState::Exhausted { error };
                     pipe.state = PipelineState::Failed;
                     pipe.completed_at_secs = Some(unix_secs());
+                    pipe.error = match &stage.state {
+                        StageState::Exhausted { error } => Some(error.clone()),
+                        _ => None,
+                    };
+                    let _ = stage;
+                    Self::stop_siblings(pipe, stage_id);
                 } else {
                     stage.state = StageState::Failed {
                         error,
@@ -438,14 +596,33 @@ impl PipelineRegistry {
         owning_pipeline
     }
 
+    fn stop_siblings(pipeline: &mut Pipeline, failed_stage_id: StageId) {
+        for stage in &mut pipeline.stages {
+            if stage.id == failed_stage_id {
+                continue;
+            }
+            match stage.state {
+                StageState::Pending | StageState::Failed { .. } => {
+                    stage.cancel.cancel();
+                    stage.state = StageState::Skipped;
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn exhaust_stage(&mut self, stage_id: StageId, error: String) -> Option<PipelineId> {
         let mut found = None;
         for (pipeline_id, pipeline) in &mut self.pipelines {
-            if let Some(stage) = pipeline
+            if let Some(index) = pipeline
                 .stages
-                .iter_mut()
-                .find(|stage| stage.id == stage_id)
+                .iter()
+                .position(|stage| stage.id == stage_id)
             {
+                let stage = &mut pipeline.stages[index];
+                if !matches!(stage.state, StageState::Running { .. }) {
+                    return None;
+                }
                 stage.attempts = stage.max_attempts;
                 stage.state = StageState::Exhausted {
                     error: error.clone(),
@@ -453,6 +630,8 @@ impl PipelineRegistry {
                 pipeline.state = PipelineState::Failed;
                 pipeline.error = Some(error);
                 pipeline.completed_at_secs = Some(unix_secs());
+                let _ = stage;
+                Self::stop_siblings(pipeline, stage_id);
                 found = Some(*pipeline_id);
                 break;
             }
@@ -565,9 +744,13 @@ mod tests {
         let pid = reg.submit(p).unwrap();
 
         // Drive it to Exhausted.
-        reg.mark_stage_failed(a, "boom".into());
-        reg.mark_stage_failed(a, "boom".into());
-        reg.mark_stage_failed(a, "boom".into());
+        for _ in 0..3 {
+            assert!(reg.mark_stage_running(pid, a));
+            reg.mark_stage_failed(a, "boom".into());
+            if !matches!(reg.get(pid).unwrap().state, PipelineState::Failed) {
+                reg.retry_failed_stage(a);
+            }
+        }
         assert!(matches!(reg.get(pid).unwrap().state, PipelineState::Failed));
 
         // Retry — provider override is irrelevant for Extract but
@@ -589,6 +772,7 @@ mod tests {
             },
         ));
         let pid = reg.submit(p).unwrap();
+        assert!(reg.mark_stage_running(pid, a));
         reg.mark_stage_failed(a, "boom".into());
 
         reg.retry_stage(a, Some("voxtral-api".into()));
@@ -718,12 +902,32 @@ mod tests {
     }
 
     #[test]
+    fn semantically_invalid_registry_is_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pipelines.json");
+        let mut pipeline = Pipeline::new("invalid");
+        pipeline.add_stage(Stage::new("work", StageKind::Extract).with_max_attempts(0));
+        std::fs::write(&path, serde_json::to_vec(&vec![pipeline]).unwrap()).unwrap();
+
+        let registry = PipelineRegistry::open(&path).unwrap();
+        assert!(registry.is_empty());
+        assert!(std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("pipelines.invalid-")));
+    }
+
+    #[test]
     fn stage_failure_retries_then_exhausts() {
         let mut reg = PipelineRegistry::new();
         let mut p = Pipeline::new("t".to_string());
         let a = p.add_stage(Stage::new("a", StageKind::Extract).with_max_attempts(2));
         let pid = reg.submit(p).unwrap();
 
+        assert!(reg.mark_stage_running(pid, a));
         let owning = reg.mark_stage_failed(a, "boom".into()).unwrap();
         assert_eq!(owning, pid);
         let pipe = reg.get(pid).unwrap();
@@ -732,10 +936,107 @@ mod tests {
             StageState::Failed { attempt: 1, .. }
         ));
 
+        assert_eq!(reg.retry_failed_stage(a), Some(pid));
+        assert!(reg.mark_stage_running(pid, a));
         reg.mark_stage_failed(a, "boom again".into()).unwrap();
         let pipe = reg.get(pid).unwrap();
         assert!(matches!(pipe.stages[0].state, StageState::Exhausted { .. }));
         assert!(matches!(pipe.state, PipelineState::Failed));
+    }
+
+    #[test]
+    fn late_worker_result_cannot_resurrect_cancelled_pipeline() {
+        let mut registry = PipelineRegistry::new();
+        let mut pipeline = Pipeline::new("cancel race");
+        let stage = pipeline.add_stage(Stage::new("work", StageKind::Extract));
+        let pipeline_id = registry.submit(pipeline).unwrap();
+        assert!(registry.mark_stage_running(pipeline_id, stage));
+
+        registry.cancel_pipeline(pipeline_id);
+        assert!(!registry.complete_stage(pipeline_id, stage, vec![]));
+        assert!(registry
+            .mark_stage_failed(stage, "late failure".into())
+            .is_none());
+
+        let pipeline = registry.get(pipeline_id).unwrap();
+        assert!(matches!(pipeline.state, PipelineState::Cancelled));
+        assert!(matches!(pipeline.stages[0].state, StageState::Cancelled));
+    }
+
+    #[test]
+    fn exhausted_stage_stops_sibling_work_and_records_error() {
+        let mut registry = PipelineRegistry::new();
+        let mut pipeline = Pipeline::new("fail fast");
+        let failed =
+            pipeline.add_stage(Stage::new("failed", StageKind::Extract).with_max_attempts(1));
+        let sibling = pipeline.add_stage(Stage::new("sibling", StageKind::Subtitle));
+        let downstream = pipeline
+            .add_stage(Stage::new("downstream", StageKind::Concat).with_inputs(vec![failed]));
+        let pipeline_id = registry.submit(pipeline).unwrap();
+        assert!(registry.mark_stage_running(pipeline_id, failed));
+        assert!(registry.mark_stage_running(pipeline_id, sibling));
+
+        registry
+            .mark_stage_failed(failed, "terminal".into())
+            .unwrap();
+        let pipeline = registry.get(pipeline_id).unwrap();
+        assert_eq!(pipeline.error.as_deref(), Some("terminal"));
+        assert!(matches!(
+            pipeline.stages[1].state,
+            StageState::Running { .. }
+        ));
+        assert!(matches!(pipeline.stages[2].state, StageState::Skipped));
+        assert!(registry.complete_stage(pipeline_id, sibling, vec![]));
+        let _ = downstream;
+    }
+
+    #[test]
+    fn manual_retry_rearms_failed_branch_after_exhaustion() {
+        let mut registry = PipelineRegistry::new();
+        let mut pipeline = Pipeline::new("retry graph");
+        let root = pipeline.add_stage(Stage::new("root", StageKind::Extract).with_max_attempts(1));
+        let downstream =
+            pipeline.add_stage(Stage::new("downstream", StageKind::Concat).with_inputs(vec![root]));
+        let pipeline_id = registry.submit(pipeline).unwrap();
+        assert!(registry.mark_stage_running(pipeline_id, root));
+        registry.mark_stage_failed(root, "terminal".into()).unwrap();
+        assert!(matches!(
+            registry.get(pipeline_id).unwrap().stages[1].state,
+            StageState::Skipped
+        ));
+
+        assert_eq!(registry.retry_stage(root, None), Some(pipeline_id));
+        let pipeline = registry.get(pipeline_id).unwrap();
+        assert!(matches!(pipeline.state, PipelineState::Running));
+        assert!(pipeline
+            .stages
+            .iter()
+            .all(|stage| matches!(stage.state, StageState::Pending)));
+        assert_eq!(pipeline.stages[0].attempts, 0);
+        let _ = downstream;
+    }
+
+    #[test]
+    fn validation_rejects_non_executable_resource_policies() {
+        let mut registry = PipelineRegistry::new();
+        let mut zero_retry = Pipeline::new("zero retry");
+        zero_retry.add_stage(Stage::new("work", StageKind::Extract).with_max_attempts(0));
+        assert_eq!(
+            registry.submit(zero_retry),
+            Err("pipeline contains a zero retry or resource capacity")
+        );
+
+        let mut zero_capacity = Pipeline::new("zero capacity");
+        zero_capacity.add_stage(Stage::new("work", StageKind::Extract).with_requires(vec![
+            ResourceLock::Api {
+                name: "provider".into(),
+                cap: 0,
+            },
+        ]));
+        assert_eq!(
+            registry.submit(zero_capacity),
+            Err("pipeline contains a zero retry or resource capacity")
+        );
     }
 
     #[tokio::test]

@@ -25,7 +25,10 @@ permanent and visible stage failure.
 - Ready stages are discovered from dependency state and may fan out in parallel.
 - GPU, provider, and file locks coordinate work across every active pipeline.
 - Failures retry with bounded exponential backoff.
-- Cancellation propagates through each stage's cancellation token.
+- Cancellation settles the run immediately and prevents late worker results
+  from resurrecting it. A blocking media subprocess already in flight drains
+  while retaining its resource locks; work still waiting for a lock exits
+  immediately.
 - Every transition is persisted atomically to
   `~/.local/share/strivo/pipelines.json`.
 - A daemon restart converts interrupted `Running` stages back to `Pending`.

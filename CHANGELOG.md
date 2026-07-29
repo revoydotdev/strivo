@@ -43,6 +43,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `AppEvent`.
 
 ### Added
+- **Durable Creator publish DAG.** Creator Edition now ships a daemon-owned,
+  restart-safe ten-stage workflow spanning transcription intelligence, visual
+  cuepoints, chapters, captions, brand-safety analysis, highlight scoring,
+  clip and thumbnail export, reuse drafts, and a converged Casebook report.
+  The web UI exposes live stage state, bounded retries, cancellation, manual
+  retry, run history, and authenticated streamed artifact downloads.
 - **Recording finalisation pipeline + browser playback.** `Recording::from_file`
   now derives stable `UUIDv5` ids from the canonical output path (webui permalinks
   survive daemon restarts); a new `src/recording/remux.rs` losslessly remuxes

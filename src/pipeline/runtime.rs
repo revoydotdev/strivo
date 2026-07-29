@@ -169,7 +169,11 @@ impl PipelineRuntime {
                 required.sort_by_key(|lock| format!("{lock:?}"));
                 let mut permits = Vec::with_capacity(required.len());
                 for lock in &required {
-                    match resources.acquire(lock).await {
+                    let acquired = tokio::select! {
+                        _ = stage.cancel.cancelled() => return,
+                        permit = resources.acquire(lock) => permit,
+                    };
+                    match acquired {
                         Ok(permit) => permits.push(permit),
                         Err(error) => {
                             runtime
@@ -184,19 +188,24 @@ impl PipelineRuntime {
                     }
                 }
 
-                let result = tokio::select! {
-                    _ = stage.cancel.cancelled() => Err("stage cancelled".to_string()),
-                    result = future => result,
-                };
+                // Do not drop an opaque executor future on cancellation:
+                // `spawn_blocking` media adapters cannot be force-cancelled,
+                // and releasing their file permit early would let a retry
+                // race the still-running ffmpeg process. Cancellation changes
+                // registry state immediately; the guarded completion below
+                // discards this late result after the worker drains.
+                let result = future.await;
                 drop(permits);
                 match result {
                     Ok(result) => {
-                        {
+                        let accepted = {
                             let mut registry = runtime.registry.lock().await;
-                            registry.complete_stage(pipeline_id, stage_id, result.artifacts);
-                        }
-                        for action in result.actions {
-                            let _ = actions.send(action);
+                            registry.complete_stage(pipeline_id, stage_id, result.artifacts)
+                        };
+                        if accepted {
+                            for action in result.actions {
+                                let _ = actions.send(action);
+                            }
                         }
                         runtime.emit_snapshot(pipeline_id).await;
                         runtime.wake();
@@ -232,9 +241,10 @@ impl PipelineRuntime {
                     .registry
                     .lock()
                     .await
-                    .retry_stage(stage_id, None)
+                    .retry_failed_stage(stage_id)
                     .is_some()
                 {
+                    runtime.emit_snapshot(pipeline_id).await;
                     runtime.wake();
                 }
             });

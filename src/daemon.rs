@@ -1322,9 +1322,9 @@ fn process_daemon_plugin_actions(
 
 /// Fire a desktop banner for notification-worthy daemon events, honouring the
 /// per-event [`NotificationsConfig`](crate::config::NotificationsConfig)
-/// flags. `notify-rust`'s `show()` can block on the platform notification
-/// bus, so it runs on a blocking thread; failures (e.g. no D-Bus session on
-/// a headless host) are swallowed.
+/// flags. Native notification commands can block on the desktop session, so
+/// they run on a blocking thread; missing commands and headless-session
+/// failures are intentionally swallowed.
 fn dispatch_desktop_notification(cfg: &crate::config::NotificationsConfig, event: &DaemonEvent) {
     if !cfg.desktop_enabled {
         return;
@@ -1367,10 +1367,26 @@ fn dispatch_desktop_notification(cfg: &crate::config::NotificationsConfig, event
         _ => return,
     };
     tokio::task::spawn_blocking(move || {
-        let _ = notify_rust::Notification::new()
-            .summary(&summary)
-            .body(&body)
-            .show();
+        #[cfg(target_os = "linux")]
+        let _ = std::process::Command::new("notify-send")
+            .args(["--app-name", "StriVo", &summary, &body])
+            .status();
+
+        #[cfg(target_os = "macos")]
+        {
+            let escape = |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
+            let script = format!(
+                "display notification \"{}\" with title \"{}\"",
+                escape(&body),
+                escape(&summary)
+            );
+            let _ = std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .status();
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let _ = (summary, body);
     });
 }
 

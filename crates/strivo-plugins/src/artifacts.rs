@@ -1,6 +1,7 @@
 //! Transcript-derived artifact executors for the Creator publish DAG.
 
 use std::any::Any;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -156,7 +157,16 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .and_then(|ext| ext.to_str())
             .unwrap_or("artifact")
     ));
-    std::fs::write(&tmp, bytes).map_err(|error| format!("write {}: {error}", tmp.display()))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&tmp)
+        .map_err(|error| format!("open {}: {error}", tmp.display()))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("write {}: {error}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("sync {}: {error}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|error| format!("publish {}: {error}", path.display()))
 }
 

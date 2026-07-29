@@ -56,16 +56,13 @@ hex = "0.4"
 base64 = "0.22"
 ring = "0.17"
 
-# Notifications
-notify-rust = "4"
-
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
 # Image processing
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 
 # Misc
 uuid = { version = "1", features = ["v4", "v5"] }

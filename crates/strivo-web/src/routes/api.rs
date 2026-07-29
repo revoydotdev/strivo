@@ -2812,6 +2812,25 @@ async fn pipeline_run(
     if check_key(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    match state.ipc.snapshot().await {
+        Ok(ServerMessage::StateSnapshot { recordings, .. }) => {
+            let Some(recording) = recordings.get(&body.recording_id) else {
+                return Problem::not_found("recording not found").into_response();
+            };
+            if !matches!(
+                recording.state,
+                strivo_core::recording::job::RecordingState::Finished
+            ) {
+                return Problem::bad_request("pipeline requires a finished recording")
+                    .into_response();
+            }
+            if !recording.output_path.is_file() {
+                return Problem::bad_request("recording media file is missing").into_response();
+            }
+        }
+        Ok(_) => return Problem::internal("unexpected daemon response").into_response(),
+        Err(error) => return Problem::unavailable(error.to_string()).into_response(),
+    }
     let pipeline = match body.template.as_str() {
         "creator_publish" => {
             strivo_core::pipeline::templates::creator_publish(body.recording_id, "manual")

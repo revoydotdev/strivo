@@ -28,6 +28,14 @@ semantic-search = []
 # The plugin host is the Creator Edition surface, so it always pulls in
 # core's `creator` feature (the Crunchr/Archiver config types live there).
 strivo-core = { path = "../..", features = ["creator"] }
+strivo-chapters = { path = "../chapters" }
+strivo-captions = { path = "../captions" }
+strivo-brandsafe = { path = "../brandsafe" }
+strivo-reuse = { path = "../reuse" }
+strivo-casebook = { path = "../casebook" }
+strivo-cuepoints = { path = "../cuepoints" }
+strivo-clipper = { path = "../clipper" }
+strivo-thumbnails = { path = "../thumbnails" }
 
 # Shared with host
 tokio = { version = "1", features = ["full"] }

@@ -154,12 +154,17 @@ Move corpus assembly server-side: hydrate a `dataviz::Corpus` by
 `recording | playlist | channel + date-range` from the CE-P1 store, behind an
 endpoint. Today `dataviz_run` exists but the SPA hand-assembles the corpus.
 
-### CE-P3 · Wire the DAG executor into the daemon 🟡→✅ *(highest CE leverage)*
-The `pipelines-dag` + `src/pipeline/` model/executor is complete and tested, but
-the daemon never drives it. Connect `PluginAction::SubmitPipeline` →
-`PipelineRegistry::submit` → dispatch ready stages to plugin verbs →
-`mark_stage_done`/`mark_stage_failed` → advance → emit live `StageState` over SSE.
-Honour the `ResourceLock` + `max_attempts`/backoff the model already encodes.
+### CE-P3 · Wire the DAG executor into the daemon ✅
+The daemon now owns a durable scheduler: validated submissions, dependency
+fan-out, plugin capability dispatch, GPU/API/file resource locks, bounded retry
+with backoff, cancellation, restart recovery, atomic snapshots, duplicate-run
+coalescing, and live `PipelineUpdated` events over SSE. Manual, RPC, and
+recording-finished Crunchr triggers share the executable Creator-intelligence
+template. The Creator publish template now executes ten durable stages across
+transcript intelligence and visual scene mining, with chapters, captions,
+brand-safety, highlight scoring, clip export, thumbnails, reuse drafts, and
+Casebook convergence. The Pro Pipelines page exposes real run
+history/cancel/retry and secured artifact downloads.
 
 ### CE-P4 · Extraction adapters — domain-agnostic 🟡→✅
 A common `Extractor` contract writing into the CE-P1 store. Have: transcription,
@@ -175,9 +180,11 @@ events × chat); incremental/streaming aggregation over SSE.
 Pick corpus → pick experiment → render via `chart_hint` → export CSV/JSON/PNG. A
 general composer (not per-plugin pages); chart-type auto-selection; saved views.
 
-### CE-P7 · Clip & export pipeline 🟡→✅
-Wire `clipper` + `captions` into `finalize_completion` and the CE-P3 DAG so
-*extract → select highlights → cut → caption → export* is one chain.
+### CE-P7 · Clip & export pipeline ✅
+The CE-P3 Creator DAG now drives
+*scene extraction → highlight selection → clip export + thumbnail generation*
+alongside the caption branch, and converges both into publish drafts and
+Casebook. Outputs are durable, inspectable, and downloadable from run history.
 
 ### CE-P8 · Real-time — "as fast as it is recorded" ⬜ *(headline promise)*
 Streaming incremental extraction *during* capture: extractors tail the live
@@ -195,12 +202,12 @@ template (highlight/retention rollups + publish-ready clips).
 | Item | State | Disposition |
 |---|---|---|
 | SPA edition awareness (creator UI hidden in PVR build) | ✅ | `creator_enabled` boot probe gates routes, nav, and actions |
-| Daemon doesn't drive the pipeline executor | 🟡 | **CE-P3** |
+| Daemon doesn't drive the pipeline executor | ✅ | durable daemon runtime + executable Crunchr adapter |
 | Per-plugin SQLite fragmentation; `insights` hardcoded `crunchr.db` reach-in | 🟡 | **CE-P1** |
 | `viewguard` `data_dir` double-nest (web probes two paths) | 🟡 | **CE-P1** |
 | Corpus assembled client-side, not server-side | 🟡 | **CE-P2** |
 | Licence JWT ES256 signature and claims verified | ✅ | ES256 signature, issuer, machine, expiry, licence expiry, and tier fail closed |
-| `crunchr::queue_recording` headless stub; auto-transcribe relies on the webui RPC verb — confirm it enqueues end-to-end | 🟡 | **CE-P3/P4** |
+| Crunchr headless auto-transcribe | ✅ | recording-finished events reach resident plugins and enqueue the same durable DAG used by manual runs |
 | ffprobe results uncached — re-analyses on every `/probe` | ⬜ | Perf; cache keyed by path+mtime |
 | Dynamic cdylib plugin loading coded but never triggered; no hot-reload | ⬜ | Deferred until third-party plugins are real |
 | `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |

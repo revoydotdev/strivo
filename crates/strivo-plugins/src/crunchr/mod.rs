@@ -13,7 +13,8 @@ use std::path::PathBuf;
 use strivo_core::config::CrunchrConfig;
 use strivo_core::events::DaemonEvent;
 use strivo_core::plugin::{
-    DaemonEventKind, Plugin, PluginAction, PluginContext, StatusSlot, VerbContext,
+    DaemonEventKind, Plugin, PluginAction, PluginContext, StageExecutionResult, StageFuture,
+    StatusSlot, VerbContext,
 };
 use strivo_core::recording::job::RecordingState;
 use uuid::Uuid;
@@ -61,34 +62,10 @@ impl CrunchrPlugin {
         }
     }
 
-    /// Build the async transcription task for one recording. Returns `None`
-    /// if config hasn't been captured yet (pre-init).
-    fn spawn_transcription(
-        &self,
-        id: Uuid,
-        channel_name: String,
-        title: String,
-        video_path: PathBuf,
-    ) -> Option<PluginAction> {
-        let cfg = self.cfg.clone()?;
-        let db_path = self.db_path.clone();
-        let cache_dir = self.cache_dir.clone();
-        Some(PluginAction::SpawnTask {
-            plugin_name: "crunchr",
-            future: Box::pin(async move {
-                let outcome = runner::process_recording(
-                    cfg,
-                    db_path,
-                    cache_dir,
-                    id,
-                    channel_name,
-                    title,
-                    video_path,
-                )
-                .await;
-                Box::new(outcome) as Box<dyn Any + Send>
-            }),
-        })
+    fn transcription_pipeline(&self, id: Uuid, trigger: &str) -> PluginAction {
+        PluginAction::SubmitPipeline(strivo_core::pipeline::templates::creator_intelligence(
+            id, trigger,
+        ))
     }
 }
 
@@ -155,18 +132,7 @@ impl Plugin for CrunchrPlugin {
                     .unwrap_or(false);
 
                 if is_tandem || crunchr_auto_marker {
-                    let title = rec
-                        .stream_title
-                        .clone()
-                        .unwrap_or_else(|| rec.channel_name.clone());
-                    if let Some(action) = self.spawn_transcription(
-                        *job_id,
-                        rec.channel_name.clone(),
-                        title,
-                        rec.output_path.clone(),
-                    ) {
-                        return vec![action];
-                    }
+                    return vec![self.transcription_pipeline(*job_id, "recording_finished")];
                 }
             }
         }
@@ -179,22 +145,65 @@ impl Plugin for CrunchrPlugin {
         }
         let mut actions = Vec::new();
         for id in selection {
-            if let Some(rec) = ctx.recordings.get(id) {
-                let title = rec
-                    .stream_title
-                    .clone()
-                    .unwrap_or_else(|| rec.channel_name.clone());
-                if let Some(action) = self.spawn_transcription(
-                    *id,
-                    rec.channel_name.clone(),
-                    title,
-                    rec.output_path.clone(),
-                ) {
-                    actions.push(action);
-                }
+            if ctx.recordings.contains_key(id) {
+                actions.push(self.transcription_pipeline(*id, "manual"));
             }
         }
         actions
+    }
+
+    fn execute_stage(
+        &mut self,
+        verb: &str,
+        selection: &[Uuid],
+        _payload: &serde_json::Value,
+        ctx: &VerbContext,
+    ) -> Option<StageFuture> {
+        if !self.enabled || !matches!(verb, "transcribe" | "retranscribe") {
+            return None;
+        }
+        let id = *selection.first()?;
+        let rec = ctx.recordings.get(&id)?;
+        let cfg = self.cfg.clone()?;
+        let db_path = self.db_path.clone();
+        let cache_dir = self.cache_dir.clone();
+        let channel_name = rec.channel_name.clone();
+        let title = rec
+            .stream_title
+            .clone()
+            .unwrap_or_else(|| channel_name.clone());
+        let video_path = rec.output_path.clone();
+        Some(Box::pin(async move {
+            let outcome = runner::process_recording(
+                cfg,
+                db_path,
+                cache_dir,
+                id,
+                channel_name,
+                title,
+                video_path,
+            )
+            .await;
+            match outcome.result {
+                Ok(summary) => Ok(StageExecutionResult {
+                    artifacts: vec![serde_json::json!({
+                        "kind": "transcript",
+                        "recording_id": id,
+                        "segments": summary.segments,
+                        "speakers": summary.speakers,
+                        "embedded_chunks": summary.embedded,
+                    })],
+                    actions: vec![PluginAction::Notify {
+                        title: "Crunchr: transcription complete".to_string(),
+                        body: format!(
+                            "{} segments · {} speakers · {} chunks vectorized",
+                            summary.segments, summary.speakers, summary.embedded
+                        ),
+                    }],
+                }),
+                Err(error) => Err(error.to_string()),
+            }
+        }))
     }
 
     fn on_plugin_event(&mut self, event: Box<dyn Any + Send>) -> Vec<PluginAction> {

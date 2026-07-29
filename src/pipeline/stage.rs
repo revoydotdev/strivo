@@ -10,6 +10,34 @@ use uuid::Uuid;
 pub type PipelineId = Uuid;
 pub type StageId = Uuid;
 
+/// Executable destination for a stage. The graph model stays host-owned while
+/// plugins own implementation details behind a stable `(plugin, verb)` pair.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageDispatch {
+    pub plugin: String,
+    pub verb: String,
+    #[serde(default)]
+    pub selection: Vec<Uuid>,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+impl StageDispatch {
+    pub fn new(plugin: impl Into<String>, verb: impl Into<String>) -> Self {
+        Self {
+            plugin: plugin.into(),
+            verb: verb.into(),
+            selection: Vec::new(),
+            payload: serde_json::Value::Null,
+        }
+    }
+
+    pub fn for_recording(mut self, recording_id: Uuid) -> Self {
+        self.selection = vec![recording_id];
+        self
+    }
+}
+
 /// What kind of work a stage performs. Identifier-only — the executor maps
 /// kinds to backends via a dispatch table maintained by plugins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +135,14 @@ pub struct Stage {
     /// Last estimated cost in cents. Plugins fill this; the executor
     /// aggregates per-pipeline for the budget warning.
     pub cost_cents_estimate: u32,
+    /// Daemon dispatch target. `None` is valid for a source/artifact node, but
+    /// an executable pending stage must carry a target.
+    #[serde(default)]
+    pub dispatch: Option<StageDispatch>,
+    /// Structured outputs emitted by the executor. Downstream plugins receive
+    /// these through the pipeline snapshot rather than private database reach-ins.
+    #[serde(default)]
+    pub artifacts: Vec<serde_json::Value>,
     /// Cancellation handle. Skipped during serialization — recreated when
     /// the pipeline reloads (M5 persistence).
     #[serde(skip, default = "CancellationToken::new")]
@@ -126,6 +162,8 @@ impl Stage {
             fallback_provider: None,
             requires: Vec::new(),
             cost_cents_estimate: 0,
+            dispatch: None,
+            artifacts: Vec::new(),
             cancel: CancellationToken::new(),
         }
     }
@@ -152,6 +190,11 @@ impl Stage {
 
     pub fn with_cost(mut self, cents: u32) -> Self {
         self.cost_cents_estimate = cents;
+        self
+    }
+
+    pub fn with_dispatch(mut self, dispatch: StageDispatch) -> Self {
+        self.dispatch = Some(dispatch);
         self
     }
 
@@ -195,6 +238,15 @@ pub struct Pipeline {
     pub state: PipelineState,
     pub started_at_secs: Option<u64>,
     pub completed_at_secs: Option<u64>,
+    /// Recording or other domain object this run is rooted in.
+    #[serde(default)]
+    pub subject_id: Option<Uuid>,
+    /// `manual`, `recording_finished`, `daily`, or a future trigger name.
+    #[serde(default = "default_trigger")]
+    pub trigger: String,
+    /// Last terminal error, suitable for UI display and audit logs.
+    #[serde(default)]
+    pub error: Option<String>,
     /// Sub-millisecond timestamp for stable ordering in the registry. Not
     /// persisted — `started_at_secs` is enough for the UI.
     #[serde(skip, default = "Instant::now")]
@@ -210,6 +262,9 @@ impl Pipeline {
             state: PipelineState::Pending,
             started_at_secs: None,
             completed_at_secs: None,
+            subject_id: None,
+            trigger: default_trigger(),
+            error: None,
             created_at: Instant::now(),
         }
     }
@@ -220,6 +275,16 @@ impl Pipeline {
         let id = stage.id;
         self.stages.push(stage);
         id
+    }
+
+    pub fn for_recording(mut self, recording_id: Uuid) -> Self {
+        self.subject_id = Some(recording_id);
+        self
+    }
+
+    pub fn with_trigger(mut self, trigger: impl Into<String>) -> Self {
+        self.trigger = trigger.into();
+        self
     }
 
     /// Reject cyclic dependencies. Called once at submission; the executor
@@ -278,4 +343,8 @@ impl Pipeline {
             PipelineState::Done | PipelineState::Failed | PipelineState::Cancelled
         )
     }
+}
+
+fn default_trigger() -> String {
+    "manual".to_string()
 }

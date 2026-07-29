@@ -273,9 +273,17 @@ pub async fn run_with_plugins_at(
     // PluginRpc over IPC can actually dispatch on_verb (it's idle after
     // init_all otherwise). tokio Mutex — dispatch is sync and brief.
     let registry = std::sync::Arc::new(tokio::sync::Mutex::new(host.registry));
-    let pipelines = std::sync::Arc::new(tokio::sync::Mutex::new(
-        crate::pipeline::PipelineRegistry::new(),
-    ));
+    let pipeline_path = AppConfig::data_dir().join("pipelines.json");
+    let pipeline_registry =
+        crate::pipeline::PipelineRegistry::open(&pipeline_path).unwrap_or_else(|error| {
+            tracing::error!(
+                %error,
+                path = %pipeline_path.display(),
+                "daemon: pipeline recovery failed; starting with an empty registry"
+            );
+            crate::pipeline::PipelineRegistry::new()
+        });
+    let pipelines = std::sync::Arc::new(tokio::sync::Mutex::new(pipeline_registry));
 
     // Open the persistence db (jobs / catalog / crunchr_queue) and recover any
     // jobs that were marked running when the daemon last died. Recovery is
@@ -304,6 +312,8 @@ pub async fn run_with_plugins_at(
 
     // Internal event channel
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DaemonEvent>();
+    let (pipeline_action_tx, mut pipeline_action_rx) =
+        mpsc::unbounded_channel::<crate::plugin::PluginAction>();
 
     // Recording command channel
     let (recording_tx, recording_rx) = mpsc::unbounded_channel();
@@ -614,6 +624,18 @@ pub async fn run_with_plugins_at(
         }
     }
 
+    let shared_recordings = Arc::new(tokio::sync::RwLock::new(state.recordings.clone()));
+    let pipeline_runtime = crate::pipeline::PipelineRuntime::spawn(
+        pipelines.clone(),
+        registry.clone(),
+        shared_recordings.clone(),
+        config.plugin_toggles.clone(),
+        event_tx.clone(),
+        pipeline_action_tx,
+        cancel.clone(),
+    );
+    pipeline_runtime.wake();
+
     // Set up Unix socket
     let socket_path = ipc::socket_path();
     // Remove stale socket
@@ -679,7 +701,7 @@ pub async fn run_with_plugins_at(
 
                         let client_config = config.clone();
                         let client_registry = registry.clone();
-                        let client_pipelines = pipelines.clone();
+                        let client_pipeline_runtime = pipeline_runtime.clone();
                         let client_recordings = state.recordings.clone();
                         let client_event_tx = event_tx.clone();
                         let client_persist_db = persist_db.clone();
@@ -694,7 +716,7 @@ pub async fn run_with_plugins_at(
                                 bulk_tx_ref,
                                 client_config,
                                 client_registry,
-                                client_pipelines,
+                                client_pipeline_runtime,
                                 client_recordings,
                                 client_event_tx,
                                 poll_notify,
@@ -716,6 +738,7 @@ pub async fn run_with_plugins_at(
                 {
                     let de = &event;
                     state.apply(de);
+                    *shared_recordings.write().await = state.recordings.clone();
                     // Fan out to all connected clients
                     let _ = broadcast_tx.send(de.clone());
 
@@ -727,6 +750,23 @@ pub async fn run_with_plugins_at(
                     // Outbound webhook — fire-and-forget POST on a spawned
                     // task; never blocks the event loop.
                     crate::webhook::dispatch_webhook(&config.notifications, de);
+
+                    // Plugins are daemon residents: lifecycle events must reach
+                    // them even when no web client is connected.
+                    let actions = {
+                        let mut plugins = registry.lock().await;
+                        let ctx = crate::plugin::VerbContext {
+                            recordings: &state.recordings,
+                            plugin_toggles: &config.plugin_toggles,
+                        };
+                        plugins.dispatch_event(de, &ctx)
+                    };
+                    process_daemon_plugin_actions(
+                        actions,
+                        &registry,
+                        &pipeline_runtime,
+                        &event_tx,
+                    );
 
                     // Auto VOD backfill: when a Twitch live recording
                     // ends cleanly, schedule a delayed download of the
@@ -773,6 +813,14 @@ pub async fn run_with_plugins_at(
                     }
                 }
             }
+            Some(action) = pipeline_action_rx.recv() => {
+                process_daemon_plugin_actions(
+                    vec![action],
+                    &registry,
+                    &pipeline_runtime,
+                    &event_tx,
+                );
+            }
             _ = cancel.cancelled() => {
                 tracing::info!("Daemon shutting down");
                 break;
@@ -795,7 +843,7 @@ async fn handle_client(
     bulk_tx: Option<mpsc::UnboundedSender<crate::recording::bulk::BulkCommand>>,
     config: AppConfig,
     registry: Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
-    pipelines: Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
+    pipeline_runtime: crate::pipeline::PipelineRuntime,
     recordings: HashMap<Uuid, RecordingJob>,
     event_tx: mpsc::UnboundedSender<DaemonEvent>,
     poll_notify: Option<Arc<tokio::sync::Notify>>,
@@ -1166,7 +1214,23 @@ async fn handle_client(
                     action_count = actions.len(),
                     "daemon: dispatched plugin verb"
                 );
-                process_daemon_plugin_actions(actions, &registry, &pipelines, &event_tx);
+                process_daemon_plugin_actions(actions, &registry, &pipeline_runtime, &event_tx);
+            }
+            ClientMessage::SubmitPipeline(pipeline) => {
+                if let Err(error) = pipeline_runtime.submit(pipeline).await {
+                    let _ =
+                        event_tx.send(DaemonEvent::Error(format!("pipeline rejected: {error}")));
+                }
+            }
+            ClientMessage::CancelPipeline { pipeline_id } => {
+                pipeline_runtime.cancel(pipeline_id).await;
+            }
+            ClientMessage::RetryPipelineStage { stage_id } => {
+                if !pipeline_runtime.retry(stage_id).await {
+                    let _ = event_tx.send(DaemonEvent::Error(format!(
+                        "pipeline stage not found: {stage_id}"
+                    )));
+                }
             }
             ClientMessage::Unknown => {
                 // Forward-compatibility: a message variant added in a newer
@@ -1192,7 +1256,7 @@ async fn handle_client(
 fn process_daemon_plugin_actions(
     actions: Vec<crate::plugin::PluginAction>,
     registry: &Arc<tokio::sync::Mutex<crate::plugin::registry::PluginRegistry>>,
-    pipelines: &Arc<tokio::sync::Mutex<crate::pipeline::PipelineRegistry>>,
+    pipeline_runtime: &crate::pipeline::PipelineRuntime,
     event_tx: &mpsc::UnboundedSender<DaemonEvent>,
 ) {
     use crate::plugin::PluginAction as PA;
@@ -1212,7 +1276,7 @@ fn process_daemon_plugin_actions(
                 future,
             } => {
                 let reg = registry.clone();
-                let pipes = pipelines.clone();
+                let runtime = pipeline_runtime.clone();
                 let etx = event_tx.clone();
                 tokio::spawn(async move {
                     let result = future.await;
@@ -1222,14 +1286,14 @@ fn process_daemon_plugin_actions(
                     };
                     // Recurse: the follow-up actions may spawn further
                     // stages (e.g. transcription pipeline steps).
-                    process_daemon_plugin_actions(next, &reg, &pipes, &etx);
+                    process_daemon_plugin_actions(next, &reg, &runtime, &etx);
                 });
             }
             PA::SubmitPipeline(pipeline) => {
-                let pipes = pipelines.clone();
+                let runtime = pipeline_runtime.clone();
                 let etx = event_tx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = pipes.lock().await.submit(pipeline) {
+                    if let Err(e) = runtime.submit(pipeline).await {
                         let _ =
                             etx.send(DaemonEvent::Error(format!("plugin pipeline rejected: {e}")));
                     }
@@ -1239,9 +1303,9 @@ fn process_daemon_plugin_actions(
                 stage_id,
                 new_state,
             } => {
-                let pipes = pipelines.clone();
+                let runtime = pipeline_runtime.clone();
                 tokio::spawn(async move {
-                    pipes.lock().await.update_stage(stage_id, new_state);
+                    runtime.update_stage(stage_id, new_state).await;
                 });
             }
             PA::UpdateConfig { plugin_name, .. } => {

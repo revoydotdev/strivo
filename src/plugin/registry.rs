@@ -263,6 +263,36 @@ impl PluginRegistry {
         Vec::new()
     }
 
+    pub fn execute_stage(
+        &mut self,
+        plugin_name: &str,
+        verb: &str,
+        selection: &[uuid::Uuid],
+        payload: &serde_json::Value,
+        ctx: &crate::plugin::VerbContext,
+    ) -> Option<crate::plugin::StageFuture> {
+        if ctx
+            .plugin_toggles
+            .get(plugin_name)
+            .is_some_and(|toggle| !toggle.enabled)
+        {
+            return None;
+        }
+        let index = self
+            .plugins
+            .iter()
+            .position(|plugin| plugin.name() == plugin_name)?;
+        if self
+            .statuses
+            .get(index)
+            .is_some_and(|status| !matches!(status, PluginStatus::Ready))
+        {
+            return None;
+        }
+        let plugin = self.plugins.get_mut(index)?;
+        plugin.execute_stage(verb, selection, payload, ctx)
+    }
+
     /// Collect all plugin commands for the host's command surface.
     pub fn all_commands(&self) -> Vec<(&'static str, PluginCommand)> {
         let mut cmds = Vec::new();

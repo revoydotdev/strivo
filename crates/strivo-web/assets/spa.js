@@ -339,6 +339,16 @@ const API = {
     API._fetch(`/plugins/branding/${encodeURIComponent(recordingId)}`, { method: "POST", body: spec }),
   viewguardTrend: () => API._fetch("/plugins/viewguard/trend"),
   pipelinesDag: () => API._fetch("/pipelines/dag"),
+  pipelineRuns: () => API._fetch("/pipelines/runs"),
+  pipelineRun: (recordingId, template = "creator_publish") =>
+    API._fetch("/pipelines/runs", {
+      method: "POST",
+      body: { recording_id: recordingId, template },
+    }),
+  pipelineCancel: (id) =>
+    API._fetch(`/pipelines/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  pipelineRetryStage: (id) =>
+    API._fetch(`/pipelines/stages/${encodeURIComponent(id)}/retry`, { method: "POST" }),
   marketplaceCatalog: () => API._fetch("/marketplace/catalog"),
   /* @creator-end */
   // Multi-stream tile layout for the watch player. Core (single + multi
@@ -3370,14 +3380,17 @@ const PIPELINE_NODE_ROUTES = new Set([
 async function renderPipelines() {
   let payload = { pipelines: [] };
   let recs = { recordings: [] };
+  let runPayload = { runs: [] };
   try {
-    [payload, recs] = await Promise.all([
+    [payload, recs, runPayload] = await Promise.all([
       API.pipelinesDag(),
       API.recordings().catch(() => ({ recordings: [] })),
+      API.pipelineRuns().catch(() => ({ runs: [] })),
     ]);
   } catch (_) {}
   root.removeAttribute("aria-busy");
   const pipelines = payload.pipelines || [];
+  const runs = (runPayload.runs || []).slice().reverse();
   // Cache finished recordings so the Run-on-… picker can list them.
   const finishedRecs = (recs.recordings || [])
     .filter((r) => stateClassName(r.state) === "finished" && r.file_exists !== false)
@@ -3446,10 +3459,7 @@ async function renderPipelines() {
                 title="${availNodes} of ${totalNodes} stages available">
             ${availNodes}/${totalNodes} ready
           </span>
-          <button class="sm pl-run-btn" data-pipe="${idx}"
-                  ${finishedRecs.length === 0 ? "disabled title=\"No finished recordings available yet\"" : ""}>
-            ▶ Run on…
-          </button>
+          <span class="pg-cap-hint">Blueprint</span>
         </div>
       </header>
       <div class="pl-pipe-bar"><span style="width:${pct}%"></span></div>
@@ -3461,23 +3471,83 @@ async function renderPipelines() {
   root.innerHTML = chrome(`
     <h1 class="page-title">Pipelines</h1>
     <p class="page-subtitle">
-      Cross-plugin pipelines. Every artefact the DAW-vision toolkit ships rides one of these chains.
-      Click any node to open the plugin · "Run on…" picks a recording and opens it in the appropriate view.
+      Durable, daemon-owned Creator workflows. Runs survive restarts, respect
+      resource locks, retry with backoff, and stream every transition live.
     </p>
+    <section class="cfg-card pl-pipe-card">
+      <header class="pl-pipe-head">
+        <div>
+          <h2 class="cfg-title">Ultimate creator publish</h2>
+          <p class="pg-cap-hint">Transcript intelligence + visual scene mining → captions, chapters, safety, highlights, clips, thumbnails → publish drafts + Casebook. Ten durable stages, real downloadable artifacts.</p>
+        </div>
+        <button class="btn-primary sm" id="pl-run-ultimate"
+                ${finishedRecs.length === 0 ? "disabled title=\"No finished recordings available yet\"" : ""}>▶ New run</button>
+      </header>
+    </section>
+    <section class="cfg-card">
+      <h2 class="cfg-title">Runs <span class="pg-cap-hint">${runs.length} durable run${runs.length === 1 ? "" : "s"}</span></h2>
+      <div class="pg-list">
+        ${runs.slice(0, 20).map((run) => {
+          const stages = run.stages || [];
+          const done = stages.filter((stage) => stage.state === "Done" || stage.state === "Skipped").length;
+          const state = typeof run.state === "string" ? run.state : Object.keys(run.state || {})[0] || "Pending";
+          const failed = stages.find((stage) => stage.state && (stage.state.Exhausted || stage.state.Failed));
+          const stageRows = stages.map((stage) => {
+            const stageState = typeof stage.state === "string"
+              ? stage.state
+              : Object.keys(stage.state || {})[0] || "Pending";
+            const artifacts = (stage.artifacts || []).map((artifact, artifactIndex) => {
+              const path = String(artifact.path || "");
+              const leaf = path.split(/[\\/]/).pop() || artifact.kind || "artifact";
+              const href = `/api/v1/pipelines/runs/${encodeURIComponent(run.id)}/stages/${encodeURIComponent(stage.id)}/artifacts/${artifactIndex}`;
+              return `<a class="pl-cap pl-cap-produces" href="${href}" download title="Download ${htmlEscape(path)}">${htmlEscape(artifact.kind || leaf)} · ${htmlEscape(leaf)}</a>`;
+            }).join("");
+            return `<div class="task-row">
+              <div class="task-info">
+                <span class="task-name">${htmlEscape(stage.name)}</span>
+                <span class="task-cadence">${htmlEscape(stage.kind && stage.kind.Custom ? stage.kind.Custom : stageState)}</span>
+                ${artifacts ? `<span class="pl-node-caps">${artifacts}</span>` : ""}
+              </div>
+              <span class="cfg-badge ${stageState === "Done" ? "ok" : stageState === "Exhausted" ? "bad" : ""}">${htmlEscape(stageState)}</span>
+            </div>`;
+          }).join("");
+          return `<div class="pg-row pl-run-row" data-run-id="${htmlEscape(run.id)}">
+            <div class="pg-row-main">
+              <strong>${htmlEscape(run.name)}</strong>
+              <span class="pg-cap-hint">${done}/${stages.length} stages · ${htmlEscape(run.trigger || "manual")}</span>
+              ${failed ? `<span class="error">${htmlEscape((failed.state.Exhausted || failed.state.Failed).error || "stage failed")}</span>` : ""}
+              <details class="pl-run-stages">
+                <summary>${stages.length} stage${stages.length === 1 ? "" : "s"} · ${(stages.flatMap((stage) => stage.artifacts || [])).length} artifact${stages.flatMap((stage) => stage.artifacts || []).length === 1 ? "" : "s"}</summary>
+                ${stageRows}
+              </details>
+            </div>
+            <span class="cfg-badge ${state === "Done" ? "ok" : state === "Failed" ? "bad" : ""}">${htmlEscape(state)}</span>
+            ${state === "Running" || state === "Pending" ? `<button class="sm pl-cancel" data-run="${htmlEscape(run.id)}">Cancel</button>` : ""}
+            ${failed ? `<button class="sm pl-retry" data-stage="${htmlEscape(failed.id)}">Retry</button>` : ""}
+          </div>`;
+        }).join("") || '<div class="empty sm">No runs yet. Pick a finished recording to start the first workflow.</div>'}
+      </div>
+    </section>
+    <h2 class="cfg-title">Workflow blueprints <span class="pg-cap-hint">trajectory and capability topology</span></h2>
     ${cards || '<div class="empty">No pipelines defined.</div>'}
   `);
   setupChromeHandlers();
 
-  // Run-on-… picker: small overlay listing the 12 most recent finished
-  // recordings. On pick we open the Info modal — that surface already
-  // mounts every per-capability run button (Generate subtitles,
-  // Detect cuepoints, Generate chapters, Render EDL, …), so each
-  // pipeline-card's CTA reaches the right surface without us having to
-  // model 'run pipeline' as a single server call.
-  document.querySelectorAll(".pl-run-btn[data-pipe]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.disabled) return;
-      openRecordingPickerForPipeline(pipelines[parseInt(btn.dataset.pipe, 10)], finishedRecs);
+  document.getElementById("pl-run-ultimate")?.addEventListener("click", () => {
+    openRecordingPickerForPipeline({ name: "Ultimate creator publish", id: "creator_publish" }, finishedRecs);
+  });
+  document.querySelectorAll(".pl-cancel").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await API.pipelineCancel(button.dataset.run);
+      Toast.success("Pipeline cancellation requested");
+      renderPipelines();
+    });
+  });
+  document.querySelectorAll(".pl-retry").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await API.pipelineRetryStage(button.dataset.stage);
+      Toast.success("Stage re-queued");
+      renderPipelines();
     });
   });
 }
@@ -3491,7 +3561,7 @@ function openRecordingPickerForPipeline(pipe, recs) {
         <h2>Run "${htmlEscape(pipe.name)}" on a recording</h2>
         <button class="modal-close" data-action="modal-close" aria-label="Close">✕</button>
       </header>
-      <p class="pg-cap-hint">Pick a recording. Its Info panel surfaces a button for every stage's plugin — we open straight to it so you can fire the chain.</p>
+      <p class="pg-cap-hint">Pick a finished recording. The daemon queues the run immediately and keeps it durable across restarts.</p>
       <div class="pl-picker-list">
         ${recs.slice(0, 12).map((r) => `
           <button class="pl-picker-row" data-job-id="${htmlEscape(r.id)}" type="button">
@@ -3517,10 +3587,16 @@ function openRecordingPickerForPipeline(pipe, recs) {
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector("[data-action=modal-close]").addEventListener("click", close);
   overlay.querySelectorAll(".pl-picker-row").forEach((row) => {
-    row.addEventListener("click", () => {
+    row.addEventListener("click", async () => {
       const id = row.dataset.jobId;
       close();
-      openRecordingInfo(id);
+      try {
+        await API.pipelineRun(id, pipe.id || "creator_publish");
+        Toast.success(`Queued ${pipe.name}`);
+        renderPipelines();
+      } catch (error) {
+        Toast.error(`Pipeline failed to queue: ${error.message}`);
+      }
     });
   });
 }
@@ -12262,7 +12338,7 @@ const PAGE_HINTS = {
   library:    "Live channels in the rail + the current capture dashboard. Click any rail row to see channel detail.",
   recordings: "Every recording past + present. Tick rows to enable bulk actions, click headers to sort, chips filter by state.",
   schedule:   "Per-channel record-when-live + auto-download switches. Capture limits + disk gauge live up top.",
-  pipelines:  "Cross-plugin pipelines as DAGs. Click any node to open the plugin, or Run on a recording to fire the chain.",
+  pipelines:  "Durable Creator workflows with live state, cancellation, retries, restart recovery, and capability blueprints.",
   watch:      "Tile any subset of currently live channels. Unmute one tile at a time; Shift+I shows shortcuts.",
   chat:       "Twitch IRC over WSS. Tab strip picks a room; filter chips narrow live. BTTV globals + Twitch emotes render as images.",
   plugins:    "Plugin hub. Each card opens the plugin; ⚙ deep-links to the per-plugin Settings panel.",
@@ -12582,6 +12658,9 @@ events.on((event) => {
         playlists: pl.playlists || [],
       });
     }
+  }
+  if (event.PipelineUpdated && currentRoute() === "pipelines") {
+    renderPipelines().catch(() => {});
   }
 });
 events.start();

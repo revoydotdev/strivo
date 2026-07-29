@@ -7,21 +7,22 @@
 //! and declares resource locks (GPU, per-provider rate limits) so concurrent
 //! pipelines don't trample each other.
 //!
-//! M4 MVP scope:
-//!   - in-memory registry (no `~/.local/share/strivo/pipelines/<uuid>.json`
-//!     persistence yet — first crash loses queue; tracked for M5).
-//!   - cooperative cancellation only (poll the token between awaits).
-//!   - resource locks via a shared [`ResourceRegistry`].
-//!   - retries: per-stage `max_attempts` with exponential backoff (5/10/30 s).
+//! The daemon runtime persists the registry, re-queues interrupted work,
+//! dispatches dependency-ready stages through plugin capability executors,
+//! coordinates resource locks, and emits live state snapshots.
 //!
-//! See `docs/PIPELINE.md` and the user-facing UX plan (Part 6, X1) for the
-//! design context.
+//! See `docs/PIPELINE.md` for the execution contract and growth model.
 
 pub mod executor;
+pub mod runtime;
 pub mod stage;
+pub mod templates;
 
 pub use executor::{PipelineRegistry, ResourceRegistry};
-pub use stage::{Pipeline, PipelineId, PipelineState, Stage, StageId, StageKind, StageState};
+pub use runtime::PipelineRuntime;
+pub use stage::{
+    Pipeline, PipelineId, PipelineState, Stage, StageDispatch, StageId, StageKind, StageState,
+};
 
 #[cfg(test)]
 mod tests {

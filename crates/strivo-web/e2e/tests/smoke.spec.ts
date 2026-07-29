@@ -178,6 +178,25 @@ test("command palette opens with Ctrl+K and navigates", async ({ page }) => {
   await expect(page).toHaveURL(/#\/recordings/);
 });
 
+test("creator pipeline queues a durable run from a finished recording", async ({ page }) => {
+  await page.goto("/app#/pipelines");
+  await expect(page.getByRole("heading", { name: "Ultimate creator publish" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Runs/ })).toBeVisible();
+  await page.locator(".pl-run-stages summary").click();
+  const artifact = page.getByRole("link", { name: /casebook_markdown/ });
+  await expect(artifact).toHaveAttribute(
+    "href",
+    "/api/v1/pipelines/runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/stages/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/artifacts/0",
+  );
+  await expect(artifact).toHaveAttribute("download", "");
+  await page.locator("#pl-run-ultimate").click();
+  await expect(page.getByRole("heading", { name: /Run "Ultimate creator publish"/ })).toBeVisible();
+  await page.locator(".pl-picker-row", { hasText: "Zebra stream" }).click();
+  await expect(page.locator(".toast-region[aria-live=polite]")).toContainText(
+    "Queued Ultimate creator publish",
+  );
+});
+
 // ── Plugins (hub + per-plugin views) ──────────────────────────────────
 
 test("plugins hub lists the four first-party plugins", async ({ page }) => {

@@ -10,7 +10,7 @@ use crate::recording::RecordingCommand;
 
 /// Wire protocol version.  Bump when a backward-incompatible change is made;
 /// peers log a warning when the versions differ but continue to operate.
-pub const IPC_PROTOCOL_VERSION: u32 = 1;
+pub const IPC_PROTOCOL_VERSION: u32 = 2;
 
 /// Messages sent from TUI client to daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +48,14 @@ pub enum ClientMessage {
         #[serde(default)]
         payload: serde_json::Value,
     },
+    /// Submit an executable Creator DAG to the daemon-owned scheduler.
+    SubmitPipeline(crate::pipeline::Pipeline),
+    CancelPipeline {
+        pipeline_id: crate::pipeline::PipelineId,
+    },
+    RetryPipelineStage {
+        stage_id: crate::pipeline::StageId,
+    },
     /// Start or stop a per-channel bulk back-catalog download (task #71).
     BulkDownload {
         channel_id: String,
@@ -61,7 +69,9 @@ pub enum ClientMessage {
     /// Request the playlists for a YouTube channel, to populate the
     /// bulk-download scope picker (task #73). Answered asynchronously
     /// with DaemonEvent::PlaylistList.
-    ListPlaylists { channel_id: String },
+    ListPlaylists {
+        channel_id: String,
+    },
     /// Pull a single Patreon video post on demand (task #75 — webui
     /// equivalent of the TUI's PullPatreonPost). The daemon builds the
     /// output path from its config, so the webui doesn't have to.
@@ -113,7 +123,9 @@ pub enum ClientMessage {
     /// Hard-delete a finished or errored recording: move the file into the
     /// 7-day trash and drop the jobs.db row. Active recordings are rejected;
     /// the webui must Stop them first.
-    DeleteRecording { job_id: Uuid },
+    DeleteRecording {
+        job_id: Uuid,
+    },
     /// Bulk-delete every recording whose state is `failed` or `interrupted`.
     /// Same trash-then-drop semantics as `DeleteRecording`.
     ClearErroredRecordings,

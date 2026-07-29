@@ -131,8 +131,11 @@ struct Segment {
 
 fn read_segments(conn: &Connection, recording_id: &str) -> Result<Vec<Segment>> {
     let mut stmt = conn.prepare(
-        "SELECT start_sec, end_sec, text FROM segments
-         WHERE recording_id = ?1 ORDER BY start_sec",
+        "SELECT s.start_sec, s.end_sec, s.text
+         FROM segments s
+         JOIN videos v ON v.id = s.video_id
+         WHERE v.recording_id = ?1
+         ORDER BY s.start_sec",
     )?;
     let rows = stmt
         .query_map([recording_id], |r| {

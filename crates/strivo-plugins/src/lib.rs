@@ -10,6 +10,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod archiver;
+pub mod artifacts;
 pub mod crunchr;
 pub mod dirs;
 pub mod editor;

@@ -1221,6 +1221,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 #[cfg(feature = "creator")]
 fn register_first_party_plugins(registry: &mut plugin::registry::PluginRegistry) {
     registry.register(Box::new(strivo_plugins::crunchr::CrunchrPlugin::new()));
+    registry.register(Box::new(strivo_plugins::artifacts::ArtifactPlugin::new()));
     registry.register(Box::new(strivo_plugins::archiver::ArchiverPlugin::new()));
     registry.register(Box::new(strivo_plugins::insights::InsightsPlugin::new()));
     registry.register(Box::new(strivo_plugins::editor::EditorPlugin::new()));

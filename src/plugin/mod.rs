@@ -11,6 +11,19 @@ use crate::events::DaemonEvent;
 /// Unique identifier for a plugin-contributed pane.
 pub type PaneId = &'static str;
 
+/// Result returned by a plugin-owned DAG stage executor.
+#[derive(Default)]
+pub struct StageExecutionResult {
+    /// Structured artifact descriptors (path, MIME type, signal-store key,
+    /// etc.). The host persists these on the stage for downstream consumers.
+    pub artifacts: Vec<serde_json::Value>,
+    /// Follow-up host actions such as notifications.
+    pub actions: Vec<PluginAction>,
+}
+
+pub type StageFuture =
+    Pin<Box<dyn Future<Output = Result<StageExecutionResult, String>> + Send + 'static>>;
+
 /// Item types the actions popup knows about. Plugins use this to
 /// scope verbs to "act on a selected recording" / "act on a transcript
 /// row" etc. (D5+X5.)
@@ -349,6 +362,7 @@ pub enum DaemonEventKind {
     ChannelVods,
     ChannelResolved,
     ScheduleFired,
+    PipelineUpdated,
     Error,
 }
 
@@ -374,6 +388,7 @@ impl DaemonEventKind {
             DaemonEvent::ChannelVods { .. } => Self::ChannelVods,
             DaemonEvent::ChannelResolved { .. } => Self::ChannelResolved,
             DaemonEvent::ScheduleFired { .. } => Self::ScheduleFired,
+            DaemonEvent::PipelineUpdated { .. } => Self::PipelineUpdated,
             DaemonEvent::Error(_) => Self::Error,
         }
     }
@@ -451,6 +466,21 @@ pub trait Plugin: Send {
         _ctx: &VerbContext,
     ) -> Vec<PluginAction> {
         Vec::new()
+    }
+
+    /// Execute a host-owned DAG stage. Returning `None` means this plugin does
+    /// not implement the requested verb; the host fails the stage explicitly.
+    ///
+    /// Implementations must be idempotent for a given stage/recording because
+    /// interrupted `Running` stages are re-queued after daemon restart.
+    fn execute_stage(
+        &mut self,
+        _verb: &str,
+        _selection: &[uuid::Uuid],
+        _payload: &serde_json::Value,
+        _ctx: &VerbContext,
+    ) -> Option<StageFuture> {
+        None
     }
 
     /// Commands this plugin contributes (for help overlay and keybinding dispatch).

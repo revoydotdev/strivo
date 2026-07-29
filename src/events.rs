@@ -116,5 +116,10 @@ pub enum DaemonEvent {
         job_id: Uuid,
         duration_secs: u64,
     },
+    /// Durable Creator pipeline snapshot. Emitted on every material state
+    /// transition so web clients can repaint without polling.
+    PipelineUpdated {
+        pipeline: crate::pipeline::Pipeline,
+    },
     Error(String),
 }

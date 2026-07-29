@@ -260,6 +260,26 @@ const server = createServer(async (req, res) => {
           disk_budget_reserved_gb: 20,
         },
       });
+    if (p === "/pipelines/runs" && req.method === "GET")
+      return json(res, 200, {
+        runs: [{
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          name: "Ultimate creator publish",
+          trigger: "recording-finished",
+          state: "Done",
+          stages: [{
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            name: "Assemble Casebook",
+            kind: { Custom: "casebook.compose" },
+            state: "Done",
+            artifacts: [{
+              kind: "casebook_markdown",
+              path: "/var/lib/strivo/plugins/artifacts/recording/casebook.md",
+              mime: "text/markdown",
+            }],
+          }],
+        }],
+      });
 
     // ── Plugin data surface (read-only) ──────────────────────────────
     if (p === "/plugins")

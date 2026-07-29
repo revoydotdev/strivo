@@ -2765,6 +2765,211 @@ async fn pipelines_dag() -> impl IntoResponse {
     Json(json!({ "pipelines": payload }))
 }
 
+#[cfg(feature = "creator")]
+async fn pipeline_runs(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let path = strivo_core::config::AppConfig::data_dir().join("pipelines.json");
+    let runs: Vec<strivo_core::pipeline::Pipeline> = match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(runs) => runs,
+            Err(error) => {
+                return Problem::internal(format!("decode pipeline registry: {error}"))
+                    .into_response()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            return Problem::internal(format!("read pipeline registry: {error}")).into_response()
+        }
+    };
+    Json(json!({ "runs": runs })).into_response()
+}
+
+#[cfg(feature = "creator")]
+#[derive(Debug, Deserialize)]
+struct PipelineRunPayload {
+    recording_id: Uuid,
+    #[serde(default = "default_pipeline_template")]
+    template: String,
+}
+
+#[cfg(feature = "creator")]
+fn default_pipeline_template() -> String {
+    "creator_publish".to_string()
+}
+
+/// Submit the first fully executable Creator workflow. Crunchr's runner owns
+/// extraction, transcription, diarisation, chunking, embedding, and analysis;
+/// the daemon owns durability, retries, locking, cancellation, and observability.
+#[cfg(feature = "creator")]
+async fn pipeline_run(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(body): Json<PipelineRunPayload>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let pipeline = match body.template.as_str() {
+        "creator_publish" => {
+            strivo_core::pipeline::templates::creator_publish(body.recording_id, "manual")
+        }
+        "creator_intelligence" => {
+            strivo_core::pipeline::templates::creator_intelligence(body.recording_id, "manual")
+        }
+        _ => {
+            return Problem::bad_request(format!(
+                "pipeline template '{}' has no executable adapter",
+                body.template
+            ))
+            .into_response()
+        }
+    };
+    let pipeline_id = pipeline.id;
+    match state
+        .ipc
+        .send_command(ClientMessage::SubmitPipeline(pipeline))
+        .await
+    {
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(json!({ "status": "queued", "pipeline_id": pipeline_id })),
+        )
+            .into_response(),
+        Err(error) => Problem::unavailable(error.to_string()).into_response(),
+    }
+}
+
+#[cfg(feature = "creator")]
+async fn pipeline_cancel(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    match state
+        .ipc
+        .send_command(ClientMessage::CancelPipeline { pipeline_id: id })
+        .await
+    {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(error) => Problem::unavailable(error.to_string()).into_response(),
+    }
+}
+
+#[cfg(feature = "creator")]
+async fn pipeline_stage_retry(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    match state
+        .ipc
+        .send_command(ClientMessage::RetryPipelineStage { stage_id: id })
+        .await
+    {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(error) => Problem::unavailable(error.to_string()).into_response(),
+    }
+}
+
+#[cfg(feature = "creator")]
+async fn pipeline_artifact_download(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path((pipeline_id, stage_id, index)): Path<(Uuid, Uuid, usize)>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let registry_path = strivo_core::config::AppConfig::data_dir().join("pipelines.json");
+    let bytes = match std::fs::read(&registry_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Problem::not_found(format!("pipeline registry: {error}")).into_response()
+        }
+    };
+    let runs: Vec<strivo_core::pipeline::Pipeline> = match serde_json::from_slice(&bytes) {
+        Ok(runs) => runs,
+        Err(error) => {
+            return Problem::internal(format!("decode pipeline registry: {error}")).into_response()
+        }
+    };
+    let Some(artifact) = runs
+        .iter()
+        .find(|run| run.id == pipeline_id)
+        .and_then(|run| run.stages.iter().find(|stage| stage.id == stage_id))
+        .and_then(|stage| stage.artifacts.get(index))
+    else {
+        return Problem::not_found("pipeline artifact not found").into_response();
+    };
+    let Some(raw_path) = artifact.get("path").and_then(|value| value.as_str()) else {
+        return Problem::not_found("artifact has no local path").into_response();
+    };
+    let allowed_root = strivo_core::config::AppConfig::data_dir()
+        .join("plugins")
+        .join("artifacts");
+    let canonical_root = match std::fs::canonicalize(&allowed_root) {
+        Ok(path) => path,
+        Err(error) => return Problem::not_found(format!("artifact root: {error}")).into_response(),
+    };
+    let canonical_path = match std::fs::canonicalize(raw_path) {
+        Ok(path) => path,
+        Err(error) => return Problem::not_found(format!("artifact file: {error}")).into_response(),
+    };
+    if !canonical_path.starts_with(&canonical_root) {
+        return Problem::bad_request("artifact path escapes the Creator artifact root")
+            .into_response();
+    }
+    let metadata = match std::fs::metadata(&canonical_path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return Problem::bad_request("artifact is not a file").into_response(),
+        Err(error) => {
+            return Problem::not_found(format!("artifact metadata: {error}")).into_response()
+        }
+    };
+    let file = match tokio::fs::File::open(&canonical_path).await {
+        Ok(file) => file,
+        Err(error) => return Problem::internal(format!("open artifact: {error}")).into_response(),
+    };
+    let mime = artifact
+        .get("mime")
+        .and_then(|value| value.as_str())
+        .unwrap_or("application/octet-stream");
+    let filename = canonical_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    let mut response = axum::response::Response::new(body);
+    *response.status_mut() = StatusCode::OK;
+    if let Ok(value) = axum::http::HeaderValue::from_str(mime) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_TYPE, value);
+    }
+    if let Ok(value) = axum::http::HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        filename.replace(['"', '\\'], "_")
+    )) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_DISPOSITION, value);
+    }
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_LENGTH,
+        axum::http::HeaderValue::from(metadata.len()),
+    );
+    response
+}
+
 pub fn router() -> Router<AppState> {
     #[allow(unused_mut)]
     let mut r = Router::new()
@@ -2851,6 +3056,19 @@ pub fn router() -> Router<AppState> {
     {
         r = r
             .route("/api/v1/pipelines/dag", get(pipelines_dag))
+            .route(
+                "/api/v1/pipelines/runs",
+                get(pipeline_runs).post(pipeline_run),
+            )
+            .route("/api/v1/pipelines/runs/{id}/cancel", post(pipeline_cancel))
+            .route(
+                "/api/v1/pipelines/stages/{id}/retry",
+                post(pipeline_stage_retry),
+            )
+            .route(
+                "/api/v1/pipelines/runs/{pipeline_id}/stages/{stage_id}/artifacts/{index}",
+                get(pipeline_artifact_download),
+            )
             .route(
                 "/api/v1/pipelines/chains",
                 get(pipelines_chains_list).post(pipelines_chains_save),

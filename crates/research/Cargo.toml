@@ -1,0 +1,22 @@
+[package]
+name = "strivo-research"
+version = "0.1.0"
+edition = "2021"
+description = "Canonical qualitative-research and multimodal signal store for Strivo Pro"
+authors = ["revelri <slrevoy@mailbox.org>"]
+license = "MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

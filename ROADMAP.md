@@ -135,6 +135,12 @@ The stale ElegantFin reference CSS under `docs/reference/` was archived.
 
 ## Creator Edition roadmap — the analytics engine
 
+The exhaustive execution plan for the stream-native qualitative research
+platform now lives in
+[`docs/RESEARCH-PLATFORM-ROADMAP.md`](docs/RESEARCH-PLATFORM-ROADMAP.md).
+It expands CE-P1 through CE-P8 into versioned delivery phases with TDD,
+accessibility, privacy, migration, performance, and release gates.
+
 The phased engine plan, preserved. This is the Creator Edition's destination; it
 builds on the PVR substrate and ships only under `--features creator`. Each phase
 lists concrete blockers; none is ✅ until wired end-to-end with tests.

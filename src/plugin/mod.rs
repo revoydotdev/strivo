@@ -561,6 +561,14 @@ pub mod capability {
     pub const FRAUD_DETECTION: &str = "fraud_detection";
     /// Cross-stream comparison + delta surfaces.
     pub const STREAM_COMPARISON: &str = "stream_comparison";
+    /// Writes normalized, time-ranged observations to the research signal spine.
+    pub const RESEARCH_SIGNALS: &str = "research_signals";
+    /// Assembles versioned multi-source corpora for qualitative analysis.
+    pub const CORPUS_ASSEMBLY: &str = "corpus_assembly";
+    /// Human/model-assisted coding, codebooks, annotations, and memos.
+    pub const QUALITATIVE_CODING: &str = "qualitative_coding";
+    /// Lexical, semantic, temporal, or relational corpus retrieval.
+    pub const CORPUS_RETRIEVAL: &str = "corpus_retrieval";
     /// Post-stream Casebook / report writer.
     pub const REPORTING: &str = "reporting";
     /// Content-safety / brand-safety pre-publish gate.

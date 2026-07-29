@@ -86,6 +86,12 @@ pub enum ResourceLock {
     /// Mutually exclusive across all stages requesting it. For GPU-bound
     /// providers like whisperx-local, voxtral-local.
     Gpu,
+    /// CPU-heavy local transforms. Capacity is declared by the template so
+    /// several FFmpeg/analysis stages cannot saturate every core at once.
+    Cpu { cap: usize },
+    /// High-throughput media reads/writes. Separate from file exclusivity:
+    /// different recordings may still contend for one physical disk.
+    Disk { cap: usize },
     /// Bounded counting semaphore for an external API. The `cap` is the
     /// max concurrent requests; multiple stages can share one provider.
     Api { name: String, cap: usize },

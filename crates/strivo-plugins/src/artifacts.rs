@@ -36,6 +36,16 @@ struct RecordingInput {
     started_at: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StageCache {
+    version: u8,
+    source_len: u64,
+    source_mtime_ns: u128,
+    transcript_len: u64,
+    transcript_mtime_ns: u128,
+    artifacts: Vec<serde_json::Value>,
+}
+
 impl ArtifactPlugin {
     pub fn new() -> Self {
         Self::default()
@@ -102,7 +112,13 @@ impl Plugin for ArtifactPlugin {
             tokio::task::spawn_blocking(move || {
                 std::fs::create_dir_all(&output_dir)
                     .map_err(|error| format!("create artifact directory: {error}"))?;
-                match verb.as_str() {
+                if let Some(hit) =
+                    load_stage_cache(&verb, &input.source_path, &crunchr_db, &output_dir)
+                {
+                    tracing::info!(stage = %verb, recording_id = %input.id, "reused creator artifacts");
+                    return Ok(hit);
+                }
+                let result = match verb.as_str() {
                     "chapters" => chapters(input.id, &crunchr_db, &output_dir),
                     "captions" => captions(input.id, &crunchr_db, &output_dir),
                     "brandsafe" => brandsafe(input.id, &crunchr_db, &output_dir),
@@ -113,7 +129,15 @@ impl Plugin for ArtifactPlugin {
                     "reuse" => reuse(&input, &crunchr_db, &output_dir),
                     "casebook" => casebook(&input, &crunchr_db, &output_dir),
                     _ => Err(format!("unknown artifact executor verb: {verb}")),
-                }
+                }?;
+                save_stage_cache(
+                    &verb,
+                    &input.source_path,
+                    &crunchr_db,
+                    &output_dir,
+                    &result.artifacts,
+                )?;
+                Ok(result)
             })
             .await
             .map_err(|error| format!("artifact worker crashed: {error}"))?
@@ -135,6 +159,92 @@ impl Plugin for ArtifactPlugin {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+fn file_fingerprint(path: &Path) -> (u64, u128) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return (0, 0);
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    (metadata.len(), modified)
+}
+
+fn sqlite_fingerprint(path: &Path) -> (u64, u128) {
+    let base = file_fingerprint(path);
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal = file_fingerprint(Path::new(&wal));
+    (base.0.saturating_add(wal.0), base.1.max(wal.1))
+}
+
+fn stage_cache_path(output_dir: &Path, verb: &str) -> PathBuf {
+    let safe = verb
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    output_dir.join(format!(".stage-{safe}.json"))
+}
+
+fn artifacts_exist(artifacts: &[serde_json::Value]) -> bool {
+    !artifacts.is_empty()
+        && artifacts.iter().all(|artifact| {
+            artifact
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|path| Path::new(path).is_file())
+        })
+}
+
+fn load_stage_cache(
+    verb: &str,
+    source: &Path,
+    transcript_db: &Path,
+    output_dir: &Path,
+) -> Option<StageExecutionResult> {
+    let bytes = std::fs::read(stage_cache_path(output_dir, verb)).ok()?;
+    let cache: StageCache = serde_json::from_slice(&bytes).ok()?;
+    let (source_len, source_mtime_ns) = file_fingerprint(source);
+    let (transcript_len, transcript_mtime_ns) = sqlite_fingerprint(transcript_db);
+    if cache.version != 1
+        || cache.source_len != source_len
+        || cache.source_mtime_ns != source_mtime_ns
+        || cache.transcript_len != transcript_len
+        || cache.transcript_mtime_ns != transcript_mtime_ns
+        || !artifacts_exist(&cache.artifacts)
+    {
+        return None;
+    }
+    Some(StageExecutionResult {
+        artifacts: cache.artifacts,
+        actions: Vec::new(),
+    })
+}
+
+fn save_stage_cache(
+    verb: &str,
+    source: &Path,
+    transcript_db: &Path,
+    output_dir: &Path,
+    artifacts: &[serde_json::Value],
+) -> Result<(), String> {
+    let (source_len, source_mtime_ns) = file_fingerprint(source);
+    let (transcript_len, transcript_mtime_ns) = sqlite_fingerprint(transcript_db);
+    write_json(
+        &stage_cache_path(output_dir, verb),
+        &StageCache {
+            version: 1,
+            source_len,
+            source_mtime_ns,
+            transcript_len,
+            transcript_mtime_ns,
+            artifacts: artifacts.to_vec(),
+        },
+    )
 }
 
 fn load_detail(path: &Path, id: Uuid) -> Result<db::RecordingDetail, String> {
@@ -679,5 +789,23 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("no Crunchr transcript"), "{error}");
+    }
+
+    #[test]
+    fn stage_cache_reuses_outputs_and_invalidates_missing_artifacts() {
+        let (_dir, crunchr, output, input) = fixture();
+        let result = captions(input.id, &crunchr, &output).unwrap();
+        save_stage_cache(
+            "captions",
+            &input.source_path,
+            &crunchr,
+            &output,
+            &result.artifacts,
+        )
+        .unwrap();
+        let cached = load_stage_cache("captions", &input.source_path, &crunchr, &output).unwrap();
+        assert_eq!(cached.artifacts.len(), 3);
+        std::fs::remove_file(output.join("captions.vtt")).unwrap();
+        assert!(load_stage_cache("captions", &input.source_path, &crunchr, &output).is_none());
     }
 }

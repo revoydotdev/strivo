@@ -23,6 +23,10 @@ fn main() {
     let dst_assets = Path::new(&out_dir).join("assets");
 
     copy_dir_all(&src_assets, &dst_assets).expect("failed to copy assets to OUT_DIR");
+    // The old 1246px PNG is retained in source for packaging/brand exports,
+    // but the SPA now uses the 220-byte SVG mark. Do not embed nearly 1 MiB
+    // of unreachable raster data into every web binary.
+    let _ = fs::remove_file(dst_assets.join("img/chorosyne-logo.png"));
 
     if !creator_enabled {
         let spa_src = src_assets.join("spa.js");

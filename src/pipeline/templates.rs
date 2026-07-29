@@ -26,6 +26,7 @@ pub fn creator_intelligence(recording_id: Uuid, trigger: impl Into<String>) -> P
                 path: format!("recording:{recording_id}"),
             },
             ResourceLock::Gpu,
+            ResourceLock::Disk { cap: 2 },
         ])
         .with_max_attempts(3),
     );
@@ -50,6 +51,7 @@ pub fn creator_publish(recording_id: Uuid, trigger: impl Into<String>) -> Pipeli
                 path: format!("recording:{recording_id}"),
             },
             ResourceLock::Gpu,
+            ResourceLock::Disk { cap: 2 },
         ])
         .with_max_attempts(3),
     );
@@ -60,9 +62,13 @@ pub fn creator_publish(recording_id: Uuid, trigger: impl Into<String>) -> Pipeli
             "cuepoints",
             StageKind::Custom("cuepoints.extract".to_string()),
         )
-        .with_requires(vec![ResourceLock::File {
-            path: format!("recording:{recording_id}"),
-        }]),
+        .with_requires(vec![
+            ResourceLock::File {
+                path: format!("recording:{recording_id}"),
+            },
+            ResourceLock::Cpu { cap: 2 },
+            ResourceLock::Disk { cap: 2 },
+        ]),
     );
     let chapters = pipeline.add_stage(
         artifact_stage(
@@ -146,9 +152,13 @@ pub fn creator_publish(recording_id: Uuid, trigger: impl Into<String>) -> Pipeli
 fn artifact_stage(recording_id: Uuid, name: &str, verb: &str, kind: StageKind) -> Stage {
     Stage::new(name, kind)
         .with_dispatch(StageDispatch::new("artifacts", verb).for_recording(recording_id))
-        .with_requires(vec![ResourceLock::File {
-            path: format!("artifact:{recording_id}:{verb}"),
-        }])
+        .with_requires(vec![
+            ResourceLock::File {
+                path: format!("artifact:{recording_id}:{verb}"),
+            },
+            ResourceLock::Cpu { cap: 2 },
+            ResourceLock::Disk { cap: 2 },
+        ])
         .with_max_attempts(3)
 }
 

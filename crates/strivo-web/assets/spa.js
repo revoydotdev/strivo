@@ -5,7 +5,31 @@
 // file deliberately stays small + dependency-free.
 
 const API = {
+  _inflight: new Map(),
+  _cache: new Map(),
+  _cacheTtlMs: 2000,
   async _fetch(path, opts = {}) {
+    const method = String(opts.method || "GET").toUpperCase();
+    // Collapse duplicate GETs issued by chrome hydration + the route painter.
+    // A short stale window absorbs navigation churn without making live state
+    // feel cached; SSE still patches the active screen immediately.
+    if (method === "GET" && !opts.__direct) {
+      const cached = API._cache.get(path);
+      if (cached && performance.now() - cached.at < API._cacheTtlMs) {
+        return cached.value;
+      }
+      if (API._inflight.has(path)) return API._inflight.get(path);
+      const pending = API._fetch(path, { ...opts, __direct: true })
+        .then((value) => {
+          API._cache.set(path, { at: performance.now(), value });
+          return value;
+        })
+        .finally(() => API._inflight.delete(path));
+      API._inflight.set(path, pending);
+      return pending;
+    }
+    const direct = { ...opts };
+    delete direct.__direct;
     // X-Strivo-CSRF is a custom header browsers can't attach cross-site
     // without a (denied) preflight, so it gates cookie-authed mutations
     // against CSRF. Harmless on GETs. See crates/strivo-web/src/csrf.rs.
@@ -14,13 +38,13 @@ const API = {
       "X-Strivo-CSRF": "1",
       ...(opts.headers || {}),
     };
-    if (opts.body && typeof opts.body !== "string") {
+    if (direct.body && typeof direct.body !== "string") {
       headers["Content-Type"] = "application/json";
-      opts.body = JSON.stringify(opts.body);
+      direct.body = JSON.stringify(direct.body);
     }
     const res = await fetch(`/api/v1${path}`, {
       credentials: "same-origin",
-      ...opts,
+      ...direct,
       headers,
     });
     if (res.status === 401) {
@@ -57,12 +81,25 @@ const API = {
       } catch (_) { /* not json */ }
       throw new Error(`HTTP ${res.status}: ${detail}`);
     }
-    return res.headers.get("content-type")?.includes("json")
+    const value = res.headers.get("content-type")?.includes("json")
       ? res.json()
       : res.text();
+    if (method !== "GET") API.invalidate();
+    return value;
+  },
+  invalidate(prefix = "") {
+    for (const key of API._cache.keys()) {
+      if (!prefix || key.startsWith(prefix)) API._cache.delete(key);
+    }
   },
   channels: () => API._fetch("/channels"),
-  recordings: () => API._fetch("/recordings"),
+  recordings: (opts = { limit: 500 }) => {
+    const p = new URLSearchParams();
+    if (opts.cursor != null) p.set("cursor", String(opts.cursor));
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    const query = p.toString();
+    return API._fetch(`/recordings${query ? `?${query}` : ""}`);
+  },
   startRecording: (body) =>
     API._fetch("/recordings", { method: "POST", body }),
   stopRecording: (id) =>
@@ -97,7 +134,13 @@ const API = {
   backups: () => API._fetch("/backups"),
   backupRestore: (name) =>
     API._fetch(`/backups/${encodeURIComponent(name)}/restore`, { method: "POST" }),
-  history: () => API._fetch("/history"),
+  history: (opts = { limit: 200 }) => {
+    const p = new URLSearchParams();
+    if (opts.cursor != null) p.set("cursor", String(opts.cursor));
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    const query = p.toString();
+    return API._fetch(`/history${query ? `?${query}` : ""}`);
+  },
   blocklist: () => API._fetch("/blocklist"),
   blockAdd: (body) => API._fetch("/blocklist", { method: "POST", body }),
   blockRemove: (body) => API._fetch("/blocklist", { method: "DELETE", body }),
@@ -438,6 +481,7 @@ const events = {
       }
     } else if (!this.degradedPoll) {
       this.degradedPoll = setInterval(() => {
+        if (document.hidden) return;
         const r = currentRoute();
         if (r === "library") renderHome().catch(() => {});
         else if (r === "recordings") renderRecordings().catch(() => {});
@@ -1745,6 +1789,7 @@ function wireChannelDetail() {
     if (img) {
       const base = img.src.split(/[?&]t=/)[0];
       cdPosterTimer = setInterval(() => {
+        if (document.hidden) return;
         // Only refresh while still on-screen (cheap visibility guard).
         if (!document.body.contains(img)) {
           teardownLivePreview();
@@ -2778,7 +2823,9 @@ function paintRecordings() {
     const ka = key(a), kb = key(b);
     return ka < kb ? -dir : ka > kb ? dir : 0;
   });
-  recVisible = rows;
+  const totalRows = rows.length;
+  const renderRows = rows.slice(0, recRenderLimit);
+  recVisible = renderRows;
   if (recGroupBy === "channel") {
     // Cluster rows by channel_name while preserving the active sort order
     // within each cluster. Each cluster gets a heading row spanning every
@@ -2786,7 +2833,7 @@ function paintRecordings() {
     // ledger without needing a separate render pass per group.
     const order = [];
     const byChannel = new Map();
-    for (const r of rows) {
+    for (const r of renderRows) {
       const k = r.channel_name || "(unknown)";
       if (!byChannel.has(k)) { byChannel.set(k, []); order.push(k); }
       byChannel.get(k).push(r);
@@ -2801,14 +2848,24 @@ function paintRecordings() {
     }).join("");
     body.innerHTML = html;
   } else {
-    body.innerHTML = rows.map(recordingRow).join("");
+    body.innerHTML = renderRows.map(recordingRow).join("");
+  }
+  if (renderRows.length < totalRows) {
+    body.insertAdjacentHTML("beforeend", `<tr><td colspan="7" class="empty sm">
+      <button id="rec-show-more" type="button">Show ${Math.min(200, totalRows - renderRows.length)} more</button>
+      <span class="pg-cap-hint"> ${renderRows.length} of ${totalRows} rendered</span>
+    </td></tr>`);
+    body.querySelector("#rec-show-more")?.addEventListener("click", () => {
+      recRenderLimit += 200;
+      paintRecordings();
+    });
   }
   const count = document.getElementById("rec-count");
   if (count) {
     count.textContent =
-      q || rows.length !== recCache.length
-        ? `${rows.length} of ${recCache.length}`
-        : `${recCache.length} total`;
+      q || totalRows !== recCache.length
+        ? `${totalRows} matching · ${renderRows.length} rendered`
+        : `${recCache.length} total · ${renderRows.length} rendered`;
   }
   body.querySelectorAll("[data-action=stop]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -2962,6 +3019,7 @@ function paintRecordings() {
 
 // IDs currently visible after filter/sort (for select-all + mass actions).
 let recVisible = [];
+let recRenderLimit = 200;
 function visibleRecordingIds() {
   return recVisible.map((r) => r.id);
 }
@@ -5580,6 +5638,7 @@ async function renderWatch() {
   // per-tile viewer counts in place. Avoids tearing the iframes (the
   // streams keep playing) but keeps the meta-line fresh.
   playerState.refreshTimer = setInterval(async () => {
+    if (document.hidden) return;
     try {
       const r = await API.multistreamTiles(800, 450, { mode: "auto" }, window.location.host);
       const byId = new Map((r.streams || []).map((s) => [s.stream_id, s]));
@@ -6716,7 +6775,7 @@ function renderUpgradeCard(licence) {
   if (!licence || licence.entitled) return ""; // dev unlock + future paid users
   return `
     <section class="upgrade-card" data-tier="${htmlEscape(licence.tier || "free")}">
-      <img class="upgrade-logo" src="/assets/img/chorosyne-logo.png" alt="Chorosyne" />
+      <img class="upgrade-logo" src="/assets/img/strivo-mark.svg" alt="StriVo" />
       <div class="upgrade-body">
         <h2 class="upgrade-title">Strivo Pro</h2>
         <p class="upgrade-tagline">Unlock every plugin — Crunchr, Archiver, Viewguard, Insights — and everything we ship next.</p>
@@ -10987,7 +11046,7 @@ async function renderLogs() {
     localStorage.setItem("strivo-logs-follow", logsFollow ? "1" : "0");
     if (logsFollow) {
       if (logsFollowTimer) clearInterval(logsFollowTimer);
-      logsFollowTimer = setInterval(load, 4000);
+      logsFollowTimer = setInterval(() => { if (!document.hidden) load(); }, 4000);
     } else if (logsFollowTimer) {
       clearInterval(logsFollowTimer);
       logsFollowTimer = null;
@@ -11016,7 +11075,7 @@ async function renderLogs() {
   await load();
   // Auto-arm follow if it was previously enabled.
   if (logsFollow) {
-    logsFollowTimer = setInterval(load, 4000);
+    logsFollowTimer = setInterval(() => { if (!document.hidden) load(); }, 4000);
   }
 }
 
@@ -11573,6 +11632,9 @@ let histStateFilter = new Set(
     .split(",").filter(Boolean),
 );
 let histCache = [];
+let histNextCursor = null;
+let histTotal = 0;
+let histRenderLimit = 200;
 
 async function renderHistory() {
   // Fetch history alongside the live /recordings snapshot so we can
@@ -11586,6 +11648,8 @@ async function renderHistory() {
       API.recordings().catch(() => ({ recordings: [] })),
     ]);
     hist = h.history || [];
+    histNextCursor = h.next_cursor ?? null;
+    histTotal = h.total ?? hist.length;
     recs = r.recordings || [];
   } catch (_) {}
   const liveById = new Map(recs.map((r) => [r.id, r]));
@@ -11627,6 +11691,7 @@ async function renderHistory() {
     </div>
     <div id="hist-state-chips" class="rec-state-chips" role="group" aria-label="Filter by state"></div>
     <div id="hist-list" class="media-list"></div>
+    ${histNextCursor != null ? `<button id="hist-load-more" class="button secondary" type="button">Load more history</button>` : ""}
   `);
   setupChromeHandlers();
   paintHistHeatmap();
@@ -11647,6 +11712,29 @@ async function renderHistory() {
       : histGroupBy === "channel" ? "date" : "none";
     localStorage.setItem("strivo-hist-groupby", histGroupBy);
     renderHistory().catch((e) => Toast.error(e.message));
+  });
+  document.getElementById("hist-load-more")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Loading…";
+    try {
+      const page = await API.history({ cursor: histNextCursor, limit: 200 });
+      histCache.push(...(page.history || []));
+      histNextCursor = page.next_cursor ?? null;
+      histTotal = page.total ?? histCache.length;
+      if (histNextCursor == null) button.remove();
+      else {
+        button.disabled = false;
+        button.textContent = "Load more history";
+      }
+      paintHistHeatmap();
+      paintHistChips();
+      paintHistory();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Load more history";
+      Toast.error(`History load failed: ${error.message}`);
+    }
   });
 }
 
@@ -11766,11 +11854,12 @@ function paintHistory() {
   });
   // Newest-first inside each cluster + as the default flat order.
   rows.sort((a, b) => new Date(b.started_at) - new Date(a.started_at));
+  const visibleRows = rows.slice(0, histRenderLimit);
   const countEl = document.getElementById("hist-count");
   if (countEl) {
     countEl.textContent = (q || histStateFilter.size > 0 || rows.length !== histCache.length)
-      ? `${rows.length} of ${histCache.length} entries`
-      : `${histCache.length} entries · durable record of every capture (survives restarts)`;
+      ? `${rows.length} matching · ${histCache.length} of ${histTotal} loaded`
+      : `${histCache.length} of ${histTotal} entries loaded · durable across restarts`;
   }
 
   if (rows.length === 0) {
@@ -11781,7 +11870,7 @@ function paintHistory() {
   if (histGroupBy === "channel") {
     const order = [];
     const groups = new Map();
-    for (const r of rows) {
+    for (const r of visibleRows) {
       const k = r.channel_name || "(unknown)";
       if (!groups.has(k)) { groups.set(k, []); order.push(k); }
       groups.get(k).push(r);
@@ -11800,7 +11889,7 @@ function paintHistory() {
   } else if (histGroupBy === "date") {
     const order = [];
     const groups = new Map();
-    for (const r of rows) {
+    for (const r of visibleRows) {
       const d = new Date(r.started_at);
       const k = isNaN(d.getTime()) ? "(unknown)"
         : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
@@ -11821,9 +11910,18 @@ function paintHistory() {
       </div>`;
     }).join("");
   } else {
-    html = rows.map(historyPillHtml).join("");
+    html = visibleRows.map(historyPillHtml).join("");
+  }
+  if (visibleRows.length < rows.length) {
+    html += `<button id="hist-show-more" class="button secondary" type="button">
+      Show ${Math.min(200, rows.length - visibleRows.length)} more
+    </button>`;
   }
   host.innerHTML = html;
+  host.querySelector("#hist-show-more")?.addEventListener("click", () => {
+    histRenderLimit += 200;
+    paintHistory();
+  });
 
   // Wire per-row buttons. Reuses the same handlers Recordings table
   // mounts so behaviours stay consistent.

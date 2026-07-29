@@ -1,15 +1,25 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use axum::http::{header, HeaderValue, Request};
 use axum::{middleware, response::Response, Router};
+use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::auth::ApiKey;
 use crate::csrf;
 use crate::ipc_client::IpcClient;
 use crate::routes;
+
+#[derive(Debug, Clone)]
+pub struct ProbeCacheEntry {
+    pub len: u64,
+    pub modified: Option<SystemTime>,
+    pub value: serde_json::Value,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,6 +35,12 @@ pub struct AppState {
     pub session_secret: String,
     /// Per-IP failed-login throttle (roadmap Phase 1).
     pub login_limiter: crate::ratelimit::LoginLimiter,
+    /// Normalised ffprobe results keyed by canonical media path. Entries are
+    /// invalidated by file length or mtime changes.
+    pub probe_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<PathBuf, ProbeCacheEntry>>>,
+    /// FFprobe is disk and process intensive. Bound concurrent probes so a
+    /// gallery of Info modals cannot starve active recordings.
+    pub probe_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -80,6 +96,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
         config_write_lock: Arc::new(tokio::sync::Mutex::new(())),
         session_secret,
         login_limiter: crate::ratelimit::LoginLimiter::new(),
+        probe_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        probe_slots: Arc::new(tokio::sync::Semaphore::new(2)),
     };
 
     // The SPA (served by assets::router at / and /app) is the webui; it
@@ -111,6 +129,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     // It exposes only a verification echo and a poll-trigger, no data.
     let app = guarded
         .merge(routes::websub::router())
+        .layer(CompressionLayer::new())
+        .layer(middleware::from_fn(performance_timing))
         .layer(middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -127,6 +147,32 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+async fn performance_timing(
+    request: Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let started = std::time::Instant::now();
+    let mut response = next.run(request).await;
+    let elapsed = started.elapsed();
+    if let Ok(value) =
+        HeaderValue::from_str(&format!("app;dur={:.2}", elapsed.as_secs_f64() * 1000.0))
+    {
+        response
+            .headers_mut()
+            .insert(header::HeaderName::from_static("server-timing"), value);
+    }
+    tracing::info!(
+        http.method = %method,
+        http.route = %path,
+        http.status = response.status().as_u16(),
+        duration_ms = elapsed.as_secs_f64() * 1000.0,
+        "http request completed"
+    );
+    response
 }
 
 async fn security_headers(request: Request<axum::body::Body>, next: middleware::Next) -> Response {

@@ -61,12 +61,12 @@ fn contain_in_root(
 /// has been mis-renamed (e.g. `foo.mkv` that's actually an MP3 inside —
 /// Firefox refuses the mismatch). Returns None if no signature matches;
 /// caller falls back to `guess_mime`.
-async fn sniff_mime(path: &std::path::Path) -> Option<&'static str> {
+async fn sniff_mime(file: &mut tokio::fs::File) -> Option<&'static str> {
     use tokio::io::AsyncReadExt;
     const HEAD: usize = 4096;
     let mut buf = vec![0u8; HEAD];
-    let mut f = tokio::fs::File::open(path).await.ok()?;
-    let n = f.read(&mut buf).await.ok()?;
+    let n = file.read(&mut buf).await.ok()?;
+    file.seek(std::io::SeekFrom::Start(0)).await.ok()?;
     if n == 0 {
         return None;
     }
@@ -241,7 +241,7 @@ async fn download(
     // Prefer magic-byte sniffing over extension-based guessing — a file
     // mis-named foo.mkv that actually contains MP3 audio inside would
     // otherwise get video/x-matroska and Firefox refuses the mismatch.
-    let mime = match sniff_mime(&path).await {
+    let mime = match sniff_mime(&mut file).await {
         Some(m) => m,
         None => guess_mime(&path),
     };

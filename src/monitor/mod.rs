@@ -189,6 +189,7 @@ impl ChannelMonitor {
                 .max(15)
         };
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(cur_secs()));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Consume the first tick (it fires immediately)
         interval.tick().await;
 
@@ -199,6 +200,7 @@ impl ChannelMonitor {
                     let secs = cur_secs();
                     tracing::info!("Poll interval updated to {secs}s");
                     interval = tokio::time::interval(std::time::Duration::from_secs(secs));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     interval.tick().await;
                 }
                 _ = interval.tick() => {
@@ -247,6 +249,7 @@ impl ChannelMonitor {
     }
 
     async fn poll_all(&mut self) -> Result<()> {
+        let poll_started = std::time::Instant::now();
         // Phase 1 — fan out per-platform channel + live-status fetches
         // concurrently. Previously these ran in series: a slow YouTube call
         // (quota / SSL handshake) blocked Twitch live-detection for the full
@@ -418,6 +421,11 @@ impl ChannelMonitor {
         let _ = self
             .event_tx
             .send(DaemonEvent::ChannelsUpdated(all_channels));
+        tracing::info!(
+            channel_count = self.prev_live.len(),
+            duration_ms = poll_started.elapsed().as_secs_f64() * 1000.0,
+            "platform poll completed"
+        );
 
         // Persist last-seen-live so the "last live: N ago" label survives
         // restarts. Best-effort.

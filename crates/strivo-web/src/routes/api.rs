@@ -15,7 +15,7 @@
 //!   GET /api/v1/schedule         — config.schedule entries
 //!   GET /api/v1/settings         — non-secret config snapshot
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
@@ -90,7 +90,33 @@ fn augment_recording(job: &strivo_core::recording::job::RecordingJob) -> serde_j
     v
 }
 
-async fn recordings(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+#[derive(Debug, Default, Deserialize)]
+struct PageQuery {
+    /// Zero-based opaque position. Kept numeric in the first version so old
+    /// clients can adopt pagination without a second identifier format.
+    #[serde(default)]
+    cursor: Option<usize>,
+    /// Omitted means the legacy full snapshot. Supplying a limit opts into
+    /// the scalable response while preserving existing integrations.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+fn page_bounds(total: usize, query: &PageQuery) -> (usize, usize, Option<usize>) {
+    let start = query.cursor.unwrap_or(0).min(total);
+    let end = match query.limit {
+        Some(limit) => start.saturating_add(limit.clamp(1, 500)).min(total),
+        None => total,
+    };
+    let next = (end < total).then_some(end);
+    (start, end, next)
+}
+
+async fn recordings(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
@@ -100,8 +126,15 @@ async fn recordings(headers: HeaderMap, State(state): State<AppState>) -> impl I
             // so the response is stable and order-by-newest-first.
             let mut items: Vec<_> = recordings.into_values().collect();
             items.sort_by_key(|r| std::cmp::Reverse(r.started_at));
-            let augmented: Vec<_> = items.iter().map(augment_recording).collect();
-            Json(json!({ "recordings": augmented })).into_response()
+            let total = items.len();
+            let (start, end, next_cursor) = page_bounds(total, &query);
+            let augmented: Vec<_> = items[start..end].iter().map(augment_recording).collect();
+            Json(json!({
+                "recordings": augmented,
+                "total": total,
+                "next_cursor": next_cursor,
+            }))
+            .into_response()
         }
         Ok(_) => Json(json!({ "recordings": [] })).into_response(),
         Err(e) => crate::problem::Problem::unavailable(e.to_string()).into_response(),
@@ -153,6 +186,48 @@ async fn recording_probe(
     if !path.exists() {
         return crate::problem::Problem::not_found("file missing").into_response();
     }
+    let canonical = match tokio::fs::canonicalize(&path).await {
+        Ok(path) => path,
+        Err(e) => {
+            return crate::problem::Problem::internal(format!("probe canonicalize: {e}"))
+                .into_response()
+        }
+    };
+    let metadata = match tokio::fs::metadata(&canonical).await {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            return crate::problem::Problem::internal(format!("probe metadata: {e}"))
+                .into_response()
+        }
+    };
+    let modified = metadata.modified().ok();
+    if let Some(hit) = state.probe_cache.read().await.get(&canonical) {
+        if hit.len == metadata.len() && hit.modified == modified {
+            let mut value = hit.value.clone();
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("cached".into(), serde_json::Value::Bool(true));
+            }
+            return Json(value).into_response();
+        }
+    }
+    let _probe_permit = match state.probe_slots.acquire().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return crate::problem::Problem::unavailable("probe worker pool closed").into_response()
+        }
+    };
+    // Recheck after queueing: a preceding waiter may have populated the
+    // cache while this request waited for a process slot.
+    if let Some(hit) = state.probe_cache.read().await.get(&canonical) {
+        if hit.len == metadata.len() && hit.modified == modified {
+            let mut value = hit.value.clone();
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("cached".into(), serde_json::Value::Bool(true));
+            }
+            return Json(value).into_response();
+        }
+    }
+    let probe_started = std::time::Instant::now();
     let out = match tokio::process::Command::new("ffprobe")
         .args([
             "-v",
@@ -162,7 +237,7 @@ async fn recording_probe(
             "-show_format",
             "-show_streams",
         ])
-        .arg(&path)
+        .arg(&canonical)
         .output()
         .await
     {
@@ -267,7 +342,7 @@ async fn recording_probe(
         }
     }
 
-    Json(json!({
+    let value = json!({
         "container": container,
         "duration_secs": duration_secs,
         "bit_rate": bit_rate,
@@ -275,8 +350,31 @@ async fn recording_probe(
         "video": video,
         "audio": audio,
         "subtitle": subtitle,
-    }))
-    .into_response()
+        "cached": false,
+    });
+    tracing::info!(
+        media.path = %canonical.display(),
+        media.bytes = metadata.len(),
+        duration_ms = probe_started.elapsed().as_secs_f64() * 1000.0,
+        "ffprobe completed"
+    );
+    {
+        let mut cache = state.probe_cache.write().await;
+        cache.insert(
+            canonical,
+            crate::server::ProbeCacheEntry {
+                len: metadata.len(),
+                modified,
+                value: value.clone(),
+            },
+        );
+        // The cache is advisory and bounded. Oldest-by-mtime is not worth a
+        // second index here; a deterministic clear prevents unbounded growth.
+        if cache.len() > 1_024 {
+            cache.clear();
+        }
+    }
+    Json(value).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1037,13 +1135,20 @@ async fn remux_recording(
         input.extension().and_then(|e| e.to_str()).unwrap_or("mkv"),
     ));
     let tmp = input.with_extension("remuxed.mkv");
-    let status = std::process::Command::new("ffmpeg")
+    let _media_permit = match state.probe_slots.acquire().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return crate::problem::Problem::unavailable("media worker pool closed").into_response()
+        }
+    };
+    let status = tokio::process::Command::new("ffmpeg")
         .args(["-y", "-hide_banner", "-loglevel", "warning"])
         .arg("-i")
         .arg(&input)
         .args(["-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "matroska"])
         .arg(&tmp)
-        .status();
+        .status()
+        .await;
     let ok = matches!(status, Ok(s) if s.success());
     if !ok {
         let _ = std::fs::remove_file(&tmp);
@@ -1583,30 +1688,46 @@ async fn backup_download(
     if !dir.is_dir() {
         return crate::problem::Problem::not_found("backup not found").into_response();
     }
-    // Pipe `tar` and let it stream — handles arbitrary sizes without
-    // buffering. Conservative content-type so browsers do "Save As".
-    let child = std::process::Command::new("tar")
-        .args([
-            "-C",
-            &dir.parent().unwrap_or(&dir).to_string_lossy(),
-            "-czf",
-            "-",
-            &name,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn();
-    let mut child = match child {
-        Ok(c) => c,
-        Err(e) => return crate::problem::Problem::internal(format!("tar: {e}")).into_response(),
-    };
-    let mut out = Vec::new();
-    use std::io::Read;
-    if let Some(mut s) = child.stdout.take() {
-        if let Err(e) = s.read_to_end(&mut out) {
-            return crate::problem::Problem::internal(e.to_string()).into_response();
+    // Archive work is blocking, so keep it off Tokio's request workers.
+    // Conservative content-type makes browsers use "Save As".
+    let archive_name = name.clone();
+    let archive = tokio::task::spawn_blocking(move || {
+        let child = std::process::Command::new("tar")
+            .args([
+                "-C",
+                &dir.parent().unwrap_or(&dir).to_string_lossy(),
+                "-czf",
+                "-",
+                &archive_name,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
+            Err(error) => return Err(format!("tar: {error}")),
+        };
+        let mut out = Vec::new();
+        use std::io::Read;
+        if let Some(mut stdout) = child.stdout.take() {
+            stdout
+                .read_to_end(&mut out)
+                .map_err(|error| error.to_string())?;
         }
-    }
-    let _ = child.wait();
+        let status = child.wait().map_err(|error| error.to_string())?;
+        if !status.success() {
+            return Err(format!("tar exited with {status}"));
+        }
+        Ok::<_, String>(out)
+    })
+    .await;
+    let out = match archive {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => return crate::problem::Problem::internal(e).into_response(),
+        Err(e) => {
+            return crate::problem::Problem::internal(format!("archive worker crashed: {e}"))
+                .into_response()
+        }
+    };
     (
         [
             (axum::http::header::CONTENT_TYPE, "application/gzip"),
@@ -1670,7 +1791,11 @@ async fn backup_restore(
 /// `GET /api/v1/history` — durable recording history from the jobs DB
 /// (roadmap item 17). Unlike `/recordings` (the in-memory, bounded daemon
 /// snapshot), this survives restarts and includes completed/failed jobs.
-async fn history(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+async fn history(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
     if check_key(&headers, &state).is_err() {
         return crate::problem::Problem::unauthorized().into_response();
     }
@@ -1678,10 +1803,35 @@ async fn history(headers: HeaderMap, State(state): State<AppState>) -> impl Into
         Ok(d) => d,
         Err(e) => return crate::problem::Problem::internal(e).into_response(),
     };
+    if let Some(limit) = query.limit {
+        let start = query.cursor.unwrap_or(0);
+        return match db
+            .load_recording_jobs_page(start, limit.clamp(1, 500))
+            .await
+        {
+            Ok((jobs, total)) => {
+                let end = start.saturating_add(jobs.len());
+                Json(json!({
+                    "history": jobs,
+                    "total": total,
+                    "next_cursor": (end < total).then_some(end),
+                }))
+                .into_response()
+            }
+            Err(e) => crate::problem::Problem::internal(e.to_string()).into_response(),
+        };
+    }
     match db.load_recording_jobs().await {
         Ok(mut jobs) => {
             jobs.sort_by_key(|j| std::cmp::Reverse(j.started_at));
-            Json(json!({ "history": jobs })).into_response()
+            let total = jobs.len();
+            let (start, end, next_cursor) = page_bounds(total, &query);
+            Json(json!({
+                "history": &jobs[start..end],
+                "total": total,
+                "next_cursor": next_cursor,
+            }))
+            .into_response()
         }
         Err(e) => crate::problem::Problem::internal(e.to_string()).into_response(),
     }
@@ -3110,6 +3260,49 @@ pub fn router() -> Router<AppState> {
     }
 
     r
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::{page_bounds, PageQuery};
+
+    #[test]
+    fn pagination_is_backwards_compatible_when_limit_is_omitted() {
+        assert_eq!(
+            page_bounds(
+                1_000,
+                &PageQuery {
+                    cursor: None,
+                    limit: None,
+                }
+            ),
+            (0, 1_000, None)
+        );
+    }
+
+    #[test]
+    fn pagination_clamps_limits_and_emits_next_cursor() {
+        assert_eq!(
+            page_bounds(
+                1_000,
+                &PageQuery {
+                    cursor: Some(100),
+                    limit: Some(10_000),
+                }
+            ),
+            (100, 600, Some(600))
+        );
+        assert_eq!(
+            page_bounds(
+                12,
+                &PageQuery {
+                    cursor: Some(10),
+                    limit: Some(10),
+                }
+            ),
+            (10, 12, None)
+        );
+    }
 }
 
 #[cfg(test)]

@@ -89,10 +89,14 @@ impl PipelineRegistry {
         }
         if pipeline.stages.iter().any(|stage| {
             stage.max_attempts == 0
-                || stage
-                    .requires
-                    .iter()
-                    .any(|lock| matches!(lock, ResourceLock::Api { cap: 0, .. }))
+                || stage.requires.iter().any(|lock| {
+                    matches!(
+                        lock,
+                        ResourceLock::Api { cap: 0, .. }
+                            | ResourceLock::Cpu { cap: 0 }
+                            | ResourceLock::Disk { cap: 0 }
+                    )
+                })
         }) {
             return Err("pipeline contains a zero retry or resource capacity");
         }
@@ -663,6 +667,8 @@ pub struct ResourceRegistry {
 #[derive(Default)]
 struct ResourceRegistryInner {
     gpu: Option<Arc<Semaphore>>,
+    cpu: Option<Arc<Semaphore>>,
+    disk: Option<Arc<Semaphore>>,
     apis: HashMap<String, Arc<Semaphore>>,
     files: HashMap<String, Arc<Semaphore>>,
 }
@@ -687,6 +693,14 @@ impl ResourceRegistry {
                 ResourceLock::Gpu => inner
                     .gpu
                     .get_or_insert_with(|| Arc::new(Semaphore::new(1)))
+                    .clone(),
+                ResourceLock::Cpu { cap } => inner
+                    .cpu
+                    .get_or_insert_with(|| Arc::new(Semaphore::new(*cap)))
+                    .clone(),
+                ResourceLock::Disk { cap } => inner
+                    .disk
+                    .get_or_insert_with(|| Arc::new(Semaphore::new(*cap)))
                     .clone(),
                 ResourceLock::Api { name, cap } => inner
                     .apis

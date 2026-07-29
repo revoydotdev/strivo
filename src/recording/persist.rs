@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     episode_dir  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
+CREATE INDEX IF NOT EXISTS idx_jobs_kind_updated ON jobs(kind, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS catalog (
     platform        TEXT NOT NULL,
@@ -88,7 +89,12 @@ impl PersistDb {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open jobs.db at {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA busy_timeout=30000;",
+        )?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
@@ -358,6 +364,51 @@ impl PersistDb {
             out.push(job);
         }
         Ok(out)
+    }
+
+    /// Load a bounded durable-history page directly in SQLite. The legacy
+    /// `load_recording_jobs` remains capped at 500 for daemon recovery, while
+    /// web clients can walk the complete journal without allocating it all.
+    pub async fn load_recording_jobs_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<crate::recording::job::RecordingJob>, usize)> {
+        let conn = self.inner.lock().await;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE kind = 'Recording'",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT payload, state, last_error FROM jobs
+             WHERE kind = 'Recording'
+             ORDER BY updated_at DESC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit.min(500) as i64, offset as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (payload, state, err) = row?;
+            let Ok(mut job) = serde_json::from_str::<crate::recording::job::RecordingJob>(&payload)
+            else {
+                continue;
+            };
+            if let Some(mapped) = map_journal_state(&state) {
+                job.state = mapped;
+            }
+            if job.error.is_none() {
+                job.error = err;
+            }
+            out.push(job);
+        }
+        Ok((out, total.max(0) as usize))
     }
 
     /// Count finished recordings for a channel (roadmap item 21 cutoff). Used

@@ -98,7 +98,7 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "fs"] }
+tower-http = { version = "0.6", features = ["trace", "fs", "compression-br", "compression-gzip"] }
 hyper = "1"
 
 # Templates

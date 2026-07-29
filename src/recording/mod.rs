@@ -673,9 +673,16 @@ pub async fn run_manager(
 
                                 let mut resolved_url: Option<String> = None;
                                 if let Some((tw, cid)) = rewind_url {
-                                    let oauth = crate::config::credentials::get_secret("twitch_access_token")
-                                        .ok()
-                                        .flatten();
+                                    let oauth = match tw.read().await.fresh_access_token().await {
+                                        Ok(token) => token,
+                                        Err(error) => {
+                                            tracing::warn!(
+                                                %error,
+                                                "could not validate Twitch OAuth before rewind"
+                                            );
+                                            None
+                                        }
+                                    };
                                     let r = crate::stream::twitch_rewind::RewindResolver::new(tw, oauth);
                                     match r.resolve(&cid).await {
                                         Ok(s) => {

@@ -36,6 +36,23 @@ struct TokenErrorResponse {
     message: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TokenValidationResponse {
+    client_id: String,
+    expires_in: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TwitchTokenHealth {
+    Valid { expires_in_secs: u64 },
+    Refreshed,
+    LoginRequired { reason: String },
+}
+
+fn token_needs_refresh(expires_in_secs: u64, min_validity: std::time::Duration) -> bool {
+    expires_in_secs <= min_validity.as_secs()
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct TwitchUser {
@@ -132,31 +149,33 @@ impl TwitchPlatform {
     }
 
     pub async fn load_stored_tokens(&self) -> Result<bool> {
-        if let Some(token) = credentials::get_secret("twitch_access_token")? {
-            *self.access_token.write().await = Some(token);
-            if let Some(refresh) = credentials::get_secret("twitch_refresh_token")? {
-                *self.refresh_token_value.write().await = Some(refresh);
-            }
-            // Validate the token
-            if self.validate_token().await? {
-                self.fetch_user_id().await?;
-                return Ok(true);
-            }
-            // Try refresh
-            if self.refresh_token_value.read().await.is_some()
-                && self.do_refresh_token().await.is_ok()
-            {
-                self.fetch_user_id().await?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(matches!(
+            self.repair_stored_token(std::time::Duration::ZERO).await?,
+            TwitchTokenHealth::Valid { .. } | TwitchTokenHealth::Refreshed
+        ))
     }
 
-    async fn validate_token(&self) -> Result<bool> {
+    /// Load, validate, and where possible repair the keyring token. The
+    /// result distinguishes automatic recovery from cases where Twitch needs
+    /// a fresh device login or corrected application credentials.
+    pub async fn repair_stored_token(
+        &self,
+        min_validity: std::time::Duration,
+    ) -> Result<TwitchTokenHealth> {
+        let Some(token) = credentials::get_secret("twitch_access_token")? else {
+            return Ok(TwitchTokenHealth::LoginRequired {
+                reason: "no access token is stored".into(),
+            });
+        };
+        *self.access_token.write().await = Some(token);
+        *self.refresh_token_value.write().await = credentials::get_secret("twitch_refresh_token")?;
+        self.ensure_fresh_token(min_validity).await
+    }
+
+    async fn validate_token(&self) -> Result<Option<TokenValidationResponse>> {
         let token = self.access_token.read().await;
         let Some(token) = token.as_ref() else {
-            return Ok(false);
+            return Ok(None);
         };
         let resp = self
             .client
@@ -164,7 +183,70 @@ impl TwitchPlatform {
             .header("Authorization", format!("OAuth {token}"))
             .send()
             .await?;
-        Ok(resp.status().is_success())
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let validation: TokenValidationResponse = resp
+            .json()
+            .await
+            .context("decode Twitch token validation response")?;
+        if validation.client_id != self.client_id {
+            tracing::warn!(
+                "stored Twitch token belongs to a different client_id; refresh or login required"
+            );
+            return Ok(None);
+        }
+        Ok(Some(validation))
+    }
+
+    /// Validate the current user token and refresh it when expired or close to
+    /// expiry. Twitch asks applications to validate tokens hourly; callers can
+    /// pass a safety window so long-running recordings never begin with a
+    /// token that is about to expire.
+    pub async fn ensure_fresh_token(
+        &self,
+        min_validity: std::time::Duration,
+    ) -> Result<TwitchTokenHealth> {
+        if let Some(validation) = self.validate_token().await? {
+            if !token_needs_refresh(validation.expires_in, min_validity) {
+                self.fetch_user_id().await?;
+                return Ok(TwitchTokenHealth::Valid {
+                    expires_in_secs: validation.expires_in,
+                });
+            }
+        }
+
+        if self.refresh_token_value.read().await.is_none() {
+            return Ok(TwitchTokenHealth::LoginRequired {
+                reason: "access token is stale and no refresh token is stored".into(),
+            });
+        }
+        match self.do_refresh_token().await {
+            Ok(()) => {
+                self.fetch_user_id().await?;
+                Ok(TwitchTokenHealth::Refreshed)
+            }
+            Err(error) => Ok(TwitchTokenHealth::LoginRequired {
+                reason: format!("automatic refresh was rejected: {error:#}"),
+            }),
+        }
+    }
+
+    /// Return a token only after validation/refresh. This is the safe bridge
+    /// for Streamlink and GQL paths that cannot use the Helix client directly.
+    pub async fn fresh_access_token(&self) -> Result<Option<String>> {
+        match self
+            .ensure_fresh_token(std::time::Duration::from_secs(15 * 60))
+            .await?
+        {
+            TwitchTokenHealth::Valid { .. } | TwitchTokenHealth::Refreshed => {
+                Ok(self.access_token.read().await.clone())
+            }
+            TwitchTokenHealth::LoginRequired { reason } => {
+                tracing::warn!(%reason, "Twitch token needs interactive login");
+                Ok(None)
+            }
+        }
     }
 
     /// Resolve a channel login (e.g. "xqc") to its numeric user_id via
@@ -328,7 +410,13 @@ impl TwitchPlatform {
             .await?;
 
         if !resp.status().is_success() {
-            bail!("Token refresh failed: {}", resp.status());
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let detail = serde_json::from_str::<TokenErrorResponse>(&body)
+                .ok()
+                .and_then(|error| error.message)
+                .unwrap_or_else(|| "refresh token or app credentials were rejected".into());
+            bail!("token refresh failed ({status}): {detail}");
         }
 
         let token: TokenResponse = resp.json().await?;
@@ -615,4 +703,23 @@ fn parse_twitch_duration(s: &str) -> Option<std::time::Duration> {
         }
     }
     Some(std::time::Duration::from_secs(total))
+}
+
+#[cfg(test)]
+mod token_health_tests {
+    use super::token_needs_refresh;
+    use std::time::Duration;
+
+    #[test]
+    fn refreshes_at_safety_window_boundary() {
+        assert!(token_needs_refresh(900, Duration::from_secs(900)));
+        assert!(token_needs_refresh(899, Duration::from_secs(900)));
+        assert!(!token_needs_refresh(901, Duration::from_secs(900)));
+    }
+
+    #[test]
+    fn zero_window_accepts_any_unexpired_token() {
+        assert!(!token_needs_refresh(1, Duration::ZERO));
+        assert!(token_needs_refresh(0, Duration::ZERO));
+    }
 }

@@ -145,6 +145,11 @@ impl DaemonState {
                 }
                 self.auth_queue.retain(|(p, _, _)| p != kind);
             }
+            DaemonEvent::PlatformAuthenticationRequired { kind, .. } => match kind {
+                PlatformKind::Twitch => self.twitch_connected = false,
+                PlatformKind::YouTube => self.youtube_connected = false,
+                PlatformKind::Patreon => self.patreon_connected = false,
+            },
             _ => {}
         }
     }
@@ -342,8 +347,8 @@ pub async fn run_with_plugins_at(
         let tx = event_tx.clone();
         let notify = auth_notify.clone();
         tokio::spawn(async move {
-            let platform = twitch.read().await;
-            match platform.authenticate().await {
+            let authenticated = twitch.read().await.authenticate().await;
+            match authenticated {
                 Ok(()) => {
                     tracing::info!("Twitch authenticated");
                     let _ = tx.send(DaemonEvent::PlatformAuthenticated {
@@ -354,6 +359,54 @@ pub async fn run_with_plugins_at(
                 Err(e) => {
                     tracing::warn!("Twitch auth failed: {e}");
                     let _ = tx.send(DaemonEvent::Error(format!("Twitch auth: {e}")));
+                    return;
+                }
+            }
+
+            // Twitch requires hourly token validation. Refresh early enough
+            // that a recording never starts on the edge of token expiry.
+            let mut auth_check = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            auth_check.tick().await;
+            loop {
+                auth_check.tick().await;
+                let health = twitch
+                    .read()
+                    .await
+                    .ensure_fresh_token(std::time::Duration::from_secs(15 * 60))
+                    .await;
+                match health {
+                    Ok(crate::platform::twitch::TwitchTokenHealth::Valid { expires_in_secs }) => {
+                        tracing::debug!(expires_in_secs, "Twitch token validation succeeded")
+                    }
+                    Ok(crate::platform::twitch::TwitchTokenHealth::Refreshed) => {
+                        tracing::info!("Twitch token refreshed automatically");
+                        let _ = tx.send(DaemonEvent::PlatformAuthenticated {
+                            kind: PlatformKind::Twitch,
+                        });
+                    }
+                    Ok(crate::platform::twitch::TwitchTokenHealth::LoginRequired { reason }) => {
+                        tracing::warn!(%reason, "Twitch login required");
+                        let _ = tx.send(DaemonEvent::PlatformAuthenticationRequired {
+                            kind: PlatformKind::Twitch,
+                            reason,
+                        });
+                        // authenticate() retries refresh, then launches the
+                        // device-code flow when Twitch requires user consent.
+                        match twitch.read().await.authenticate().await {
+                            Ok(()) => {
+                                let _ = tx.send(DaemonEvent::PlatformAuthenticated {
+                                    kind: PlatformKind::Twitch,
+                                });
+                            }
+                            Err(error) => {
+                                tracing::warn!("Twitch re-authentication failed: {error}");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        // A network outage is not proof credentials are stale.
+                        tracing::warn!("Twitch token validation unavailable: {error}");
+                    }
                 }
             }
         });

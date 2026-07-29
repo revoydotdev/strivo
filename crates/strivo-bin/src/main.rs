@@ -737,19 +737,32 @@ async fn probe_platform_credentials() -> String {
             tw.client_id.clone(),
             tw.client_secret.clone(),
         );
-        match plat.load_stored_tokens().await {
-            Ok(true) => match plat.fetch_followed_channels().await {
+        match plat
+            .repair_stored_token(std::time::Duration::from_secs(15 * 60))
+            .await
+        {
+            Ok(strivo_core::platform::twitch::TwitchTokenHealth::Valid {
+                expires_in_secs,
+            }) => match plat.fetch_followed_channels().await {
                 Ok(channels) => {
                     out.push_str(&format!(
-                        "  ok      twitch       {} followed channel(s)\n",
-                        channels.len()
+                        "  ok      twitch       {} followed channel(s); token valid for {}m\n",
+                        channels.len(),
+                        expires_in_secs / 60
                     ));
                 }
                 Err(e) => out.push_str(&format!(
-                    "  STALE   twitch       call failed: {e}\n  hint: re-run the wizard or 'strivo config reset' the twitch keys\n"
+                    "  STALE   twitch       call failed: {e}\n  hint: open Settings → Platforms to re-authenticate\n"
                 )),
             },
-            Ok(false) => out.push_str("  none    twitch       no stored token (run the wizard)\n"),
+            Ok(strivo_core::platform::twitch::TwitchTokenHealth::Refreshed) => out.push_str(
+                "  fixed   twitch       stale token refreshed automatically and saved\n",
+            ),
+            Ok(strivo_core::platform::twitch::TwitchTokenHealth::LoginRequired { reason }) => {
+                out.push_str(&format!(
+                    "  STALE   twitch       {reason}\n  hint: verify client_id/client_secret, then open Settings → Platforms to approve a new login\n"
+                ));
+            }
             Err(e) => out.push_str(&format!("  ERROR   twitch       {e}\n")),
         }
     } else {

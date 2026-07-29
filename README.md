@@ -187,6 +187,12 @@ Complete the web UI's setup flow on first launch, or configure manually:
 Credentials are stored in your OS keyring (macOS Keychain, GNOME Keyring /
 Secret Service, Windows Credential Manager).
 
+Strivo validates Twitch OAuth hourly and refreshes stale or near-expiry tokens
+automatically. `strivo doctor` performs the same repair immediately and reports
+whether the app secret or refresh token was rejected. When Twitch requires
+fresh user consent, the web UI surfaces its device-code login; this is the one
+step Twitch does not permit Strivo to complete on your behalf.
+
 ## Usage
 
 ### Web UI

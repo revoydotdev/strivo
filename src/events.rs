@@ -63,6 +63,11 @@ pub enum DaemonEvent {
     PlatformAuthenticated {
         kind: PlatformKind,
     },
+    /// A previously authenticated platform can no longer refresh its token.
+    PlatformAuthenticationRequired {
+        kind: PlatformKind,
+        reason: String,
+    },
     PatreonPostFound {
         creator_name: String,
         post_title: String,

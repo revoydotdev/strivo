@@ -355,6 +355,7 @@ pub enum DaemonEventKind {
     RecordingsPruned,
     DeviceCodeRequired,
     PlatformAuthenticated,
+    PlatformAuthenticationRequired,
     PatreonPostFound,
     PatreonState,
     BulkProgress,
@@ -381,6 +382,9 @@ impl DaemonEventKind {
             DaemonEvent::RecordingsPruned { .. } => Self::RecordingsPruned,
             DaemonEvent::DeviceCodeRequired { .. } => Self::DeviceCodeRequired,
             DaemonEvent::PlatformAuthenticated { .. } => Self::PlatformAuthenticated,
+            DaemonEvent::PlatformAuthenticationRequired { .. } => {
+                Self::PlatformAuthenticationRequired
+            }
             DaemonEvent::PatreonPostFound { .. } => Self::PatreonPostFound,
             DaemonEvent::PatreonState { .. } => Self::PatreonState,
             DaemonEvent::BulkProgress { .. } => Self::BulkProgress,

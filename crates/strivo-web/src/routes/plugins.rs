@@ -144,41 +144,45 @@ async fn cuepoints_generate(
         return Problem::not_found("recording file missing").into_response();
     }
     let threshold = strivo_cuepoints::DEFAULT_THRESHOLD;
-    // Check the cache first.
     let store_path = strivo_core::config::AppConfig::data_dir()
         .join("plugins")
         .join("cuepoints")
         .join("cuepoints.db");
-    let store = match strivo_cuepoints::store::CuepointsStore::open(&store_path) {
-        Ok(s) => s,
-        Err(e) => return Problem::internal(format!("open cache: {e}")).into_response(),
-    };
-    if let Ok(Some(points)) = store.load(&recording_id, threshold) {
-        return Json(json!({
+    let recording_id_bg = recording_id.clone();
+    // Cache lookup + ffmpeg extraction are both blocking; run them off
+    // the Tokio worker thread.
+    let outcome = tokio::task::spawn_blocking(
+        move || -> Result<(Vec<strivo_cuepoints::Cuepoint>, bool), String> {
+            let store = strivo_cuepoints::store::CuepointsStore::open(&store_path)
+                .map_err(|e| format!("open cache: {e}"))?;
+            if let Ok(Some(points)) = store.load(&recording_id_bg, threshold) {
+                return Ok((points, true));
+            }
+            let points = strivo_cuepoints::extract_cuepoints(&input, threshold)
+                .map_err(|e| format!("ffmpeg: {e}"))?;
+            let set = strivo_cuepoints::CuepointSet {
+                recording_id: recording_id_bg.clone(),
+                threshold,
+                points: points.clone(),
+            };
+            let _ = store.save(&set);
+            Ok((points, false))
+        },
+    )
+    .await;
+    match outcome {
+        Ok(Ok((points, cached))) => Json(json!({
             "recording_id": recording_id,
             "threshold": threshold,
             "points": points,
-            "cached": true,
+            "cached": cached,
         }))
-        .into_response();
+        .into_response(),
+        Ok(Err(msg)) => Problem::internal(msg).into_response(),
+        Err(error) => {
+            Problem::internal(format!("cuepoints worker crashed: {error}")).into_response()
+        }
     }
-    let points = match strivo_cuepoints::extract_cuepoints(&input, threshold) {
-        Ok(p) => p,
-        Err(e) => return Problem::internal(format!("ffmpeg: {e}")).into_response(),
-    };
-    let set = strivo_cuepoints::CuepointSet {
-        recording_id: recording_id.clone(),
-        threshold,
-        points: points.clone(),
-    };
-    let _ = store.save(&set);
-    Json(json!({
-        "recording_id": recording_id,
-        "threshold": threshold,
-        "points": points,
-        "cached": false,
-    }))
-    .into_response()
 }
 
 /// Resolve the on-disk output path for a recording job from persist.
@@ -233,41 +237,50 @@ async fn clipper_analyze(
         .join("plugins")
         .join("cuepoints")
         .join("cuepoints.db");
-    let cp_store = match strivo_cuepoints::store::CuepointsStore::open(&cp_store_path) {
-        Ok(s) => s,
-        Err(e) => return Problem::internal(format!("open cuepoints cache: {e}")).into_response(),
-    };
-    let cuepoints = match cp_store.load(&recording_id, threshold) {
-        Ok(Some(c)) => c,
-        _ => match strivo_cuepoints::extract_cuepoints(&input, threshold) {
-            Ok(c) => {
-                let set = strivo_cuepoints::CuepointSet {
-                    recording_id: recording_id.clone(),
-                    threshold,
-                    points: c.clone(),
-                };
-                let _ = cp_store.save(&set);
-                c
+    let recording_id_bg = recording_id.clone();
+    // Cuepoints cache lookup/extraction (ffmpeg) and highlight scoring
+    // are all blocking; run them off the Tokio worker thread.
+    let outcome =
+        tokio::task::spawn_blocking(move || -> Result<Vec<strivo_clipper::Highlight>, String> {
+            let cp_store = strivo_cuepoints::store::CuepointsStore::open(&cp_store_path)
+                .map_err(|e| format!("open cuepoints cache: {e}"))?;
+            let cuepoints = match cp_store.load(&recording_id_bg, threshold) {
+                Ok(Some(c)) => c,
+                _ => {
+                    let c = strivo_cuepoints::extract_cuepoints(&input, threshold)
+                        .map_err(|e| format!("cuepoints: {e}"))?;
+                    let set = strivo_cuepoints::CuepointSet {
+                        recording_id: recording_id_bg.clone(),
+                        threshold,
+                        points: c.clone(),
+                    };
+                    let _ = cp_store.save(&set);
+                    c
+                }
+            };
+            let window = strivo_clipper::DEFAULT_WINDOW_SECS;
+            let highlights =
+                strivo_clipper::score_highlights(&cuepoints, window, strivo_clipper::DEFAULT_TOP_K);
+            let store_path = strivo_core::config::AppConfig::data_dir()
+                .join("plugins")
+                .join("clipper")
+                .join("clipper.db");
+            if let Ok(store) = strivo_clipper::store::ClipperStore::open(&store_path) {
+                let _ = store.save_highlights(&recording_id_bg, window, &highlights);
             }
-            Err(e) => return Problem::internal(format!("cuepoints: {e}")).into_response(),
-        },
-    };
-    let window = strivo_clipper::DEFAULT_WINDOW_SECS;
-    let highlights =
-        strivo_clipper::score_highlights(&cuepoints, window, strivo_clipper::DEFAULT_TOP_K);
-    let store_path = strivo_core::config::AppConfig::data_dir()
-        .join("plugins")
-        .join("clipper")
-        .join("clipper.db");
-    if let Ok(store) = strivo_clipper::store::ClipperStore::open(&store_path) {
-        let _ = store.save_highlights(&recording_id, window, &highlights);
+            Ok(highlights)
+        })
+        .await;
+    match outcome {
+        Ok(Ok(highlights)) => Json(json!({
+            "recording_id": recording_id,
+            "window_secs": strivo_clipper::DEFAULT_WINDOW_SECS,
+            "highlights": highlights,
+        }))
+        .into_response(),
+        Ok(Err(msg)) => Problem::internal(msg).into_response(),
+        Err(error) => Problem::internal(format!("clipper worker crashed: {error}")).into_response(),
     }
-    Json(json!({
-        "recording_id": recording_id,
-        "window_secs": window,
-        "highlights": highlights,
-    }))
-    .into_response()
 }
 
 /// `POST /api/v1/plugins/clipper/<recording_id>/extract` — cut the
@@ -308,9 +321,18 @@ async fn clipper_extract(
         .map(|p| p.join("clips"))
         .unwrap_or_else(|| std::path::PathBuf::from("./clips"));
     let output = clip_dir.join(format!("{safe_stem}.{extension}"));
-    let bytes = match strivo_clipper::extract_clip(&input, &output, start, duration) {
-        Ok(n) => n,
-        Err(e) => return Problem::internal(format!("ffmpeg: {e}")).into_response(),
+    let extract_input = input.clone();
+    let extract_output = output.clone();
+    let bytes = match tokio::task::spawn_blocking(move || {
+        strivo_clipper::extract_clip(&extract_input, &extract_output, start, duration)
+    })
+    .await
+    {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => return Problem::internal(format!("ffmpeg: {e}")).into_response(),
+        Err(error) => {
+            return Problem::internal(format!("clipper worker crashed: {error}")).into_response()
+        }
     };
     let result = strivo_clipper::ClipResult {
         recording_id: recording_id.clone(),
@@ -414,13 +436,50 @@ async fn thumbnails_generate(
     if !input.exists() {
         return Problem::not_found("recording file missing").into_response();
     }
+    // Timestamp resolution (ffprobe fallbacks), frame extraction (ffmpeg
+    // per timestamp), and the cache write are all blocking; run the whole
+    // sequence off the Tokio worker thread.
+    let recording_id_bg = recording_id.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        thumbnails_generate_blocking(&recording_id_bg, &input, body)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(candidates)) => Json(json!({
+            "recording_id": recording_id,
+            "candidates": candidates,
+        }))
+        .into_response(),
+        Ok(Err(ThumbsError::Empty)) => {
+            Problem::bad_request("no timestamps to sample").into_response()
+        }
+        Ok(Err(ThumbsError::Failed(msg))) => Problem::internal(msg).into_response(),
+        Err(error) => {
+            Problem::internal(format!("thumbnails worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+enum ThumbsError {
+    Empty,
+    Failed(String),
+}
+
+/// Blocking body of [`thumbnails_generate`] — timestamp resolution,
+/// ffmpeg frame extraction, and the cache write. Runs on a
+/// `spawn_blocking` worker thread.
+fn thumbnails_generate_blocking(
+    recording_id: &str,
+    input: &std::path::Path,
+    body: ThumbsPayload,
+) -> Result<Vec<strivo_thumbnails::ThumbnailCandidate>, ThumbsError> {
     // Build the timestamp list.
     let timestamps: Vec<f32> = match body.source.as_str() {
         "list" => body.times.clone(),
         "even" => {
             let interval = body.interval_secs.unwrap_or(600.0).max(15.0);
             // ffprobe duration to know how far to walk.
-            let duration = probe_duration(&input).unwrap_or(3600.0);
+            let duration = probe_duration(input).unwrap_or(3600.0);
             let mut out = Vec::new();
             let mut t = 0.0_f32;
             while t < duration {
@@ -436,11 +495,11 @@ async fn thumbnails_generate(
                 .join("cuepoints.db");
             let store = strivo_cuepoints::store::CuepointsStore::open(&cp_path).ok();
             let cps = store
-                .and_then(|s| s.load(&recording_id, strivo_cuepoints::DEFAULT_THRESHOLD).ok().flatten())
+                .and_then(|s| s.load(recording_id, strivo_cuepoints::DEFAULT_THRESHOLD).ok().flatten())
                 .unwrap_or_default();
             if cps.is_empty() {
                 // Fall back to a handful of even samples so the user gets *something*.
-                let duration = probe_duration(&input).unwrap_or(3600.0);
+                let duration = probe_duration(input).unwrap_or(3600.0);
                 let n = 8;
                 (0..n).map(|i| duration * (i as f32 + 0.5) / n as f32).collect()
             } else {
@@ -452,15 +511,15 @@ async fn thumbnails_generate(
     // the UI thread. SPA can request a smaller batch if it wants more.
     let timestamps: Vec<f32> = timestamps.into_iter().take(24).collect();
     if timestamps.is_empty() {
-        return Problem::bad_request("no timestamps to sample").into_response();
+        return Err(ThumbsError::Empty);
     }
     // ffprobe resolution for cropping.
-    let (w, h) = probe_resolution(&input).unwrap_or((1920, 1080));
+    let (w, h) = probe_resolution(input).unwrap_or((1920, 1080));
 
     let out_dir = strivo_core::config::AppConfig::data_dir()
         .join("plugins")
         .join("thumbnails")
-        .join(&recording_id);
+        .join(recording_id);
     let stem = "candidate";
     let opts = strivo_thumbnails::GenerateOptions {
         timestamps,
@@ -468,24 +527,17 @@ async fn thumbnails_generate(
         stem: stem.to_string(),
         facecam: body.facecam,
     };
-    let result = match strivo_thumbnails::generate_candidates(&input, (w, h), &opts, &recording_id)
-    {
-        Ok(r) => r,
-        Err(e) => return Problem::internal(format!("thumbnails: {e}")).into_response(),
-    };
+    let result = strivo_thumbnails::generate_candidates(input, (w, h), &opts, recording_id)
+        .map_err(|e| ThumbsError::Failed(format!("thumbnails: {e}")))?;
 
     let store_path = strivo_core::config::AppConfig::data_dir()
         .join("plugins")
         .join("thumbnails")
         .join("thumbnails.db");
     if let Ok(store) = strivo_thumbnails::store::ThumbnailsStore::open(&store_path) {
-        let _ = store.save(&recording_id, stem, &result.candidates);
+        let _ = store.save(recording_id, stem, &result.candidates);
     }
-    Json(json!({
-        "recording_id": recording_id,
-        "candidates": result.candidates,
-    }))
-    .into_response()
+    Ok(result.candidates)
 }
 
 /// Shell out to ffprobe for the duration in seconds.
@@ -529,6 +581,17 @@ fn probe_resolution(input: &std::path::Path) -> Option<(u32, u32)> {
     } else {
         None
     }
+}
+
+/// Best-effort ffprobe duration lookup, run on a `spawn_blocking` worker
+/// thread. Mirrors `probe_duration`'s own `Option` contract: a worker
+/// panic falls back to `None`, same as any other probe failure.
+async fn probe_duration_async(input: &std::path::Path) -> Option<f32> {
+    let input = input.to_path_buf();
+    tokio::task::spawn_blocking(move || probe_duration(&input))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// `GET /api/v1/plugins/thumbnails/<recording_id>/<stem>` — list the
@@ -1076,7 +1139,7 @@ async fn reuse_generate(
         Some((t, c)) => (t, c),
         None => (recording_id.clone(), String::new()),
     };
-    let duration_sec = probe_duration(&input).unwrap_or(0.0);
+    let duration_sec = probe_duration_async(&input).await.unwrap_or(0.0);
 
     let crunchr_conn = open_ro(&crunchr_db());
     // Crunchr summary + top words / topics, when available. Best-effort.
@@ -1224,10 +1287,10 @@ async fn casebook_generate(
             None => (recording_id.clone(), String::new(), None),
         };
     let input_path = resolve_recording_path(&recording_id).await.ok();
-    let duration_sec = input_path
-        .as_ref()
-        .and_then(|p| probe_duration(p))
-        .unwrap_or(0.0);
+    let duration_sec = match input_path.as_ref() {
+        Some(p) => probe_duration_async(p).await.unwrap_or(0.0),
+        None => 0.0,
+    };
 
     // Crunchr summary + topics.
     let mut summary = String::new();
@@ -1440,7 +1503,7 @@ async fn heatmap_compute(
         Ok(p) => p,
         Err(e) => return Problem::not_found(e).into_response(),
     };
-    let probed = probe_duration(&input_path).unwrap_or(0.0);
+    let probed = probe_duration_async(&input_path).await.unwrap_or(0.0);
 
     // Transcript segments.
     let mut segments: Vec<strivo_heatmap::TranscriptSegment> = Vec::new();
@@ -1600,7 +1663,7 @@ async fn editor_load(
     let edl = match store.load(&recording_id).ok().flatten() {
         Some(e) => e,
         None => {
-            let dur = probe_duration(&input).unwrap_or(0.0);
+            let dur = probe_duration_async(&input).await.unwrap_or(0.0);
             strivo_editor::Edl::from_source(&recording_id, &input.to_string_lossy(), dur)
         }
     };
@@ -1763,15 +1826,29 @@ async fn editor_render(
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
     let audio_filter = automation.build_audio_filter(0.05);
-    match strivo_editor::render_edl_with_filters(&edl, &output, Some(&fc), Some(&audio_filter)) {
-        Ok(bytes) => Json(json!({
+    // The EDL render is N sequential per-cut ffmpeg passes plus a concat
+    // pass — full transcode wall time. Run it off the Tokio worker thread.
+    let render_edl = edl.clone();
+    let render_output = output.clone();
+    let render = tokio::task::spawn_blocking(move || {
+        strivo_editor::render_edl_with_filters(
+            &render_edl,
+            &render_output,
+            Some(&fc),
+            Some(&audio_filter),
+        )
+    })
+    .await;
+    match render {
+        Ok(Ok(bytes)) => Json(json!({
             "ok": true,
             "output_path": output.to_string_lossy(),
             "bytes": bytes,
             "total_duration": edl.total_duration(),
         }))
         .into_response(),
-        Err(e) => Problem::internal(format!("render: {e}")).into_response(),
+        Ok(Err(e)) => Problem::internal(format!("render: {e}")).into_response(),
+        Err(error) => Problem::internal(format!("editor worker crashed: {error}")).into_response(),
     }
 }
 

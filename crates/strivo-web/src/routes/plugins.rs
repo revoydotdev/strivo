@@ -4183,6 +4183,10 @@ pub fn router() -> Router<AppState> {
             get(research_search),
         )
         .route(
+            "/api/v1/research/projects/{id}/moments",
+            get(research_moments).post(research_create_moment),
+        )
+        .route(
             "/api/v1/research/projects/{id}/migrate/crunchr",
             axum::routing::post(research_migrate_crunchr),
         )
@@ -4356,6 +4360,24 @@ struct ResearchSearchQuery {
     q: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResearchMomentsQuery {
+    source_id: Option<uuid::Uuid>,
+    min_confidence: Option<f64>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateMomentBody {
+    source_id: uuid::Uuid,
+    t_start_ms: u64,
+    t_end_ms: u64,
+    label: String,
+    #[serde(default)]
+    tag: Option<String>,
 }
 
 async fn research_projects(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
@@ -4683,6 +4705,70 @@ async fn research_search(
     .await
     {
         Ok(Ok(hits)) => Json(json!({ "hits": hits })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/moments` — the CE-Fusion F2
+/// creator-vocabulary projection: codings and clip-worthy detection
+/// signals merged into one "moments" stream (strategy §3, §6).
+async fn research_moments(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchMomentsQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_moments(
+            project_id,
+            query.source_id,
+            query.min_confidence,
+            query.limit.unwrap_or(200),
+            query.offset.unwrap_or(0),
+        )
+    })
+    .await
+    {
+        Ok(Ok(moments)) => Json(json!({ "moments": moments })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `POST /api/v1/research/projects/{id}/moments` — create a moment, which
+/// writes a real human-origin coding (find-or-create the tag's code, then
+/// the existing `add_coding` path) so the projection and the kernel never
+/// drift apart.
+async fn research_create_moment(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Json(body): Json<CreateMomentBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.create_moment(
+            project_id,
+            body.source_id,
+            body.t_start_ms,
+            body.t_end_ms,
+            body.label,
+            body.tag,
+        )
+    })
+    .await
+    {
+        Ok(Ok(moment)) => (StatusCode::CREATED, Json(json!({ "moment": moment }))).into_response(),
         Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
         Err(error) => {
             Problem::internal(format!("research worker crashed: {error}")).into_response()

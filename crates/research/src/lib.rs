@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod moments;
 pub mod search;
+pub use moments::{Moment, MomentOrigin};
 
 const SCHEMA_VERSION: i64 = 1;
 const SCHEMA: &str = r#"

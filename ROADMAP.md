@@ -204,6 +204,30 @@ template (highlight/retention rollups + publish-ready clips).
 
 ---
 
+## CE-Fusion · NVivo meets Riverside (dual-value bridge)
+
+Positioning and rationale live in
+[`docs/STRATEGY-NVIVO-RIVERSIDE.md`](docs/STRATEGY-NVIVO-RIVERSIDE.md) (Round 1).
+Standing rule adopted from that confab: **every research-platform phase ships at
+least one creator-visible outcome.** The kernel keeps canonical research names;
+creator surfaces render their own vocabulary (coding → moment, code → tag,
+corpus → collection). One schema, one API, per-surface display strings — never a
+fork.
+
+| Item | State | Notes |
+|---|---|---|
+| **F1 · Archive search** — lexical search over kernel `transcript.utterance` signals; every hit resolves to source + time range | ⬜ | `strivo-research` search module + `GET /api/v1/research/projects/{id}/search`; bounded, deterministic, paginated |
+| **F2 · Moments projection** — codings and high-confidence detections exposed as creator-vocabulary "moments"; creating a moment writes a coding | ⬜ | the coding == clip-candidate bridge (strategy §3); read projection + create path over the existing kernel |
+| **F3 · Content-free product telemetry** — per-route latency/reliability aggregation, local only, no corpus content | ⬜ | research-roadmap Phase 0 deliverable; matched-route template + status + duration only; `GET /api/v1/telemetry` |
+| **F4 · SPA Archive surface** — search + moments pages in creator vocabulary, keyboard operable, `creator`-gated | ⬜ | blocked by F1/F2; DESIGN.md compliance required |
+| **F5 · Search → Editor journey** — a search hit or moment opens the Editor at that source/time | ⬜ | blocked by F4; the acceptance journey from strategy §7 |
+| **F6 · Phase 0 experience audit** — UX/user-journey, PVR + Pro performance, optimization and efficacy audit | ⬜ | read-only; report in `docs/audits/` feeding this table |
+| Pricing tier for the research platform | ⏸ | owner decision (strategy §8); constraint carried: no subscription for locally-running code |
+| Local multitrack import seam | ⏸ | owner decision on phase ownership (strategy §9) |
+| Remote guest studio recording | ⏸ | explicit non-goal (strategy §5); recorded to stop re-litigation |
+
+---
+
 ## Cross-cutting blockers & hardening
 
 | Item | State | Disposition |

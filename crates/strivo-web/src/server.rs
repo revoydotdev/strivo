@@ -67,6 +67,9 @@ impl Default for ServeConfig {
 }
 
 pub async fn serve(cfg: ServeConfig) -> Result<()> {
+    // Record process start time for GET /api/v1/telemetry's `started_at`
+    // before anything else — a no-op after the first call.
+    crate::telemetry::init();
     let ipc = Arc::new(IpcClient::connect_or_err()?);
     // Session secret must exist before the first request so the cookie
     // /login signs is verifiable by check_key on the same process. Read
@@ -130,6 +133,16 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     let app = guarded
         .merge(routes::websub::router())
         .layer(CompressionLayer::new())
+        // CE-Fusion F3: content-free per-route latency/reliability
+        // telemetry, queryable at GET /api/v1/telemetry. Wired with
+        // `.layer()` (not `.route_layer()`) at this router-composition
+        // point so it also wraps the catch-all 404 fallback — that's what
+        // lets truly unmatched requests reach the recorder and fall into
+        // the bounded "unmatched" bucket instead of escaping telemetry
+        // entirely. axum inserts `MatchedPath` into request extensions
+        // before dispatching into a route's (already-layered) service, so
+        // `.layer()` here sees it same as `.route_layer()` would.
+        .layer(middleware::from_fn(crate::telemetry::record_request))
         .layer(middleware::from_fn(performance_timing))
         .layer(middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())

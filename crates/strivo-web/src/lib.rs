@@ -12,5 +12,6 @@ pub mod problem;
 pub mod ratelimit;
 pub mod routes;
 pub mod server;
+pub mod telemetry;
 
 pub use server::{serve, ServeConfig};

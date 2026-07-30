@@ -3144,6 +3144,12 @@ pub fn router() -> Router<AppState> {
     let mut r = Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/health/checks", get(health_checks))
+        // CE-Fusion F3: content-free product telemetry. Not gated behind
+        // `creator` — serves both editions.
+        .route(
+            "/api/v1/telemetry",
+            get(crate::telemetry::telemetry_handler),
+        )
         .route("/api/v1/channels", get(channels))
         .route("/api/v1/patreon", get(patreon))
         .route("/api/v1/recordings", get(recordings).post(start_recording))

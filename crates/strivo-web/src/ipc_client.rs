@@ -55,6 +55,17 @@ impl IpcClient {
         Ok(())
     }
 
+    /// Test-only: an `IpcClient` bound to a socket path that never exists,
+    /// so router-level tests can build a full `AppState` without a running
+    /// daemon. Only safe for handlers under test that never touch the IPC
+    /// socket (e.g. `telemetry::telemetry_handler`).
+    #[cfg(test)]
+    pub(crate) fn disconnected() -> Self {
+        Self {
+            socket_path: PathBuf::from("/nonexistent-strivo-test-socket"),
+        }
+    }
+
     /// — fast enough that we don't bother caching at the web layer.
     pub async fn snapshot(&self) -> Result<ServerMessage> {
         let stream = UnixStream::connect(&self.socket_path)

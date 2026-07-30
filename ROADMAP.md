@@ -117,7 +117,7 @@ ui-ux, backend) and `research/exemplars/`.
 |---|---|---|
 | Calendar / upcoming-streams grid | ✅ | 7-day strip on the Schedule page off `next_fire`; full EPG later |
 | Per-channel quality/format overrides in the UI | ✅ | Monitor rows expose container/profile selects; `put_auto_record` persists them |
-| Outbound webhook / notification connectors | ✅ | `[notifications.webhook]` (enabled/url); `src/webhook.rs` POSTs streamerREC-shaped JSON off `DaemonEvent`. Discord/ntfy presets later |
+| Outbound webhook / notification connectors | 🟡 | backend works (`src/webhook.rs` off `DaemonEvent`) but TOML-only — no SPA settings UI, a DoD gap (audit F-04). Discord/ntfy presets later |
 | Storage gauge in the UI | ✅ | three-segment disk bar on the System page from `/api/v1/storage` |
 | Concurrent-slot indicator ("N / M rec") | ✅ | topbar slot pill from `monitor_limits.max_concurrent_recordings` + live count |
 | Quality profiles (tiered) | ✅ | `bd75f9c` + `0fa189e` — `QualityTier` enum in `CaptureProfile`; threaded through streamlink and yt-dlp. |
@@ -216,12 +216,13 @@ fork.
 
 | Item | State | Notes |
 |---|---|---|
-| **F1 · Archive search** — lexical search over kernel `transcript.utterance` signals; every hit resolves to source + time range | ⬜ | `strivo-research` search module + `GET /api/v1/research/projects/{id}/search`; bounded, deterministic, paginated |
-| **F2 · Moments projection** — codings and high-confidence detections exposed as creator-vocabulary "moments"; creating a moment writes a coding | ⬜ | the coding == clip-candidate bridge (strategy §3); read projection + create path over the existing kernel |
-| **F3 · Content-free product telemetry** — per-route latency/reliability aggregation, local only, no corpus content | ⬜ | research-roadmap Phase 0 deliverable; matched-route template + status + duration only; `GET /api/v1/telemetry` |
+| **F1 · Archive search** — lexical search over kernel `transcript.utterance` signals; every hit resolves to source + time range | ✅ | `crates/research/src/search.rs` (temp FTS5 index, phrase-quoted queries, deterministic `(source_id, start_ms, id)` order) + `GET /api/v1/research/projects/{id}/search` |
+| **F2 · Moments projection** — codings and high-confidence detections exposed as creator-vocabulary "moments"; creating a moment writes a coding | ✅ | `crates/research/src/moments.rs` + GET/POST `/api/v1/research/projects/{id}/moments`; detections = `visual.scene_change` + `audience.anomaly` (chat-density joins once it writes kernel signals) |
+| **F3 · Content-free product telemetry** — per-route latency/reliability aggregation, local only, no corpus content | ✅ | `crates/strivo-web/src/telemetry.rs` (matched-route template + status + duration only, both editions) + authed `GET /api/v1/telemetry` |
 | **F4 · SPA Archive surface** — search + moments pages in creator vocabulary, keyboard operable, `creator`-gated | ⬜ | blocked by F1/F2; DESIGN.md compliance required |
 | **F5 · Search → Editor journey** — a search hit or moment opens the Editor at that source/time | ⬜ | blocked by F4; the acceptance journey from strategy §7 |
-| **F6 · Phase 0 experience audit** — UX/user-journey, PVR + Pro performance, optimization and efficacy audit | ⬜ | read-only; report in `docs/audits/` feeding this table |
+| **F6 · Phase 0 experience audit** — UX/user-journey, PVR + Pro performance, optimization and efficacy audit | ✅ | `docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md` — 33 findings (6 P1); P1 remediation tracked below |
+| **F7 · Audit P1 remediation** — async-hygiene (`spawn_blocking` for ffmpeg shell-outs), pipeline lock acquisition timeouts, licence-button `implemented` gating, real `reduce_motion` wiring, creator-nav signpost cleanup, webhook settings UI | ⬜ | from F6 findings F-32, F-37, F-11, F-18, F-12, F-04 |
 | Pricing tier for the research platform | ⏸ | owner decision (strategy §8); constraint carried: no subscription for locally-running code |
 | Local multitrack import seam | ⏸ | owner decision on phase ownership (strategy §9) |
 | Remote guest studio recording | ⏸ | explicit non-goal (strategy §5); recorded to stop re-litigation |
@@ -239,7 +240,7 @@ fork.
 | Corpus assembled client-side, not server-side | 🟡 | **CE-P2** |
 | Licence JWT ES256 signature and claims verified | ✅ | ES256 signature, issuer, machine, expiry, licence expiry, and tier fail closed |
 | Crunchr headless auto-transcribe | ✅ | recording-finished events reach resident plugins and enqueue the same durable DAG used by manual runs |
-| ffprobe results uncached — re-analyses on every `/probe` | ⬜ | Perf; cache keyed by path+mtime |
+| ffprobe results uncached — re-analyses on every `/probe` | ✅ | `probe_cache` in `crates/strivo-web/src/routes/api.rs` (audit F-25 found this row stale; `docs/PERFORMANCE.md` already documented the fix) |
 | Dynamic cdylib plugin loading coded but never triggered; no hot-reload | ⬜ | Deferred until third-party plugins are real |
 | `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |
 | Creator Edition clippy gate | ✅ | CI runs `-D warnings` with the Creator feature |
@@ -293,8 +294,18 @@ to the next phase when these land. Keep in sync with the tables above.
 phase = "post-near-term hardening (v0.5.x)"
 
 [[todo]]
-line = "Cache ffprobe results keyed by path+mtime to eliminate re-analysis on every /probe call"
-difficulty = 20
+line = "Move synchronous ffmpeg/ffprobe shell-outs in creator handlers (editor_render, clipper_extract, thumbnails_generate, reuse_generate) onto spawn_blocking (audit F-32)"
+difficulty = 30
+priority = "HIGH"
+
+[[todo]]
+line = "Add acquisition timeouts to pipeline resource-lock semaphores so a wedged subprocess cannot stall all Creator stages (audit F-37)"
+difficulty = 30
+priority = "HIGH"
+
+[[todo]]
+line = "Gate licence trial/activate buttons on the backend implemented flag and wire the ui.reduce_motion setting for real (audit F-11, F-18)"
+difficulty = 25
 priority = "MED"
 
 [[todo]]

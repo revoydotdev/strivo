@@ -1175,6 +1175,35 @@ button.busy::after {
 @media (prefers-reduced-motion: reduce) {
   button.busy::after { animation: none; }
 }
+
+/* Reduced motion (F-18/F-19): the REC dot, boot glyph, and in-flight
+ * state-pill pulses are decorative attention animations, not progress
+ * indicators — the pill's actual progress is conveyed by its text/fill
+ * (see .state-pill.has-fill above), not the pulse. Suppress them both when
+ * the OS signals `prefers-reduced-motion` and when the user has the
+ * Settings → Accessibility → Reduce motion toggle on; spa.js keeps
+ * `.reduce-motion` on <html> in sync with both signals (see
+ * applyReducedMotion()). The busy-spinner and toast-slide rules above stay
+ * pure media-query so this class mirrors them for parity when the user
+ * opts in without OS support. */
+@media (prefers-reduced-motion: reduce) {
+  .boot-glyph,
+  .ch-rec,
+  .live-now h2 .rec-dot,
+  .recordings-table .state-pill.recording,
+  .state-pill.downloading,
+  .recordings-table .state-pill.downloading { animation: none; }
+}
+html.reduce-motion .boot-glyph,
+html.reduce-motion .ch-rec,
+html.reduce-motion .live-now h2 .rec-dot,
+html.reduce-motion .recordings-table .state-pill.recording,
+html.reduce-motion .state-pill.downloading,
+html.reduce-motion .recordings-table .state-pill.downloading,
+html.reduce-motion button.busy::after { animation: none; }
+html.reduce-motion .toast { animation: none; }
+html.reduce-motion .toast.out { transition: none; }
+
 /* Inline field validation (item 25). */
 input[aria-invalid="true"],
 select[aria-invalid="true"] {

@@ -1006,10 +1006,39 @@ let CREATOR_ENABLED = false;
 const CREATOR_ROUTES = new Set([
   "studio", "analytics", "publish", "pipelines", "plugins", "dataviz", "archive",
 ]);
+
+// Reduced motion (F-18): the `ui.reduce_motion` setting is a manual override
+// on top of the OS-level `prefers-reduced-motion` media query — either one
+// being "on" should suppress decorative animation. We track the setting
+// value ourselves (settings responses aren't otherwise cached globally) and
+// recompute the effective state whenever the setting changes or the OS
+// preference flips, so no reload is required either way.
+let REDUCE_MOTION_SETTING = false;
+const REDUCE_MOTION_QUERY = window.matchMedia
+  ? window.matchMedia("(prefers-reduced-motion: reduce)")
+  : null;
+function applyReducedMotion() {
+  const osReduced = !!(REDUCE_MOTION_QUERY && REDUCE_MOTION_QUERY.matches);
+  document.documentElement.classList.toggle("reduce-motion", REDUCE_MOTION_SETTING || osReduced);
+}
+if (REDUCE_MOTION_QUERY) {
+  if (REDUCE_MOTION_QUERY.addEventListener) {
+    REDUCE_MOTION_QUERY.addEventListener("change", applyReducedMotion);
+  } else if (REDUCE_MOTION_QUERY.addListener) {
+    // Safari < 14 fallback.
+    REDUCE_MOTION_QUERY.addListener(applyReducedMotion);
+  }
+}
+// Apply the OS preference immediately, before settings have loaded, so a
+// reduced-motion browser never sees an unsuppressed boot-glyph pulse.
+applyReducedMotion();
+
 async function fetchEdition() {
   try {
     const st = await API.settings();
     CREATOR_ENABLED = !!st.creator_enabled;
+    REDUCE_MOTION_SETTING = !!(st.ui && st.ui.reduce_motion);
+    applyReducedMotion();
   } catch (_) {
     CREATOR_ENABLED = false;
   }
@@ -10655,6 +10684,10 @@ function wireSettingsControls() {
       try {
         await API.updateSetting(path, value);
         if (el.type !== "checkbox") el.setAttribute("data-prev", String(value));
+        if (path === "ui.reduce_motion") {
+          REDUCE_MOTION_SETTING = !!value;
+          applyReducedMotion();
+        }
         Toast.success(`Saved · ${path}`);
       } catch (err) {
         if (el.type === "checkbox") el.checked = previous;

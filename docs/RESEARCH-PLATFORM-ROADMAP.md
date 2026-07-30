@@ -12,6 +12,11 @@ the acquisition layer; the DAG is the reproducible compute layer; the research
 kernel is the evidence layer; analysis and visualization are projections over
 that evidence.
 
+Product positioning, the creator-side pitch, and phase-sequencing pressure from
+the "NVivo meets Riverside" thesis are recorded in
+[STRATEGY-NVIVO-RIVERSIDE.md](STRATEGY-NVIVO-RIVERSIDE.md); that document adds a
+dual-value test to phase scoping but does not change the contracts below.
+
 ## Architectural destination
 
 ```text

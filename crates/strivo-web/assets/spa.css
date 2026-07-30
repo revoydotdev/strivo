@@ -4471,6 +4471,44 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
 .dz-exp.active { box-shadow: inset 0 0 0 1px var(--accent, #b07cff); color: var(--accent, #b07cff); }
 .dz-chart { overflow-x: auto; min-height: 200px; }
 .dz-chart svg { display: block; }
+
+/* Archive route (CE-Fusion F4/F5) */
+.arc-toolbar { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.arc-ws-picker { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--muted); }
+.arc-ws-picker select { width: auto; min-width: 180px; }
+.arc-bootstrap, .arc-index-report { margin-bottom: 1rem; }
+.arc-empty-sources { padding: 2.5rem 2rem; }
+.arc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; align-items: start; }
+@media (max-width: 900px) { .arc-grid { grid-template-columns: 1fr; } }
+.arc-search-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
+.arc-search-row input { flex: 1; }
+.arc-moments-filter { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; font-size: 0.85rem; color: var(--muted); }
+.arc-moments-filter input { width: 90px; }
+.arc-row {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.5rem;
+}
+.arc-row-main { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.arc-row-title { font-weight: 600; }
+.arc-row-time { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.arc-row-snippet { margin: 0.35rem 0; font-size: 0.9rem; color: var(--fg); }
+.arc-row-actions { display: flex; align-items: center; gap: 0.5rem; }
+.arc-no-editor { font-style: italic; }
+.arc-pager { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.5rem; }
+.arc-index-row {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.arc-index-row:last-child { border-bottom: none; }
+.arc-digest { font-family: var(--mono); font-size: 0.75rem; color: var(--dim); }
+.arc-target-time { color: var(--secondary); }
+.arc-field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--muted); }
+.arc-select, .arc-input { width: 100%; }
+.arc-select:focus, .arc-input:focus { outline: 0; border-color: var(--accent2); }
+.arc-moment-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.5rem; }
 .sopt-controls label {
   display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85em;
 }

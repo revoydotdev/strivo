@@ -4179,6 +4179,10 @@ pub fn router() -> Router<AppState> {
             get(research_signals),
         )
         .route(
+            "/api/v1/research/projects/{id}/search",
+            get(research_search),
+        )
+        .route(
             "/api/v1/research/projects/{id}/migrate/crunchr",
             axum::routing::post(research_migrate_crunchr),
         )
@@ -4345,6 +4349,13 @@ struct ResearchSignalQuery {
     kind: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResearchSearchQuery {
+    q: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
 }
 
 async fn research_projects(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
@@ -4638,6 +4649,40 @@ async fn research_signals(
     .await
     {
         Ok(Ok(signals)) => Json(json!({ "signals": signals })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// CE-Fusion F1: lexical search over `transcript.utterance` signal text.
+/// `q` is required and non-blank; `limit`/`offset` follow the store's own
+/// bounds (`search_transcripts` rejects `limit` outside 1..=200), so an
+/// invalid `q`/`limit` surfaces as 400 rather than 500.
+async fn research_search(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchSearchQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let Some(q) = query.q else {
+        return Problem::bad_request("q is required").into_response();
+    };
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.search_transcripts(
+            project_id,
+            &q,
+            query.limit.unwrap_or(50),
+            query.offset.unwrap_or(0),
+        )
+    })
+    .await
+    {
+        Ok(Ok(hits)) => Json(json!({ "hits": hits })).into_response(),
         Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
         Err(error) => {
             Problem::internal(format!("research worker crashed: {error}")).into_response()

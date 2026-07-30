@@ -1311,6 +1311,12 @@ async fn update_setting(
         "notifications.on_vod_ready" => {
             take_bool(&body.value).map(|v| cfg.notifications.on_vod_ready = v)
         }
+        "notifications.webhook.enabled" => {
+            take_bool(&body.value).map(|v| cfg.notifications.webhook.enabled = v)
+        }
+        "notifications.webhook.url" => {
+            take_webhook_url(&body.value).map(|u| cfg.notifications.webhook.url = u)
+        }
         // Monitor safety knobs. 0 disables; we clamp upper bounds at sane
         // values so a fat-fingered '999999' doesn't accidentally pin the
         // daemon trying to start a thousand simultaneous captures.
@@ -1421,6 +1427,25 @@ fn take_str_in(v: &serde_json::Value, allowed: &[&str]) -> Result<String, String
     } else {
         Err(format!("must be one of {allowed:?}"))
     }
+}
+
+/// Validate the outbound webhook URL. An empty string clears the setting
+/// (`None` — `dispatch_webhook` already no-ops without a URL); a non-empty
+/// value must parse as an absolute `http`/`https` URL so a typo doesn't
+/// silently sit in config until the first failed delivery.
+fn take_webhook_url(v: &serde_json::Value) -> Result<Option<String>, String> {
+    let s = v
+        .as_str()
+        .ok_or_else(|| "expected string".to_string())?
+        .trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let parsed = reqwest::Url::parse(s).map_err(|e| format!("invalid URL: {e}"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("URL must use http or https".into());
+    }
+    Ok(Some(s.to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -3351,5 +3376,30 @@ mod tests {
         assert_eq!(disk_severity(100, 50), "ok"); // 50% free
         assert_eq!(disk_severity(100, 15), "ok"); // exactly 15% → ok (>= boundary)
         assert_eq!(disk_severity(100, 14), "warn");
+    }
+
+    #[test]
+    fn webhook_url_accepts_http_and_https() {
+        assert_eq!(
+            take_webhook_url(&serde_json::json!("https://example.com/hook")).unwrap(),
+            Some("https://example.com/hook".to_string())
+        );
+        assert_eq!(
+            take_webhook_url(&serde_json::json!("http://localhost:9000/x")).unwrap(),
+            Some("http://localhost:9000/x".to_string())
+        );
+    }
+
+    #[test]
+    fn webhook_url_empty_string_clears_setting() {
+        assert_eq!(take_webhook_url(&serde_json::json!("")).unwrap(), None);
+        assert_eq!(take_webhook_url(&serde_json::json!("   ")).unwrap(), None);
+    }
+
+    #[test]
+    fn webhook_url_rejects_malformed_and_non_http_schemes() {
+        assert!(take_webhook_url(&serde_json::json!("not a url")).is_err());
+        assert!(take_webhook_url(&serde_json::json!("ftp://example.com/x")).is_err());
+        assert!(take_webhook_url(&serde_json::json!(42)).is_err());
     }
 }

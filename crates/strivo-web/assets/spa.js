@@ -10483,22 +10483,26 @@ function wireSettingsControls() {
   pane.querySelectorAll(".stg-cfg-btn").forEach((btn) => {
     btn.addEventListener("click", () => openPlatformWizard(btn.dataset.platform));
   });
-  // Master toggle on Notifications dims the dependent Events group when
-  // off. We do this in JS rather than re-rendering so users see immediate
-  // visual feedback during the save round-trip.
-  const masterEl = pane.querySelector('[data-stg-path="notifications.desktop_enabled"]');
-  const condEl = pane.querySelector(".stg-subgroup-conditional");
-  const syncMaster = () => {
-    if (!masterEl || !condEl) return;
-    if (masterEl.checked) {
-      condEl.style.opacity = "";
-      condEl.style.pointerEvents = "";
-    } else {
-      condEl.style.opacity = "0.55";
-      condEl.style.pointerEvents = "none";
-    }
-  };
-  if (masterEl) masterEl.addEventListener("change", syncMaster);
+  // Master toggles dim their dependent conditional subgroup when off — the
+  // Notifications master switch dims Events, the Webhook enable toggle dims
+  // the Webhook URL field. We do this in JS rather than re-rendering so
+  // users see immediate visual feedback during the save round-trip. Each
+  // `.stg-subgroup-conditional` names its master via `data-conditional-master`
+  // so any number of these pairs can coexist.
+  pane.querySelectorAll(".stg-subgroup-conditional[data-conditional-master]").forEach((condEl) => {
+    const masterEl = pane.querySelector(`[data-stg-path="${condEl.getAttribute("data-conditional-master")}"]`);
+    if (!masterEl) return;
+    const syncMaster = () => {
+      if (masterEl.checked) {
+        condEl.style.opacity = "";
+        condEl.style.pointerEvents = "";
+      } else {
+        condEl.style.opacity = "0.55";
+        condEl.style.pointerEvents = "none";
+      }
+    };
+    masterEl.addEventListener("change", syncMaster);
+  });
   // Onboarding controls — replay the welcome tour / reset per-page hints.
   pane.querySelector("#stg-replay-tour")?.addEventListener("click", () => {
     localStorage.removeItem("strivo-tour-done");
@@ -10681,6 +10685,23 @@ function wireSettingsControls() {
       const previous = el.type === "checkbox"
         ? !el.checked
         : el.getAttribute("data-prev") || "";
+      // Inline field validation (item 25) — same idiom as the poll-interval
+      // input. The webhook URL may be blank (clears the setting) but a
+      // non-blank value must be a valid http(s) URL before we round-trip
+      // to the server, which enforces the same rule.
+      if (path === "notifications.webhook.url" && value) {
+        let validUrl = false;
+        try {
+          const u = new URL(value);
+          validUrl = u.protocol === "http:" || u.protocol === "https:";
+        } catch { validUrl = false; }
+        if (!validUrl) {
+          el.setAttribute("aria-invalid", "true");
+          Toast.error("Webhook URL must be a valid http:// or https:// URL");
+          return;
+        }
+      }
+      el.removeAttribute("aria-invalid");
       try {
         await API.updateSetting(path, value);
         if (el.type !== "checkbox") el.setAttribute("data-prev", String(value));
@@ -10840,6 +10861,9 @@ function renderSettingsPane(slug, s) {
       const n = s.notifications || {};
       const masterOn = n.desktop_enabled !== false;
       const noteAttr = masterOn ? "" : ' style="opacity:0.55;pointer-events:none"';
+      const wh = n.webhook || {};
+      const whOn = wh.enabled === true;
+      const whNoteAttr = whOn ? "" : ' style="opacity:0.55;pointer-events:none"';
       return [
         group("Desktop notifications", [
           row(
@@ -10848,7 +10872,7 @@ function renderSettingsPane(slug, s) {
             "When off, the daemon skips every notify-rust banner regardless of the toggles below. Useful for headless / kiosk setups.",
           ),
         ].join("")),
-        `<div class="stg-subgroup-conditional"${noteAttr}>${[
+        `<div class="stg-subgroup-conditional" data-conditional-master="notifications.desktop_enabled"${noteAttr}>${[
           group("Events", [
             row(
               "Channel goes live",
@@ -10869,6 +10893,22 @@ function renderSettingsPane(slug, s) {
               "VOD backfill ready",
               toggle("notifications.on_vod_ready", n.on_vod_ready === true),
               "Notify when a VOD becomes available after a live stream finishes. Off by default.",
+            ),
+          ].join("")),
+        ].join("")}</div>`,
+        group("Webhook", [
+          row(
+            "Enable webhook",
+            toggle("notifications.webhook.enabled", whOn),
+            "Fires on recording events — POSTs a JSON payload (streamerREC-compatible: event, channel, platform, recording ID, status, error) to the URL below for channel-live, recording-started/finished/failed, and generic notifications. Independent of the desktop notifications above.",
+          ),
+        ].join("")),
+        `<div class="stg-subgroup-conditional" data-conditional-master="notifications.webhook.enabled"${whNoteAttr}>${[
+          group("Webhook target", [
+            row(
+              "Webhook URL",
+              textInput("notifications.webhook.url", wh.url || "", "https://example.com/hooks/strivo"),
+              "Full http(s) URL to POST events to. Required for the webhook to fire; validated before saving.",
             ),
           ].join("")),
         ].join("")}</div>`,

@@ -13,12 +13,30 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{Mutex, Semaphore};
 
 use super::stage::{Pipeline, PipelineId, PipelineState, ResourceLock, Stage, StageId, StageState};
 
 const MAX_PIPELINE_HISTORY: usize = 500;
+
+/// How long a stage waits to acquire a resource permit before failing
+/// with a transient, auto-retried error (F-37).
+///
+/// This bounds *acquisition* only, not stage execution: Crunchr's own
+/// subprocess timeout (`whisper_timeout_secs`, default 7200s / 2h) is the
+/// long pole for how long a GPU permit can legitimately stay held, so this
+/// value sits an order of magnitude below that — a queued GPU stage is not
+/// expected to wait anywhere near a full transcode's length under normal
+/// (single- or few-tenant) contention. It is also two orders of magnitude
+/// above the longest single retry backoff step (`Stage::backoff_after`
+/// tops out at 30s), so ordinary transient contention or a stage's own
+/// retry cadence never trips it. A genuinely wedged holder (the F-37
+/// scenario — a hung subprocess, not a crash, since a crash drops the
+/// permit via `Drop`) now surfaces as a visible, retried failure within
+/// minutes instead of hanging every waiter forever.
+pub const RESOURCE_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Shared registry of every Pipeline submitted this session. Cloned via
 /// `Arc<Mutex<…>>` from `AppState` into anything that wants to read or
@@ -615,6 +633,22 @@ impl PipelineRegistry {
         }
     }
 
+    /// Best-effort lookup of a `Running` stage currently holding a lock
+    /// equivalent to `lock` (see [`same_resource`]). Used only to name a
+    /// holder in the structured warning logged when another stage times
+    /// out waiting for the same resource (F-37) — `None` just means the
+    /// holder already finished or wasn't identifiable, and callers fall
+    /// back to an "unknown" holder in the log/error message.
+    pub fn find_lock_holder(&self, lock: &ResourceLock) -> Option<(StageId, String)> {
+        self.iter()
+            .flat_map(|pipeline| &pipeline.stages)
+            .find(|stage| {
+                matches!(stage.state, StageState::Running { .. })
+                    && stage.requires.iter().any(|held| same_resource(held, lock))
+            })
+            .map(|stage| (stage.id, stage.name.clone()))
+    }
+
     pub fn exhaust_stage(&mut self, stage_id: StageId, error: String) -> Option<PipelineId> {
         let mut found = None;
         for (pipeline_id, pipeline) in &mut self.pipelines {
@@ -658,10 +692,52 @@ fn unix_secs() -> u64 {
     (unix_millis() / 1000) as u64
 }
 
+/// Two locks are the "same resource" if they resolve to the same
+/// semaphore in [`ResourceRegistryInner`] — Gpu/Cpu/Disk are process-wide
+/// singletons regardless of the `cap` a particular stage declared (the
+/// first caller to request the resource fixes its capacity), while
+/// Api/File locks are keyed by name/path. Used only for best-effort
+/// "who's holding this" diagnostics.
+fn same_resource(a: &ResourceLock, b: &ResourceLock) -> bool {
+    match (a, b) {
+        (ResourceLock::Gpu, ResourceLock::Gpu) => true,
+        (ResourceLock::Cpu { .. }, ResourceLock::Cpu { .. }) => true,
+        (ResourceLock::Disk { .. }, ResourceLock::Disk { .. }) => true,
+        (ResourceLock::Api { name: a, .. }, ResourceLock::Api { name: b, .. }) => a == b,
+        (ResourceLock::File { path: a }, ResourceLock::File { path: b }) => a == b,
+        _ => false,
+    }
+}
+
+/// Failure modes for [`ResourceRegistry::acquire`]. Both are transient by
+/// nature — a closed semaphore only happens on shutdown, and a timed-out
+/// wait is exactly the F-37 scenario (a wedged holder), never a permanent
+/// condition — so callers route either into the existing bounded
+/// retry-with-backoff failure path rather than a permanent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockAcquireError {
+    /// The semaphore was explicitly closed (shutdown path). Never
+    /// triggered in practice today — no caller closes these semaphores —
+    /// kept for API completeness against `tokio::sync::Semaphore::close`.
+    Closed,
+    /// No permit became available within [`RESOURCE_ACQUIRE_TIMEOUT`].
+    TimedOut,
+}
+
+impl std::fmt::Display for LockAcquireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Closed => write!(f, "resource lock closed"),
+            Self::TimedOut => write!(f, "timed out waiting for resource lock"),
+        }
+    }
+}
+
 /// Per-resource semaphore handles. Created lazily on first request.
 #[derive(Clone)]
 pub struct ResourceRegistry {
     inner: Arc<Mutex<ResourceRegistryInner>>,
+    acquire_timeout: Duration,
 }
 
 #[derive(Default)]
@@ -675,18 +751,36 @@ struct ResourceRegistryInner {
 
 impl ResourceRegistry {
     pub fn new() -> Self {
+        Self::build(RESOURCE_ACQUIRE_TIMEOUT)
+    }
+
+    fn build(acquire_timeout: Duration) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ResourceRegistryInner::default())),
+            acquire_timeout,
         }
+    }
+
+    /// Build a registry with a non-default acquisition timeout. Production
+    /// code always goes through [`Self::new`] / [`Self::default`] and the
+    /// named [`RESOURCE_ACQUIRE_TIMEOUT`] constant — there is no config
+    /// surface for executor tuning in `src/pipeline/` today, so this stays
+    /// test-only rather than growing new plumbing. Real test-scale waits
+    /// (milliseconds), not `tokio::time::pause`, drive the timing in tests
+    /// since the crate does not enable tokio's `test-util` feature.
+    #[cfg(test)]
+    pub(crate) fn with_timeout(acquire_timeout: Duration) -> Self {
+        Self::build(acquire_timeout)
     }
 
     /// Acquire a permit for the given lock. Holds the permit until the
     /// returned guard is dropped. Caller awaits in a stage's body before
-    /// running the actual work.
+    /// running the actual work. Bounded by the registry's acquisition
+    /// timeout — see [`RESOURCE_ACQUIRE_TIMEOUT`].
     pub async fn acquire(
         &self,
         lock: &ResourceLock,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, LockAcquireError> {
         let sem = {
             let mut inner = self.inner.lock().await;
             match lock {
@@ -714,7 +808,11 @@ impl ResourceRegistry {
                     .clone(),
             }
         };
-        sem.acquire_owned().await
+        match tokio::time::timeout(self.acquire_timeout, sem.acquire_owned()).await {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_closed)) => Err(LockAcquireError::Closed),
+            Err(_elapsed) => Err(LockAcquireError::TimedOut),
+        }
     }
 }
 
@@ -1062,5 +1160,76 @@ mod tests {
         drop(p1);
         let p2 = reg.acquire(&ResourceLock::Gpu).await.unwrap();
         drop(p2);
+    }
+
+    // --- F-37: bounded lock acquisition -------------------------------
+
+    #[tokio::test]
+    async fn acquire_times_out_while_holder_keeps_permit() {
+        let reg = ResourceRegistry::with_timeout(Duration::from_millis(50));
+        let _holder = reg.acquire(&ResourceLock::Gpu).await.unwrap();
+        let outcome = reg.acquire(&ResourceLock::Gpu).await;
+        assert_eq!(outcome.unwrap_err(), LockAcquireError::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn acquire_succeeds_once_holder_releases_before_timeout() {
+        let reg = ResourceRegistry::with_timeout(Duration::from_millis(500));
+        let holder = reg.acquire(&ResourceLock::Gpu).await.unwrap();
+        let reg2 = reg.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(holder);
+        });
+        let waiter = reg2.acquire(&ResourceLock::Gpu).await;
+        assert!(
+            waiter.is_ok(),
+            "normal contention below the timeout must not fail"
+        );
+    }
+
+    #[test]
+    fn find_lock_holder_identifies_running_stage_on_same_resource() {
+        let mut registry = PipelineRegistry::new();
+        let mut pipeline = Pipeline::new("holder lookup");
+        let holder = pipeline.add_stage(
+            Stage::new("Transcribe", StageKind::Extract).with_requires(vec![ResourceLock::Gpu]),
+        );
+        let waiter = pipeline.add_stage(
+            Stage::new("Diarize", StageKind::Extract)
+                .with_requires(vec![ResourceLock::Gpu])
+                .with_inputs(vec![]),
+        );
+        let pipeline_id = registry.submit(pipeline).unwrap();
+        registry.mark_stage_running(pipeline_id, holder);
+
+        let found = registry.find_lock_holder(&ResourceLock::Gpu);
+        assert_eq!(found.as_ref().map(|(id, _)| *id), Some(holder));
+        assert_eq!(found.map(|(_, name)| name), Some("Transcribe".to_string()));
+
+        // A stage that isn't Running yet is never reported as a holder.
+        assert!(registry
+            .find_lock_holder(&ResourceLock::Cpu { cap: 2 })
+            .is_none());
+        let _ = waiter;
+    }
+
+    #[test]
+    fn find_lock_holder_matches_by_resource_identity_not_declared_cap() {
+        // Cpu/Disk locks are process-wide singletons: the semaphore's real
+        // capacity is fixed by whichever caller asked first, so two
+        // differently-capped `Cpu` declarations must still be recognized
+        // as the same underlying resource for holder lookups.
+        let mut registry = PipelineRegistry::new();
+        let mut pipeline = Pipeline::new("cpu identity");
+        let holder = pipeline.add_stage(
+            Stage::new("ffmpeg extract", StageKind::Extract)
+                .with_requires(vec![ResourceLock::Cpu { cap: 2 }]),
+        );
+        let pipeline_id = registry.submit(pipeline).unwrap();
+        registry.mark_stage_running(pipeline_id, holder);
+
+        let found = registry.find_lock_holder(&ResourceLock::Cpu { cap: 4 });
+        assert_eq!(found.map(|(id, _)| id), Some(holder));
     }
 }

@@ -6882,12 +6882,23 @@ function renderProUpsell(plugin, licence) {
   const pitch = PRO_UPSELL_PITCH[plugin] || "Unlock this plugin's analytics, automation, and editor features.";
   const trial = licence && licence.trial;
   const hasTrialUsed = trial && trial.used;
-  const trialNote = hasTrialUsed
+  // `implemented` is false only when the server explicitly says no licence
+  // backend is configured (STRIVO_LICENCE_URL unset) — self-hosted default.
+  const implemented = !licence || licence.implemented !== false;
+  const notConfiguredAttrs = ' disabled aria-disabled="true" title="No licence service configured for this install"';
+  const trialNote = !implemented
+    ? "No licence service configured for this install."
+    : hasTrialUsed
     ? "Your 3-day trial has already been used on this machine."
     : "Start a free 3-day trial — no card needed.";
-  const trialBtn = hasTrialUsed
+  const trialBtn = !implemented
+    ? `<button class="btn-primary"${notConfiguredAttrs}>▶ Start 3-day trial</button>`
+    : hasTrialUsed
     ? `<button class="btn-primary" disabled title="trial already used">Trial used</button>`
     : `<button class="btn-primary pg-upsell-trial">▶ Start 3-day trial</button>`;
+  const activateBtn = !implemented
+    ? `<button class="sm"${notConfiguredAttrs}>Activate</button>`
+    : `<button class="sm pg-upsell-activate">Activate</button>`;
   return `
     <div class="pg-upsell-card">
       <div class="pg-upsell-icon">★</div>
@@ -6898,8 +6909,8 @@ function renderProUpsell(plugin, licence) {
         <div class="pg-upsell-actions">
           ${trialBtn}
           <span class="pg-upsell-sep">or</span>
-          <input type="text" class="pg-upsell-key" placeholder="paste licence key…" aria-label="licence key"/>
-          <button class="sm pg-upsell-activate">Activate</button>
+          <input type="text" class="pg-upsell-key" placeholder="paste licence key…" aria-label="licence key"${implemented ? "" : " disabled"}/>
+          ${activateBtn}
         </div>
         <p class="pg-upsell-foot pg-cap-hint">
           Already a subscriber? Find your key in your Strivo account.
@@ -7320,6 +7331,12 @@ function renderMarketplaceSection(payload) {
 // the deployment has not configured the external licence service.
 function renderUpgradeCard(licence) {
   if (!licence || licence.entitled) return ""; // dev unlock + future paid users
+  // `implemented` is false only when the server explicitly says no licence
+  // backend is configured (STRIVO_LICENCE_URL unset) — self-hosted default.
+  const implemented = licence.implemented !== false;
+  const notConfiguredAttrs = implemented
+    ? ""
+    : ' disabled aria-disabled="true" title="No licence service configured for this install"';
   return `
     <section class="upgrade-card" data-tier="${htmlEscape(licence.tier || "free")}">
       <img class="upgrade-logo" src="/assets/img/strivo-mark.svg" alt="StriVo" />
@@ -7332,9 +7349,10 @@ function renderUpgradeCard(licence) {
           <li>3-day free trial — no card required.</li>
         </ul>
         <div class="upgrade-actions">
-          <button class="upgrade-trial btn-primary">Start 3-day trial</button>
-          <button class="upgrade-activate btn-ghost">I have a key</button>
+          <button class="upgrade-trial btn-primary"${notConfiguredAttrs}>Start 3-day trial</button>
+          <button class="upgrade-activate btn-ghost"${notConfiguredAttrs}>I have a key</button>
         </div>
+        ${implemented ? "" : `<p class="upgrade-hint">No licence service configured for this install.</p>`}
       </div>
     </section>
   `;

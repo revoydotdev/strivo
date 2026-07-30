@@ -7,6 +7,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Added
+- **CE-Fusion wave (NVivo-meets-Riverside bridge).** Strategy recorded in
+  `docs/STRATEGY-NVIVO-RIVERSIDE.md`; roadmap section `CE-Fusion` in
+  `ROADMAP.md`.
+  - **Archive search** (`crates/research/src/search.rs`): FTS5 lexical search
+    over `transcript.utterance` signals; phrase-quoted queries, deterministic
+    `(source_id, start_ms, id)` ordering, bounded pagination, cross-project
+    isolation. `GET /api/v1/research/projects/{id}/search`.
+  - **Moments projection** (`crates/research/src/moments.rs`): codings and
+    clip-worthy detections (`visual.scene_change`, `audience.anomaly`) merged
+    into one creator-vocabulary stream; creating a moment writes a real
+    human-origin coding through existing kernel validation. GET/POST
+    `/api/v1/research/projects/{id}/moments`.
+  - **Content-free product telemetry** (`crates/strivo-web/src/telemetry.rs`):
+    per-route latency/reliability aggregation (matched route template + status
+    + duration only, both editions, local-only). Authed `GET /api/v1/telemetry`.
+  - **SPA Archive surface** (`#/archive`, creator-gated): workspace bootstrap,
+    index-my-archive (migration reports), debounced paginated transcript
+    search, moments list/create with origin badges and min-confidence filter,
+    and "Open in Editor" deep links that open the EDL editor at the hit's
+    timecode.
+- **Phase 0 experience audit** at
+  `docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md` — 33 evidence-cited
+  findings across UX journeys, PVR and Creator performance.
+- **Webhook notification settings UI**: enable toggle + validated URL field on
+  the Settings pane; `POST /api/v1/settings/update` now accepts
+  `notifications.webhook.enabled`/`.url` (http/https validated, empty clears).
+
+### Fixed
+- Nine Creator handlers (editor render, clip extract, thumbnails, reuse,
+  casebook, heatmap, cuepoints, clipper analyze, editor load) no longer run
+  ffmpeg/ffprobe synchronously on Tokio worker threads — moved onto
+  `spawn_blocking` with identical wire contracts (audit F-32).
+- Pipeline resource-lock acquisition is bounded (600 s timeout → existing
+  transient-retry class, cancellation-safe, best-effort holder named in the
+  warning) so a wedged subprocess can no longer stall Creator stages forever
+  (audit F-37).
+- Licence trial/activate controls are disabled with an explanation when the
+  backend reports `implemented:false` instead of failing on click (audit F-11).
+- `ui.reduce_motion` is actually wired: root class driven by the setting OR
+  the OS `prefers-reduced-motion` query, reactive without reload, and now
+  covers the REC-dot and state-pill pulse animations (audit F-18).
+- `CREATOR_ENABLED` is re-resolved after login, so creator routes (including
+  Archive) appear on a fresh session without a manual reload.
+
 ### Changed
 - **ROADMAP regenerated around the engine north star.** `ROADMAP.md` is now the
   single authority: it reframes StriVo as a domain-agnostic stream→clip analytics &

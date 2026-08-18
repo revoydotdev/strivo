@@ -85,6 +85,82 @@ const RECORDINGS = {
   ],
 };
 
+// ── Research kernel fixtures (Coding Studio: codebook/corpus/notebook) ──
+const RESEARCH_PROJECT_ID = "aaaaaaaa-0000-4000-8000-000000000001";
+const RESEARCH_SOURCE_ID = "aaaaaaaa-0000-4000-8000-000000000010";
+const RESEARCH_CODE_ID = "aaaaaaaa-0000-4000-8000-000000000020";
+const RESEARCH_CODE_CHILD_ID = "aaaaaaaa-0000-4000-8000-000000000021";
+const RESEARCH_CODING_ID = "aaaaaaaa-0000-4000-8000-000000000030";
+const RESEARCH_CASE_ID = "aaaaaaaa-0000-4000-8000-000000000040";
+const RESEARCH_MEMO_ID = "aaaaaaaa-0000-4000-8000-000000000050";
+const RESEARCH_REL_ID = "aaaaaaaa-0000-4000-8000-000000000060";
+const RESEARCH_SIGNAL_ID = "aaaaaaaa-0000-4000-8000-000000000070";
+
+const RESEARCH_SOURCES = [
+  {
+    id: RESEARCH_SOURCE_ID,
+    project_id: RESEARCH_PROJECT_ID,
+    recording_id: null,
+    kind: "recording",
+    title: "Elden Ring run",
+    uri: null,
+    duration_ms: 3_600_000,
+    attributes: {},
+  },
+];
+const RESEARCH_CODES = [
+  { id: RESEARCH_CODE_ID, project_id: RESEARCH_PROJECT_ID, parent_id: null, name: "Onboarding friction", description: "Moments where a new player struggles", color: "#00E5FF" },
+  { id: RESEARCH_CODE_CHILD_ID, project_id: RESEARCH_PROJECT_ID, parent_id: RESEARCH_CODE_ID, name: "Signup drop-off", description: "", color: "#FFB020" },
+];
+const RESEARCH_CODINGS = [
+  {
+    id: RESEARCH_CODING_ID,
+    project_id: RESEARCH_PROJECT_ID,
+    source_id: RESEARCH_SOURCE_ID,
+    code_id: RESEARCH_CODE_ID,
+    start_ms: 1_000,
+    end_ms: 5_000,
+    excerpt: "the boss fight is confusing at first",
+    note: "revisit tutorial pacing",
+    author: "Ada",
+    origin: "human",
+    confidence: null,
+  },
+];
+const RESEARCH_CASES = [
+  { id: RESEARCH_CASE_ID, project_id: RESEARCH_PROJECT_ID, name: "Case One", description: "First playthrough cohort", attributes: {} },
+];
+const RESEARCH_SIGNALS = [
+  {
+    id: RESEARCH_SIGNAL_ID,
+    project_id: RESEARCH_PROJECT_ID,
+    source_id: RESEARCH_SOURCE_ID,
+    start_ms: 2_000,
+    end_ms: 4_000,
+    kind: "transcript.utterance",
+    label: "hey everyone welcome back",
+    payload: {},
+    confidence: 0.9,
+    provenance_id: null,
+  },
+];
+const RESEARCH_MEMOS = [
+  { id: RESEARCH_MEMO_ID, project_id: RESEARCH_PROJECT_ID, source_id: RESEARCH_SOURCE_ID, coding_id: null, title: "Pacing memo", body: "Tutorial pacing needs a second look.", author: "Ada" },
+];
+const RESEARCH_RELATIONSHIPS = [
+  { id: RESEARCH_REL_ID, project_id: RESEARCH_PROJECT_ID, from_kind: "coding", from_id: RESEARCH_CODING_ID, to_kind: "coding", to_id: RESEARCH_CODING_ID, relation: "supports", note: "", author: "Ada" },
+];
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      try { resolve(raw ? JSON.parse(raw) : {}); } catch { resolve({}); }
+    });
+  });
+}
+
 const CONTENT_TYPES = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html" };
 
 function json(res, code, body) {
@@ -386,6 +462,112 @@ const server = createServer(async (req, res) => {
           speakers: [{ speaker: "Alpha", seconds: 1200, segments: 80 }],
           sentiment: "positive",
         });
+    }
+
+    // ── Research kernel (Coding Studio surfaces: codebook/corpus/notebook) ──
+    if (p.startsWith("/research/")) {
+      const rp = p.slice("/research".length);
+
+      if (rp === "/projects" && req.method === "GET")
+        return json(res, 200, { projects: [{ id: RESEARCH_PROJECT_ID, name: "Archive", description: "Default archive workspace" }] });
+      if (rp === "/projects" && req.method === "POST")
+        return json(res, 201, { project: { id: RESEARCH_PROJECT_ID, name: "Archive", description: "Default archive workspace" } });
+
+      const detailMatch = rp.match(new RegExp(`^/projects/${RESEARCH_PROJECT_ID}$`));
+      if (detailMatch && req.method === "GET")
+        return json(res, 200, {
+          project: {
+            id: RESEARCH_PROJECT_ID,
+            name: "Archive",
+            description: "Default archive workspace",
+            sources: RESEARCH_SOURCES,
+          },
+        });
+
+      const codesMatch = rp.match(/^\/projects\/[^/]+\/codes$/);
+      if (codesMatch && req.method === "GET") return json(res, 200, { codes: RESEARCH_CODES });
+      if (codesMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { code: body });
+      }
+
+      const codingsMatch = rp.match(/^\/projects\/[^/]+\/codings$/);
+      if (codingsMatch && req.method === "GET") {
+        const codeId = url.searchParams.get("code_id");
+        const codings = codeId ? RESEARCH_CODINGS.filter((c) => c.code_id === codeId) : RESEARCH_CODINGS;
+        return json(res, 200, { codings });
+      }
+      if (codingsMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { coding: body });
+      }
+
+      const sourcesMatch = rp.match(/^\/projects\/[^/]+\/sources$/);
+      if (sourcesMatch && req.method === "GET") return json(res, 200, { sources: RESEARCH_SOURCES });
+      if (sourcesMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { source: body });
+      }
+
+      const casesMatch = rp.match(/^\/projects\/[^/]+\/cases$/);
+      if (casesMatch && req.method === "GET") return json(res, 200, { cases: RESEARCH_CASES });
+      if (casesMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { case: body });
+      }
+
+      const caseSourceMatch = rp.match(/^\/projects\/[^/]+\/cases\/[^/]+\/sources$/);
+      if (caseSourceMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { status: "ok", source_id: body.source_id });
+      }
+
+      const signalsMatch = rp.match(/^\/projects\/[^/]+\/signals$/);
+      if (signalsMatch && req.method === "GET") {
+        const kind = url.searchParams.get("kind");
+        const sourceId = url.searchParams.get("source_id");
+        let signals = RESEARCH_SIGNALS;
+        if (kind) signals = signals.filter((s) => s.kind === kind);
+        if (sourceId) signals = signals.filter((s) => s.source_id === sourceId);
+        return json(res, 200, { signals });
+      }
+
+      const memosMatch = rp.match(/^\/projects\/[^/]+\/memos$/);
+      if (memosMatch && req.method === "GET") return json(res, 200, { memos: RESEARCH_MEMOS });
+      if (memosMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { memo: body });
+      }
+
+      const relsMatch = rp.match(/^\/projects\/[^/]+\/relationships$/);
+      if (relsMatch && req.method === "GET") return json(res, 200, { relationships: RESEARCH_RELATIONSHIPS });
+      if (relsMatch && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 201, { relationship: body });
+      }
+
+      const agreementMatch = rp.match(/^\/projects\/[^/]+\/agreement$/);
+      if (agreementMatch && req.method === "GET")
+        return json(res, 200, { kappa: 0.82, observed: 0.9, expected: 0.44, n: 20 });
+
+      const exportMatch = rp.match(/^\/projects\/[^/]+\/export$/);
+      if (exportMatch && req.method === "GET") {
+        const format = url.searchParams.get("format") || "json";
+        if (format === "refi") {
+          const xml = `<?xml version="1.0" encoding="UTF-8"?><Project name="Archive"/>`;
+          res.writeHead(200, { "Content-Type": "application/xml" });
+          res.end(xml);
+          return;
+        }
+        return json(res, 200, {
+          schema_version: 1,
+          project: { id: RESEARCH_PROJECT_ID, name: "Archive", description: "" },
+          sources: RESEARCH_SOURCES,
+          codes: RESEARCH_CODES,
+          signals: RESEARCH_SIGNALS,
+          codings: RESEARCH_CODINGS,
+        });
+      }
     }
 
     // Channel VODs request → answer asynchronously over SSE, like the daemon.

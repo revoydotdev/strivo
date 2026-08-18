@@ -437,6 +437,63 @@ const API = {
     API._fetch(`/research/projects/${encodeURIComponent(projectId)}/migrate/crunchr`, { method: "POST" }),
   researchMigrateLegacy: (projectId) =>
     API._fetch(`/research/projects/${encodeURIComponent(projectId)}/migrate/legacy`, { method: "POST" }),
+  // Coding Studio surfaces (codebook.js / corpus.js / notebook.js) — the
+  // rest of the research kernel surfaced under the Archive route's sub-tabs.
+  researchCodes: (projectId) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/codes`),
+  researchCreateCode: (projectId, body) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/codes`, { method: "POST", body }),
+  researchCodings: (projectId, opts = {}) => {
+    const p = new URLSearchParams();
+    if (opts.codeId) p.set("code_id", opts.codeId);
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return API._fetch(`/research/projects/${encodeURIComponent(projectId)}/codings${qs}`);
+  },
+  researchCreateCoding: (projectId, body) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/codings`, { method: "POST", body }),
+  researchSources: (projectId) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/sources`),
+  researchCreateSource: (projectId, body) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/sources`, { method: "POST", body }),
+  researchCases: (projectId) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/cases`),
+  researchCreateCase: (projectId, body) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/cases`, { method: "POST", body }),
+  researchAddCaseSource: (projectId, caseId, sourceId) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/cases/${encodeURIComponent(caseId)}/sources`, {
+      method: "POST",
+      body: { source_id: sourceId },
+    }),
+  researchSignals: (projectId, opts = {}) => {
+    const p = new URLSearchParams();
+    if (opts.sourceId) p.set("source_id", opts.sourceId);
+    if (opts.kind) p.set("kind", opts.kind);
+    p.set("limit", String(opts.limit ?? 50));
+    p.set("offset", String(opts.offset ?? 0));
+    return API._fetch(`/research/projects/${encodeURIComponent(projectId)}/signals?${p.toString()}`);
+  },
+  researchMemos: (projectId) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/memos`),
+  researchCreateMemo: (projectId, body) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/memos`, { method: "POST", body }),
+  researchRelationships: (projectId) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/relationships`),
+  researchCreateRelationship: (projectId, body) =>
+    API._fetch(`/research/projects/${encodeURIComponent(projectId)}/relationships`, { method: "POST", body }),
+  researchAgreement: (projectId, opts = {}) => {
+    const p = new URLSearchParams();
+    if (opts.codeId) p.set("code_id", opts.codeId);
+    if (opts.authorA) p.set("author_a", opts.authorA);
+    if (opts.authorB) p.set("author_b", opts.authorB);
+    return API._fetch(`/research/projects/${encodeURIComponent(projectId)}/agreement?${p.toString()}`);
+  },
+  researchExport: (projectId, opts = {}) => {
+    const p = new URLSearchParams();
+    p.set("format", opts.format || "json");
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.offset != null) p.set("offset", String(opts.offset));
+    return API._fetch(`/research/projects/${encodeURIComponent(projectId)}/export?${p.toString()}`);
+  },
   /* @creator-end */
   // Multi-stream tile layout for the watch player. Core (single + multi
   // view), available in the PVR build — kept outside the @creator block so
@@ -5124,6 +5181,7 @@ let archiveState = {
   momentsHasMore: false,
   minConfidence: "",
   searchTimer: null,
+  surfaceCleanup: null, // cleanup fn returned by a mounted Coding Studio surface (codebook/corpus/notebook)
 };
 
 async function renderArchive() {
@@ -5181,6 +5239,37 @@ function teardownArchive() {
     clearTimeout(archiveState.searchTimer);
     archiveState.searchTimer = null;
   }
+  if (typeof archiveState.surfaceCleanup === "function") {
+    try { archiveState.surfaceCleanup(); } catch (_) { /* best-effort teardown */ }
+  }
+  archiveState.surfaceCleanup = null;
+}
+
+// Sub-tab strip for the Archive route: the built-in Search/Moments view
+// plus every Coding Studio surface registered in RESEARCH_SURFACES
+// (codebook.js / corpus.js / notebook.js). Guarded with typeof so this
+// still no-ops harmlessly if ever reached before the registry exists —
+// build.rs strips the whole @creator-start block from the PVR bundle,
+// and "archive" is a CREATOR_ROUTES-gated route so that block is never
+// actually missing when this runs.
+function archiveTabStripHtml(activeSlug) {
+  const surfaces = typeof RESEARCH_SURFACES !== "undefined" ? RESEARCH_SURFACES : {};
+  const tabs = [{ slug: "search", label: "Search" }, ...Object.entries(surfaces).map(([slug, s]) => ({ slug, label: s.label }))];
+  if (tabs.length <= 1) return "";
+  return `<nav class="pro-tabs" role="tablist">${tabs.map((t) => `
+    <a class="pro-tab ${t.slug === activeSlug ? "is-active" : ""}" href="#/archive/${t.slug}">${htmlEscape(t.label)}</a>`).join("")}</nav>`;
+}
+
+// Builds the ctx object handed to a mounted Coding Studio surface's
+// mount(root, ctx). Modules must not reach into spa.js internals beyond
+// this contract (see assets/research/README.md).
+function archiveSurfaceCtx() {
+  return {
+    api: API,
+    projectId: archiveState.projectId,
+    toast: { success: (msg) => Toast.success(msg), error: (msg) => Toast.error(msg) },
+    fmt: { escapeHtml: htmlEscape, clock: fmtClock, parseTime: parseTimeInput },
+  };
 }
 
 function renderArchiveFailure(e) {
@@ -5219,6 +5308,20 @@ function paintArchiveBootstrap() {
 }
 
 function paintArchiveWorkspace() {
+  const parts = routeParts(); // ["archive", <subtab?>]
+  const surfaces = typeof RESEARCH_SURFACES !== "undefined" ? RESEARCH_SURFACES : {};
+  const subtab = parts[1] && surfaces[parts[1]] ? parts[1] : "search";
+
+  if (archiveState.surfaceCleanup) {
+    try { archiveState.surfaceCleanup(); } catch (_) { /* best-effort teardown */ }
+    archiveState.surfaceCleanup = null;
+  }
+
+  if (subtab !== "search") {
+    paintArchiveSurface(subtab, surfaces[subtab]);
+    return;
+  }
+
   const sources = [...archiveState.sourcesById.values()];
   const hasSources = sources.length > 0;
   const selector = archiveState.projects.length > 1 ? `
@@ -5231,6 +5334,7 @@ function paintArchiveWorkspace() {
 
   root.innerHTML = chrome(`
     ${pluginHeader("Archive", "Search your transcribed recordings and review moments.")}
+    ${archiveTabStripHtml(subtab)}
     <div class="arc-toolbar">
       ${selector}
       <button class="sm" id="arc-index-btn" type="button" title="Pull transcripts and detections from Crunchr / cuepoints / Viewguard into this workspace">🔎 Index my archive</button>
@@ -5333,6 +5437,45 @@ function paintArchiveWorkspace() {
   if (archiveState.query.trim()) loadArchiveHits();
   else paintArchiveHitsEmpty("Type a query and press Enter to search your archive.");
   loadArchiveMoments();
+}
+
+// Paints a Coding Studio surface (codebook/corpus/notebook) into the
+// Archive route's chrome, alongside the same workspace picker the
+// Search tab uses, and hands mount() the ctx contract from
+// assets/research/README.md.
+function paintArchiveSurface(slug, surface) {
+  const selector = archiveState.projects.length > 1 ? `
+    <label class="arc-ws-picker">
+      Workspace
+      <select id="arc-ws-select" class="arc-select" aria-label="Archive workspace">
+        ${archiveState.projects.map((p) => `<option value="${htmlEscape(p.id)}" ${p.id === archiveState.projectId ? "selected" : ""}>${htmlEscape(p.name)}</option>`).join("")}
+      </select>
+    </label>` : "";
+
+  root.innerHTML = chrome(`
+    ${pluginHeader("Archive", "Search your transcribed recordings and review moments.")}
+    ${archiveTabStripHtml(slug)}
+    <div class="arc-toolbar">${selector}</div>
+    <div id="arc-surface-mount" class="arc-surface-mount"></div>
+  `);
+  setupChromeHandlers();
+
+  document.getElementById("arc-ws-select")?.addEventListener("change", (e) => {
+    archiveState.projectId = e.target.value;
+    localStorage.setItem("strivo-archive-project", archiveState.projectId);
+    root.setAttribute("aria-busy", "true");
+    renderArchive().catch(() => {});
+  });
+
+  const mountRoot = document.getElementById("arc-surface-mount");
+  if (!mountRoot || !surface || typeof surface.mount !== "function") return;
+  try {
+    const cleanup = surface.mount(mountRoot, archiveSurfaceCtx());
+    archiveState.surfaceCleanup = typeof cleanup === "function" ? cleanup : null;
+  } catch (e) {
+    console.error(`Archive surface "${slug}" failed to mount`, e);
+    mountRoot.innerHTML = `<div class="empty sm"><div class="glyph">⚠</div>This surface couldn't load: ${htmlEscape(e.message || String(e))}</div>`;
+  }
 }
 
 async function runArchiveIndex(btn) {

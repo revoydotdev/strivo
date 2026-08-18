@@ -5497,10 +5497,14 @@ mod research_route_tests {
     use axum::body::Body;
     use axum::http::Request;
     use axum::Router;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
     use tower::ServiceExt;
 
-    static ENV_GUARD: Mutex<()> = Mutex::new(());
+    // Async-aware: the guard has to span the `oneshot(...).await` below,
+    // because the env vars it protects stay set for the whole request. A
+    // std::sync::Mutex guard held across an await trips
+    // `clippy::await_holding_lock`, which CI gates on.
+    static ENV_GUARD: Mutex<()> = Mutex::const_new(());
 
     fn test_state(api_key: &str) -> AppState {
         AppState {
@@ -5562,7 +5566,7 @@ mod research_route_tests {
 
     #[tokio::test]
     async fn list_codes_requires_pro_entitlement() {
-        let _guard = ENV_GUARD.lock().unwrap();
+        let _guard = ENV_GUARD.lock().await;
         // Explicitly unentitled: no dev-unlock env, and XDG_STATE_HOME
         // points at an empty tempdir so a real licence.json on this
         // machine can't make the gate pass.
@@ -5595,7 +5599,7 @@ mod research_route_tests {
 
     #[tokio::test]
     async fn list_codes_happy_path_returns_envelope() {
-        let _guard = ENV_GUARD.lock().unwrap();
+        let _guard = ENV_GUARD.lock().await;
         with_entitled_isolated_env(|| async {
             let state = test_state("codes-test-key");
             let router = Router::new()
@@ -5665,7 +5669,7 @@ mod research_route_tests {
 
     #[tokio::test]
     async fn assign_source_case_requires_pro_entitlement() {
-        let _guard = ENV_GUARD.lock().unwrap();
+        let _guard = ENV_GUARD.lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         // SAFETY: guarded by ENV_GUARD's lock.
         unsafe {
@@ -5702,7 +5706,7 @@ mod research_route_tests {
 
     #[tokio::test]
     async fn assign_source_case_happy_path_links_source_to_case() {
-        let _guard = ENV_GUARD.lock().unwrap();
+        let _guard = ENV_GUARD.lock().await;
         with_entitled_isolated_env(|| async {
             let state = test_state("assign-test-key");
             let router = Router::new()

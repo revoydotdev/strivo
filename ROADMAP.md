@@ -244,8 +244,8 @@ fork.
 | Dynamic cdylib plugin loading coded but never triggered; no hot-reload | ⬜ | Deferred until third-party plugins are real |
 | `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |
 | Creator Edition clippy gate | ✅ | CI runs `-D warnings` with the Creator feature |
-| Windows build | ⬜ | The workspace does not compile on Windows: `tokio::net::Unix{Listener,Stream}` is used unconditionally in `src/daemon.rs`, `crates/strivo-web/src/ipc_client.rs`, `src/playback/mod.rs`, and `src/ipc.rs:236`. Needs a transport abstraction (named pipes), not a packaging fix |
-| Release pipeline | 🟡 | Linux proven end-to-end via `workflow_dispatch` rehearsal (run 32185451150: tarball + completions + manpage + verified sha256). macOS/Windows blocked on offline self-hosted runners |
+| Windows build | ⬜ | Three independent blockers, all verified 2026-08-18. (1) The code cannot compile: `tokio::net::Unix{Listener,Stream}` live inside tokio's `cfg_unix!` = `#[cfg(any(all(doc, docsrs), unix))]`, so those types do not exist on Windows, and `src/daemon.rs:6`, `crates/strivo-web/src/ipc_client.rs:22`, `src/playback/mod.rs:4` and `src/ipc.rs:236` import them unconditionally — needs a named-pipe transport abstraction. (2) The win11-ci VM has no Rust and no MSVC build tools installed at all. (3) The runner service is StartType=Automatic but was found Stopped and needed a manual start |
+| Release pipeline | 🟡 | Linux **and macOS** both proven end-to-end via `workflow_dispatch` rehearsals (runs 32185451150, 32189647104): tarball + completions + manpage + verified sha256, macOS artifact is a real Mach-O x86_64 binary. Windows blocked — see the row above. The self-hosted VM runners are driven by `gh-runner-autoscaler.service`, which starts them on demand from queued-job labels |
 
 ### Adversarial-review wounds (from the 2026-05-29 review, folded in)
 1. **Identity collapse** — resolved: the PVR is now the product, the engine is
@@ -301,7 +301,7 @@ difficulty = 60
 priority = "HIGH"
 
 [[todo]]
-line = "Bring the macos-sonoma and win11-ci self-hosted runners back online; both are offline and the release workflow cannot build those platforms without them"
+line = "Provision the win11-ci VM with MSVC Build Tools + rustup + ffmpeg (currently bare: no Rust, no compiler) and fix the runner service failing to auto-start despite StartType=Automatic"
 difficulty = 20
 priority = "HIGH"
 

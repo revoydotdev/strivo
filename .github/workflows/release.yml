@@ -3,6 +3,24 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
+  # Rehearsal trigger. A tag push is a one-way door -- it was the only way to
+  # exercise this workflow, which is why v0.4.0 and v0.5.0 both failed in ways
+  # nobody could see beforehand. A dispatch run builds and uploads artifacts but
+  # never publishes a release, so the pipeline can be proven before tagging.
+  workflow_dispatch:
+    inputs:
+      linux:
+        description: "Build the x86_64-linux tarball"
+        type: boolean
+        default: true
+      macos:
+        description: "Build the x86_64-macOS tarball (needs the macos-sonoma runner online)"
+        type: boolean
+        default: false
+      windows:
+        description: "Build the x86_64-windows zip (needs the win11-ci runner online)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -14,7 +32,9 @@ concurrency:
 jobs:
   build-linux:
     name: Build x86_64-linux tarball
+    if: github.event_name != 'workflow_dispatch' || inputs.linux
     runs-on: [self-hosted, linux, x64, arch]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -56,7 +76,9 @@ jobs:
 
   build-macos:
     name: Build x86_64-apple-darwin tarball
+    if: github.event_name != 'workflow_dispatch' || inputs.macos
     runs-on: [self-hosted, macos, x64, sonoma]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -98,7 +120,9 @@ jobs:
 
   build-windows:
     name: Build x86_64-windows-msvc zip
+    if: github.event_name != 'workflow_dispatch' || inputs.windows
     runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -144,7 +168,11 @@ jobs:
   publish:
     name: Publish GitHub release
     needs: [build-linux, build-macos, build-windows]
+    # Never publish from a rehearsal run, and never publish a partial set: if any
+    # platform failed or was skipped on a tag push, stop and let a human decide.
+    if: github.event_name == 'push' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'skipped')
     runs-on: [self-hosted, linux, x64, arch]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -164,11 +192,12 @@ jobs:
           body: |
             # strivo ${{ github.ref_name }}
 
-            Alpha release. See [CHANGELOG.md](https://github.com/Chorosyne/strivo/blob/main/CHANGELOG.md) for the human-curated release notes.
+            Alpha release. See [CHANGELOG.md](https://github.com/revoydotdev/strivo/blob/main/CHANGELOG.md)
+            for the human-curated release notes and [ROADMAP.md](https://github.com/revoydotdev/strivo/blob/main/ROADMAP.md)
+            for what is shipped versus planned.
 
-            Three platform artifacts:
-            - `strivo-*-x86_64-unknown-linux-gnu.tar.gz`
-            - `strivo-*-x86_64-apple-darwin.tar.gz`
-            - `strivo-*-x86_64-pc-windows-msvc.zip`
+            The attached builds are the **default edition** — the pure live-stream PVR.
+            Creator Edition is a source build: `cargo build --release -p strivo-bin --features creator`.
 
-            Each carries its own `.sha256` manifest. Verify with `sha256sum -c` (Linux/macOS) or `Get-FileHash` (Windows).
+            Platform artifacts are listed under **Assets** below. Each carries its own
+            `.sha256` manifest — verify with `sha256sum -c` (Linux/macOS) or `Get-FileHash` (Windows).

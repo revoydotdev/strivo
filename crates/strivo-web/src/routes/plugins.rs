@@ -4229,27 +4229,39 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/research/projects/{id}/codes",
-            axum::routing::post(research_create_code),
+            get(research_list_codes).post(research_create_code),
         )
         .route(
             "/api/v1/research/projects/{id}/sources",
-            axum::routing::post(research_create_source),
+            get(research_list_sources).post(research_create_source),
         )
         .route(
             "/api/v1/research/projects/{id}/cases",
-            axum::routing::post(research_create_case),
+            get(research_list_cases).post(research_create_case),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/cases/{case_id}/sources",
+            axum::routing::post(research_assign_source_case),
         )
         .route(
             "/api/v1/research/projects/{id}/codings",
-            axum::routing::post(research_create_coding),
+            get(research_list_codings).post(research_create_coding),
         )
         .route(
             "/api/v1/research/projects/{id}/memos",
-            axum::routing::post(research_create_memo),
+            get(research_list_memos).post(research_create_memo),
         )
         .route(
             "/api/v1/research/projects/{id}/relationships",
-            axum::routing::post(research_create_relationship),
+            get(research_list_relationships).post(research_create_relationship),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/agreement",
+            get(research_agreement),
+        )
+        .route(
+            "/api/v1/research/projects/{id}/export",
+            get(research_export),
         )
         .route(
             "/api/v1/research/projects/{id}/signals",
@@ -4439,6 +4451,44 @@ struct ResearchSearchQuery {
     offset: Option<u32>,
 }
 
+/// Shared `limit`/`offset` query shape for the list endpoints backed by
+/// kernel functions that materialise the whole project's rows
+/// (`list_codes`/`list_codings`/`list_sources`/`list_cases`/`list_memos`/
+/// `list_relationships` take no pagination args), so we page client-side —
+/// see [`paginate`].
+#[derive(Debug, Default, Deserialize)]
+struct ResearchPageQuery {
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+/// Clamp and slice an already-materialised list. Mirrors the bounds
+/// `research_signals`/`research_search` apply at the SQL layer.
+fn paginate<T>(items: Vec<T>, limit: Option<u32>, offset: Option<u32>) -> Vec<T> {
+    let limit = limit.unwrap_or(200).clamp(1, 1_000) as usize;
+    let offset = offset.unwrap_or(0) as usize;
+    items.into_iter().skip(offset).take(limit).collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct AssignSourceCaseBody {
+    source_id: uuid::Uuid,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResearchAgreementQuery {
+    code_id: Option<uuid::Uuid>,
+    author_a: Option<String>,
+    author_b: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ResearchExportQuery {
+    format: Option<String>,
+    limit: Option<u64>,
+    offset: Option<u64>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct ResearchMomentsQuery {
     source_id: Option<uuid::Uuid>,
@@ -4512,6 +4562,9 @@ async fn research_project_detail(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     match tokio::task::spawn_blocking(move || {
         strivo_research::ResearchStore::open(research_db())?.export_project(id)
     })
@@ -4533,6 +4586,9 @@ async fn research_create_code(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
     }
     let code = strivo_research::Code {
         id: uuid::Uuid::new_v4(),
@@ -4564,6 +4620,9 @@ async fn research_create_source(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
     }
     let source = strivo_research::NewSource {
         id: uuid::Uuid::new_v4(),
@@ -4602,6 +4661,9 @@ async fn research_create_case(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     let case = strivo_research::ResearchCase {
         id: uuid::Uuid::new_v4(),
         project_id,
@@ -4632,6 +4694,9 @@ async fn research_create_coding(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
     }
     let coding = strivo_research::NewCoding {
         id: uuid::Uuid::new_v4(),
@@ -4670,6 +4735,9 @@ async fn research_create_memo(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     let memo = strivo_research::Memo {
         id: uuid::Uuid::new_v4(),
         project_id,
@@ -4702,6 +4770,9 @@ async fn research_create_relationship(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     let relationship = strivo_research::Relationship {
         id: uuid::Uuid::new_v4(),
         project_id,
@@ -4727,6 +4798,306 @@ async fn research_create_relationship(
     }
 }
 
+/// `GET /api/v1/research/projects/{id}/codes` — list read side of
+/// `research_create_code`. `list_codes` materialises the whole project's
+/// code tree, so pagination is applied client-side via [`paginate`].
+async fn research_list_codes(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchPageQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_codes(project_id)
+    })
+    .await
+    {
+        Ok(Ok(codes)) => {
+            Json(json!({ "codes": paginate(codes, query.limit, query.offset) })).into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/sources` — list read side of
+/// `research_create_source`.
+async fn research_list_sources(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchPageQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_sources(project_id)
+    })
+    .await
+    {
+        Ok(Ok(sources)) => {
+            Json(json!({ "sources": paginate(sources, query.limit, query.offset) })).into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/cases` — list read side of
+/// `research_create_case`.
+async fn research_list_cases(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchPageQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_cases(project_id)
+    })
+    .await
+    {
+        Ok(Ok(cases)) => {
+            Json(json!({ "cases": paginate(cases, query.limit, query.offset) })).into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `POST /api/v1/research/projects/{id}/cases/{case_id}/sources` — attach an
+/// existing source to an existing case. The kernel's `assign_source_case`
+/// itself enforces the source and case share a project, so the `{id}` path
+/// segment is routing-only here (kept for REST symmetry with the other
+/// project-scoped research routes).
+async fn research_assign_source_case(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path((_project_id, case_id)): Path<(uuid::Uuid, uuid::Uuid)>,
+    Json(body): Json<AssignSourceCaseBody>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    let source_id = body.source_id;
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.assign_source_case(source_id, case_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(json!({ "case_id": case_id, "source_id": source_id })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/codings` — list read side of
+/// `research_create_coding`.
+async fn research_list_codings(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchPageQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_codings(project_id)
+    })
+    .await
+    {
+        Ok(Ok(codings)) => {
+            Json(json!({ "codings": paginate(codings, query.limit, query.offset) })).into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/memos` — list read side of
+/// `research_create_memo`.
+async fn research_list_memos(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchPageQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_memos(project_id)
+    })
+    .await
+    {
+        Ok(Ok(memos)) => {
+            Json(json!({ "memos": paginate(memos, query.limit, query.offset) })).into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/relationships` — list read side of
+/// `research_create_relationship`.
+async fn research_list_relationships(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchPageQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?.list_relationships(project_id)
+    })
+    .await
+    {
+        Ok(Ok(relationships)) => {
+            Json(json!({ "relationships": paginate(relationships, query.limit, query.offset) }))
+                .into_response()
+        }
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/agreement` — inter-rater agreement
+/// between two coders, optionally scoped to a single code. `author_a` and
+/// `author_b` are required (mirrors `research_search`'s handling of `q`).
+async fn research_agreement(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchAgreementQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    let Some(author_a) = query.author_a else {
+        return Problem::bad_request("author_a is required").into_response();
+    };
+    let Some(author_b) = query.author_b else {
+        return Problem::bad_request("author_b is required").into_response();
+    };
+    let code_id = query.code_id;
+    match tokio::task::spawn_blocking(move || {
+        strivo_research::ResearchStore::open(research_db())?
+            .agreement(project_id, code_id, &author_a, &author_b)
+    })
+    .await
+    {
+        Ok(Ok(agreement)) => Json(json!({ "agreement": agreement })).into_response(),
+        Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+        Err(error) => {
+            Problem::internal(format!("research worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/research/projects/{id}/export?format=json|refi` — full
+/// project export. `format=json` (default) is paged via
+/// `export_project_paged`; `format=refi` returns REFI-QDA XML via
+/// `export_refi` for interchange with other qualitative-analysis tools.
+async fn research_export(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(project_id): Path<uuid::Uuid>,
+    Query(query): Query<ResearchExportQuery>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
+    match query.format.as_deref() {
+        Some("refi") => {
+            match tokio::task::spawn_blocking(move || {
+                strivo_research::ResearchStore::open(research_db())?.export_refi(project_id)
+            })
+            .await
+            {
+                Ok(Ok(xml)) => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/xml")],
+                    xml,
+                )
+                    .into_response(),
+                Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+                Err(error) => {
+                    Problem::internal(format!("research worker crashed: {error}")).into_response()
+                }
+            }
+        }
+        None | Some("json") => {
+            let limit = query.limit.unwrap_or(1_000).clamp(1, 10_000);
+            let offset = query.offset.unwrap_or(0);
+            match tokio::task::spawn_blocking(move || {
+                strivo_research::ResearchStore::open(research_db())?
+                    .export_project_paged(project_id, limit, offset)
+            })
+            .await
+            {
+                Ok(Ok(export)) => Json(json!({ "export": export })).into_response(),
+                Ok(Err(error)) => Problem::bad_request(error.to_string()).into_response(),
+                Err(error) => {
+                    Problem::internal(format!("research worker crashed: {error}")).into_response()
+                }
+            }
+        }
+        Some(other) => {
+            Problem::bad_request(format!("unsupported export format: {other}")).into_response()
+        }
+    }
+}
+
 async fn research_signals(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -4735,6 +5106,9 @@ async fn research_signals(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
     }
     match tokio::task::spawn_blocking(move || {
         strivo_research::ResearchStore::open(research_db())?.list_signals(
@@ -4767,6 +5141,9 @@ async fn research_search(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
     }
     let Some(q) = query.q else {
         return Problem::bad_request("q is required").into_response();
@@ -4801,6 +5178,9 @@ async fn research_moments(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     match tokio::task::spawn_blocking(move || {
         strivo_research::ResearchStore::open(research_db())?.list_moments(
             project_id,
@@ -4833,6 +5213,9 @@ async fn research_create_moment(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     match tokio::task::spawn_blocking(move || {
         strivo_research::ResearchStore::open(research_db())?.create_moment(
             project_id,
@@ -4861,6 +5244,9 @@ async fn research_migrate_crunchr(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
+    }
     let path = crunchr_db();
     if !path.exists() {
         return Problem::not_found("Crunchr database has not been created").into_response();
@@ -4885,6 +5271,9 @@ async fn research_migrate_legacy(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(response) = gate_pro("crunchr") {
+        return response;
     }
     let crunchr = crunchr_db();
     let cuepoints = plugins_root().join("cuepoints").join("cuepoints.db");
@@ -5087,5 +5476,294 @@ async fn plugin_storage_clear(
         }))
         .into_response(),
         Err(e) => Problem::internal(format!("remove_dir_all: {e}")).into_response(),
+    }
+}
+
+// ── Research API read-surface tests ──────────────────────────────────
+//
+// Covers the routes added to close the "create-only" research API gap:
+// unauthenticated -> 401, authenticated-but-unentitled -> the gate's
+// Problem response, happy path -> the documented envelope. Follows the
+// `telemetry::tests` pattern (a real `Router` + `AppState` built with
+// `IpcClient::disconnected()`, since none of these handlers touch IPC).
+//
+// The env-mutating tests (`STRIVO_DEV_UNLOCK_ALL`, `XDG_DATA_HOME`) are
+// serialised behind `ENV_GUARD` because `cargo test` runs unit tests in
+// this binary concurrently and both vars are process-global.
+#[cfg(test)]
+mod research_route_tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::Router;
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+
+    static ENV_GUARD: Mutex<()> = Mutex::new(());
+
+    fn test_state(api_key: &str) -> AppState {
+        AppState {
+            ipc: std::sync::Arc::new(crate::ipc_client::IpcClient::disconnected()),
+            api_key: crate::auth::ApiKey(api_key.to_string()),
+            config_path: None,
+            config_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            session_secret: "research-route-test-session-secret".to_string(),
+            login_limiter: crate::ratelimit::LoginLimiter::new(),
+            probe_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            probe_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+        }
+    }
+
+    /// Sets `STRIVO_DEV_UNLOCK_ALL=1` (entitles every Pro plugin) and
+    /// `XDG_DATA_HOME` to a fresh tempdir (so `research_db()` never touches
+    /// the real machine's data dir) for the duration of the closure. Caller
+    /// must hold `ENV_GUARD`.
+    async fn with_entitled_isolated_env<F, Fut, T>(f: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = T>,
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by ENV_GUARD's lock for the duration of the call;
+        // no other thread in this test binary may read/write these vars
+        // concurrently.
+        unsafe {
+            std::env::set_var("STRIVO_DEV_UNLOCK_ALL", "1");
+            std::env::set_var("XDG_DATA_HOME", dir.path());
+        }
+        let result = f().await;
+        unsafe {
+            std::env::remove_var("STRIVO_DEV_UNLOCK_ALL");
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn list_codes_requires_auth() {
+        let state = test_state("codes-test-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/research/projects/{id}/codes",
+                get(research_list_codes),
+            )
+            .with_state(state);
+        let project_id = uuid::Uuid::new_v4();
+        let req = Request::builder()
+            .uri(format!("/api/v1/research/projects/{project_id}/codes"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_codes_requires_pro_entitlement() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        // Explicitly unentitled: no dev-unlock env, and XDG_STATE_HOME
+        // points at an empty tempdir so a real licence.json on this
+        // machine can't make the gate pass.
+        let dir = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by ENV_GUARD's lock.
+        unsafe {
+            std::env::remove_var("STRIVO_DEV_UNLOCK_ALL");
+            std::env::set_var("XDG_STATE_HOME", dir.path());
+        }
+        let state = test_state("codes-test-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/research/projects/{id}/codes",
+                get(research_list_codes),
+            )
+            .with_state(state.clone());
+        let project_id = uuid::Uuid::new_v4();
+        let req = Request::builder()
+            .uri(format!("/api/v1/research/projects/{project_id}/codes"))
+            .header("x-api-key", state.api_key.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+        // SAFETY: guarded by ENV_GUARD's lock.
+        unsafe {
+            std::env::remove_var("XDG_STATE_HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_codes_happy_path_returns_envelope() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        with_entitled_isolated_env(|| async {
+            let state = test_state("codes-test-key");
+            let router = Router::new()
+                .route(
+                    "/api/v1/research/projects/{id}/codes",
+                    get(research_list_codes),
+                )
+                .with_state(state.clone());
+
+            let project_id = tokio::task::spawn_blocking(move || {
+                let store = strivo_research::ResearchStore::open(research_db()).unwrap();
+                let project = store.create_project("route-test-project", "").unwrap();
+                let code = strivo_research::Code {
+                    id: uuid::Uuid::new_v4(),
+                    project_id: project.id,
+                    parent_id: None,
+                    name: "Interesting".into(),
+                    description: String::new(),
+                    color: default_code_color(),
+                };
+                store.create_code(&code).unwrap();
+                project.id
+            })
+            .await
+            .unwrap();
+
+            let req = Request::builder()
+                .uri(format!("/api/v1/research/projects/{project_id}/codes"))
+                .header("x-api-key", state.api_key.as_str())
+                .body(Body::empty())
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let codes = body["codes"].as_array().expect("codes array");
+            assert_eq!(codes.len(), 1);
+            assert_eq!(codes[0]["name"], "Interesting");
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn assign_source_case_requires_auth() {
+        let state = test_state("assign-test-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/research/projects/{id}/cases/{case_id}/sources",
+                axum::routing::post(research_assign_source_case),
+            )
+            .with_state(state);
+        let project_id = uuid::Uuid::new_v4();
+        let case_id = uuid::Uuid::new_v4();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/research/projects/{project_id}/cases/{case_id}/sources"
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "source_id": uuid::Uuid::new_v4() }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn assign_source_case_requires_pro_entitlement() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by ENV_GUARD's lock.
+        unsafe {
+            std::env::remove_var("STRIVO_DEV_UNLOCK_ALL");
+            std::env::set_var("XDG_STATE_HOME", dir.path());
+        }
+        let state = test_state("assign-test-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/research/projects/{id}/cases/{case_id}/sources",
+                axum::routing::post(research_assign_source_case),
+            )
+            .with_state(state.clone());
+        let project_id = uuid::Uuid::new_v4();
+        let case_id = uuid::Uuid::new_v4();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/research/projects/{project_id}/cases/{case_id}/sources"
+            ))
+            .header("x-api-key", state.api_key.as_str())
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "source_id": uuid::Uuid::new_v4() }).to_string(),
+            ))
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+        // SAFETY: guarded by ENV_GUARD's lock.
+        unsafe {
+            std::env::remove_var("XDG_STATE_HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn assign_source_case_happy_path_links_source_to_case() {
+        let _guard = ENV_GUARD.lock().unwrap();
+        with_entitled_isolated_env(|| async {
+            let state = test_state("assign-test-key");
+            let router = Router::new()
+                .route(
+                    "/api/v1/research/projects/{id}/cases/{case_id}/sources",
+                    axum::routing::post(research_assign_source_case),
+                )
+                .with_state(state.clone());
+
+            let (project_id, case_id, source_id) = tokio::task::spawn_blocking(move || {
+                let mut store = strivo_research::ResearchStore::open(research_db()).unwrap();
+                let project = store.create_project("assign-test-project", "").unwrap();
+                let case = strivo_research::ResearchCase {
+                    id: uuid::Uuid::new_v4(),
+                    project_id: project.id,
+                    name: "Case A".into(),
+                    description: String::new(),
+                    attributes: json!({}),
+                };
+                store.create_case_with_sources(&case, &[]).unwrap();
+                let source = strivo_research::NewSource {
+                    id: uuid::Uuid::new_v4(),
+                    project_id: project.id,
+                    recording_id: None,
+                    kind: strivo_research::SourceKind::Document,
+                    title: "Source A".into(),
+                    uri: None,
+                    duration_ms: None,
+                    attributes: json!({}),
+                };
+                store.upsert_source(&source).unwrap();
+                (project.id, case.id, source.id)
+            })
+            .await
+            .unwrap();
+
+            let req = Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/research/projects/{project_id}/cases/{case_id}/sources"
+                ))
+                .header("x-api-key", state.api_key.as_str())
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "source_id": source_id }).to_string()))
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["case_id"], case_id.to_string());
+            assert_eq!(body["source_id"], source_id.to_string());
+        })
+        .await
+    }
+
+    #[test]
+    fn paginate_defaults_to_two_hundred_and_clamps_to_a_thousand() {
+        let items: Vec<i32> = (0..5).collect();
+        assert_eq!(paginate(items.clone(), None, None), items);
+        assert_eq!(paginate(items.clone(), Some(2), None), vec![0, 1]);
+        assert_eq!(paginate(items.clone(), Some(2), Some(3)), vec![3, 4]);
+        assert_eq!(paginate(items, Some(0), None).len(), 1); // clamped to >=1
     }
 }

@@ -52,6 +52,9 @@ YAZI-AUDIT.md
 # Agent / tool state
 .gstack/
 .claude/
+.arbor/
+.worktrees/
+.playwright-mcp/
 .aider*
 .cursor/
 .continue/

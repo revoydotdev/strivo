@@ -74,24 +74,24 @@ fully offline.
 Linux:
 
 ```bash
-cargo install --git https://github.com/Chorosyne/strivo --locked
+cargo install --git https://github.com/revoydotdev/strivo --locked
 ```
 
 Per-platform tarballs / zips ship at every tag — see the
-[Releases](https://github.com/Chorosyne/strivo/releases) page for
+[Releases](https://github.com/revoydotdev/strivo/releases) page for
 x86_64-linux, x86_64-macOS, and x86_64-windows builds.
 
 ## Docs
 
-- [README](https://github.com/Chorosyne/strivo/blob/main/README.md) — quick start
-- [ROADMAP](https://github.com/Chorosyne/strivo/blob/main/ROADMAP.md) — shipped + planned
-- [Plugin manifest spec](https://github.com/Chorosyne/strivo/blob/main/docs/PLUGIN-MANIFEST.md)
-- [Writing a plugin](https://github.com/Chorosyne/strivo/blob/main/docs/WRITING-A-PLUGIN.md) — author guide
-- [CHANGELOG](https://github.com/Chorosyne/strivo/blob/main/CHANGELOG.md)
+- [README](https://github.com/revoydotdev/strivo/blob/main/README.md) — quick start
+- [ROADMAP](https://github.com/revoydotdev/strivo/blob/main/ROADMAP.md) — shipped + planned
+- [Plugin manifest spec](https://github.com/revoydotdev/strivo/blob/main/docs/PLUGIN-MANIFEST.md)
+- [Writing a plugin](https://github.com/revoydotdev/strivo/blob/main/docs/WRITING-A-PLUGIN.md) — author guide
+- [CHANGELOG](https://github.com/revoydotdev/strivo/blob/main/CHANGELOG.md)
 
 ## Source
 
-[github.com/Chorosyne/strivo](https://github.com/Chorosyne/strivo)
+[github.com/revoydotdev/strivo](https://github.com/revoydotdev/strivo)
 — MIT. First-party plugins live in-tree at `crates/strivo-plugins/`
 (folded in from the retired separate `strivo-plugins` repo).
 

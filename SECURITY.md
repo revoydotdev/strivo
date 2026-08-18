@@ -14,7 +14,7 @@ security fixes; older tags are not patched.
 
 Please report security issues **privately**, not as a public GitHub issue.
 
-Preferred channel: open a [private security advisory](https://github.com/Chorosyne/strivo/security/advisories/new)
+Preferred channel: open a [private security advisory](https://github.com/revoydotdev/strivo/security/advisories/new)
 on the repository. The advisory form lets us discuss and patch before the
 issue becomes public.
 

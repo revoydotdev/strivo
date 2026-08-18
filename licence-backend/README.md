@@ -3,7 +3,7 @@
 Cloudflare Workers + D1 activation backend for **Strivo Pro**.
 
 This subtree is meant to be lifted into its own private repo at
-`Chorosyne/strivo-licence` before going live — keeping it here for now
+`revoydotdev/strivo-licence` before going live — keeping it here for now
 so the StriVo client and backend evolve in lockstep until the schema
 stabilises.
 

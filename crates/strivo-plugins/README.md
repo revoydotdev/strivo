@@ -1,6 +1,6 @@
 # strivo-plugins
 
-First-party plugins for [StriVo](https://github.com/Chorosyne/strivo),
+First-party plugins for [StriVo](https://github.com/revoydotdev/strivo),
 shipped in-tree as part of the workspace. The separate `strivo-plugins`
 repo was retired and folded into the host repo — plugin changes now
 land in the same PR as the host changes that depend on them.

@@ -26,7 +26,7 @@ the private-disclosure path.
 ## Local build
 
 ```bash
-git clone https://github.com/Chorosyne/strivo.git
+git clone https://github.com/revoydotdev/strivo.git
 cd strivo
 cargo build
 ```

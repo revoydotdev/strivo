@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/Chorosyne/strivo/security/advisories/new
+    url: https://github.com/revoydotdev/strivo/security/advisories/new
     about: Please report security issues privately via a security advisory, not as a public issue. See SECURITY.md.
   - name: Roadmap & milestones
-    url: https://github.com/Chorosyne/strivo/blob/main/ROADMAP.md
+    url: https://github.com/revoydotdev/strivo/blob/main/ROADMAP.md
     about: Check the roadmap before filing a feature request — it may already be tracked.

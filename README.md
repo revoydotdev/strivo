@@ -8,10 +8,10 @@ strivo ships in two editions from one codebase. The default build is the **pure 
 > is the only supported frontend. See [CHANGELOG.md](./CHANGELOG.md) for
 > the inventory.
 
-[![CI](https://github.com/Chorosyne/strivo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Chorosyne/strivo/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Chorosyne/strivo?sort=semver&display_name=tag)](https://github.com/Chorosyne/strivo/releases)
+[![CI](https://github.com/revoydotdev/strivo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/revoydotdev/strivo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/revoydotdev/strivo?sort=semver&display_name=tag)](https://github.com/revoydotdev/strivo/releases)
 [![MSRV](https://img.shields.io/badge/MSRV-1.75%2B-orange?logo=rust&logoColor=white)](Cargo.toml)
-[![License](https://img.shields.io/github/license/Chorosyne/strivo?color=blue)](LICENSE)
+[![License](https://img.shields.io/github/license/revoydotdev/strivo?color=blue)](LICENSE)
 [![AUR](https://img.shields.io/aur/version/strivo?label=AUR&logo=archlinux&logoColor=white)](https://aur.archlinux.org/packages/strivo)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-1f6feb?logo=linux&logoColor=white)](#platform-support)
 [![Made with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -120,7 +120,7 @@ strivo              # starts daemon + webui on http://127.0.0.1:8181
 ### From source
 
 ```bash
-git clone https://github.com/Chorosyne/strivo.git
+git clone https://github.com/revoydotdev/strivo.git
 cd strivo
 scripts/install.sh --check                 # tailored prerequisite guidance
 scripts/install.sh --edition pvr           # focused live-stream PVR

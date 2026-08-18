@@ -12,13 +12,13 @@ resolver = "2"
 name = "strivo-core"
 version = "0.5.0"
 edition = "2021"
-description = "Core library for StriVo — TUI Live Stream PVR"
+description = "Core library for StriVo — self-hosted live-stream PVR"
 authors = ["revelri <slrevoy@mailbox.org>"]
 license = "MIT"
-repository = "https://github.com/Chorosyne/strivo"
-homepage = "https://github.com/Chorosyne/strivo"
+repository = "https://github.com/revoydotdev/strivo"
+homepage = "https://github.com/revoydotdev/strivo"
 readme = "README.md"
-keywords = ["tui", "twitch", "youtube", "streaming", "recording"]
+keywords = ["pvr", "twitch", "youtube", "streaming", "recording"]
 categories = ["command-line-utilities", "multimedia"]
 rust-version = "1.75"
 

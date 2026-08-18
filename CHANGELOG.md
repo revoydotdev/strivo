@@ -239,7 +239,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - Dialog system for confirmations and input.
 - Color theme system for the TUI.
 
-[Unreleased]: https://github.com/Chorosyne/strivo/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/Chorosyne/strivo/releases/tag/v0.3.0
-[0.2.0]: https://github.com/Chorosyne/strivo/releases/tag/v0.2.0
-[0.1.0]: https://github.com/Chorosyne/strivo/releases/tag/v0.1.0
+[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/revoydotdev/strivo/releases/tag/v0.3.0
+[0.2.0]: https://github.com/revoydotdev/strivo/releases/tag/v0.2.0
+[0.1.0]: https://github.com/revoydotdev/strivo/releases/tag/v0.1.0

@@ -39,7 +39,7 @@ tokio = { version = "1", features = ["full"] }
 # HTTP
 reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls"], default-features = false }
 # WebSocket (Twitch EventSub real-time stream.online)
-tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # Config

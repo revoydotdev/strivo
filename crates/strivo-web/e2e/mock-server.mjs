@@ -548,7 +548,19 @@ const server = createServer(async (req, res) => {
 
       const agreementMatch = rp.match(/^\/projects\/[^/]+\/agreement$/);
       if (agreementMatch && req.method === "GET")
-        return json(res, 200, { kappa: 0.82, observed: 0.9, expected: 0.44, n: 20 });
+        // Mirrors the real route exactly: envelope + Agreement field names.
+        // A fixture that drifts from the server contract hides integration
+        // bugs instead of catching them.
+        return json(res, 200, {
+          agreement: {
+            cohens_kappa: 0.82,
+            observed_agreement: 0.9,
+            expected_agreement: 0.44,
+            n: 20,
+            author_a: "ana",
+            author_b: "ben",
+          },
+        });
 
       const exportMatch = rp.match(/^\/projects\/[^/]+\/export$/);
       if (exportMatch && req.method === "GET") {

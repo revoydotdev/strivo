@@ -156,9 +156,12 @@ export function mount(root, ctx) {
     if (state.agreementError) return `<div class="empty sm"><div class="glyph">⚠</div>${esc(state.agreementError)}</div>`;
     if (!state.agreement) return "";
     const a = state.agreement;
-    const kappa = a.kappa != null ? a.kappa.toFixed(3) : "—";
-    const observed = a.observed != null ? (a.observed * 100).toFixed(1) + "%" : "—";
-    const expected = a.expected != null ? (a.expected * 100).toFixed(1) + "%" : "—";
+    // Field names come from strivo_research::agreement::Agreement.
+    const kappa = a.cohens_kappa != null ? a.cohens_kappa.toFixed(3) : "—";
+    const observed =
+      a.observed_agreement != null ? (a.observed_agreement * 100).toFixed(1) + "%" : "—";
+    const expected =
+      a.expected_agreement != null ? (a.expected_agreement * 100).toFixed(1) + "%" : "—";
     return `
       <div class="nb-agreement-stats">
         <div class="nb-stat"><span class="nb-stat-value">${esc(kappa)}</span><span class="pg-cap-hint">Cohen's κ</span></div>
@@ -325,7 +328,8 @@ export function mount(root, ctx) {
       if (host) host.innerHTML = agreementResultHtml();
       try {
         const resp = await api.researchAgreement(projectId, { authorA, authorB, codeId });
-        state.agreement = resp;
+        // The route wraps the kernel struct: { "agreement": { ... } }.
+        state.agreement = resp?.agreement ?? resp;
       } catch (err) {
         state.agreementError = err.message || "Couldn't compute agreement.";
       } finally {
@@ -341,7 +345,9 @@ export function mount(root, ctx) {
       btn.disabled = true; btn.textContent = "Exporting…";
       try {
         const resp = await api.researchExport(projectId, { format: "json" });
-        downloadFile(`archive-${projectId}.json`, JSON.stringify(resp, null, 2), "application/json");
+        // Download the interchange document itself, not the HTTP envelope.
+        const doc = resp?.export ?? resp;
+        downloadFile(`archive-${projectId}.json`, JSON.stringify(doc, null, 2), "application/json");
         toast.success("Export downloaded");
       } catch (err) {
         toast.error(`Couldn't export: ${err.message}`);

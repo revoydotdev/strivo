@@ -141,24 +141,24 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Toolchain
-        shell: pwsh
+        shell: powershell
         run: rustup show active-toolchain; if (!$?) { rustup default stable }
 
       - name: Build release
-        shell: pwsh
+        shell: powershell
         env:
           FFMPEG_DIR: C:\ffmpeg-win64
         run: cargo build --release --locked
 
       - name: Generate completions
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path dist\completions | Out-Null
           .\target\release\strivo.exe completions powershell > dist\completions\strivo.ps1
 
       - name: Stage zip
         id: stage
-        shell: pwsh
+        shell: powershell
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $VERSION = $env:GITHUB_REF_NAME -replace '^v',''

@@ -722,6 +722,35 @@ pub async fn run_with_plugins_at(
         });
     }
 
+    #[cfg(windows)]
+    {
+        // Windows has no SIGTERM. The equivalent stop paths are CTRL_CLOSE
+        // (console window closed, or a service stop) and CTRL_SHUTDOWN (system
+        // going down). Registered synchronously for the same reason as SIGTERM
+        // above.
+        //
+        // Both are on a deadline: Windows gives the handler only a few seconds
+        // before terminating the process regardless. Cancelling promptly is
+        // what gives the recorders their window to stop ffmpeg gracefully, so
+        // a recording is finalised rather than truncated on shutdown.
+        let mut ctrl_close = tokio::signal::windows::ctrl_close()
+            .context("failed to register CTRL_CLOSE handler")?;
+        let mut ctrl_shutdown = tokio::signal::windows::ctrl_shutdown()
+            .context("failed to register CTRL_SHUTDOWN handler")?;
+        let cancel_win = cancel.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = ctrl_close.recv() => {
+                    tracing::info!("Received CTRL_CLOSE, shutting down");
+                }
+                _ = ctrl_shutdown.recv() => {
+                    tracing::info!("Received CTRL_SHUTDOWN, shutting down");
+                }
+            }
+            cancel_win.cancel();
+        });
+    }
+
     // Cap concurrent client handler tasks so a flood of connections can't
     // spawn unbounded tasks (roadmap item 9). Excess connections are dropped
     // immediately; a TUI/webui reconnects on its own.

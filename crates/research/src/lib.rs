@@ -14,8 +14,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod agreement;
 pub mod moments;
+pub mod refi;
 pub mod search;
+pub use agreement::Agreement;
 pub use moments::{Moment, MomentOrigin};
 
 const SCHEMA_VERSION: i64 = 1;
@@ -284,8 +287,11 @@ pub struct ProjectExport {
     pub project: Project,
     pub sources: Vec<Source>,
     pub codes: Vec<Code>,
+    pub cases: Vec<ResearchCase>,
     pub signals: Vec<Signal>,
     pub codings: Vec<Coding>,
+    pub memos: Vec<Memo>,
+    pub relationships: Vec<Relationship>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -821,26 +827,108 @@ impl ResearchStore {
             .map_err(Into::into)
     }
 
-    pub fn export_project(&self, project_id: Uuid) -> Result<ProjectExport> {
+    pub fn list_cases(&self, project_id: Uuid) -> Result<Vec<ResearchCase>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,project_id,name,description,attributes_json
+             FROM cases WHERE project_id=?1 ORDER BY name,id",
+        )?;
+        let rows = stmt.query_map([project_id.to_string()], |row| {
+            Ok(ResearchCase {
+                id: parse_uuid(row.get::<_, String>(0)?)?,
+                project_id: parse_uuid(row.get::<_, String>(1)?)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                attributes: parse_json(row.get::<_, String>(4)?)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_memos(&self, project_id: Uuid) -> Result<Vec<Memo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,project_id,source_id,coding_id,title,body,author
+             FROM memos WHERE project_id=?1 ORDER BY created_at,id",
+        )?;
+        let rows = stmt.query_map([project_id.to_string()], |row| {
+            Ok(Memo {
+                id: parse_uuid(row.get::<_, String>(0)?)?,
+                project_id: parse_uuid(row.get::<_, String>(1)?)?,
+                source_id: row
+                    .get::<_, Option<String>>(2)?
+                    .map(parse_uuid)
+                    .transpose()?,
+                coding_id: row
+                    .get::<_, Option<String>>(3)?
+                    .map(parse_uuid)
+                    .transpose()?,
+                title: row.get(4)?,
+                body: row.get(5)?,
+                author: row.get(6)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_relationships(&self, project_id: Uuid) -> Result<Vec<Relationship>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,project_id,from_kind,from_id,to_kind,to_id,relation,note,author
+             FROM relationships WHERE project_id=?1 ORDER BY created_at,id",
+        )?;
+        let rows = stmt.query_map([project_id.to_string()], |row| {
+            Ok(Relationship {
+                id: parse_uuid(row.get::<_, String>(0)?)?,
+                project_id: parse_uuid(row.get::<_, String>(1)?)?,
+                from_kind: row.get(2)?,
+                from_id: parse_uuid(row.get::<_, String>(3)?)?,
+                to_kind: row.get(4)?,
+                to_id: parse_uuid(row.get::<_, String>(5)?)?,
+                relation: row.get(6)?,
+                note: row.get(7)?,
+                author: row.get(8)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Export a project's full portable snapshot without the old 1000-signal
+    /// ceiling. Signals are paged through `limit`/`offset` (each call still
+    /// clamped to 1000 rows per [`ResearchStore::list_signals`]), so a
+    /// growing archive exports across as many calls as it needs instead of
+    /// hard-failing once it outgrows one page.
+    pub fn export_project_paged(
+        &self,
+        project_id: Uuid,
+        limit: u64,
+        offset: u64,
+    ) -> Result<ProjectExport> {
         let project = self
             .list_projects()?
             .into_iter()
             .find(|project| project.id == project_id)
             .ok_or_else(|| ResearchError::Validation("project not found".into()))?;
-        let signals = self.list_signals(project_id, None, None, 1_000, 0)?;
-        if signals.len() as u64 != self.signal_count(project_id)? {
-            return Err(ResearchError::Validation(
-                "project export exceeds the 1000-signal portable limit".into(),
-            ));
-        }
+        let signals = self.list_signals(project_id, None, None, limit as usize, offset as usize)?;
         Ok(ProjectExport {
             schema_version: self.schema_version()?,
             project,
             sources: self.list_sources(project_id)?,
             codes: self.list_codes(project_id)?,
+            cases: self.list_cases(project_id)?,
             signals,
             codings: self.list_codings(project_id)?,
+            memos: self.list_memos(project_id)?,
+            relationships: self.list_relationships(project_id)?,
         })
+    }
+
+    /// Export a project's first page of signals (up to 1000). Kept for
+    /// backward compatibility; callers exporting archives that may exceed
+    /// one page should call [`ResearchStore::export_project_paged`] directly
+    /// and page through the full signal count.
+    pub fn export_project(&self, project_id: Uuid) -> Result<ProjectExport> {
+        self.export_project_paged(project_id, 1_000, 0)
     }
 
     /// Import legacy Crunchr videos and transcript segments. Stable UUIDv5
@@ -1415,6 +1503,154 @@ mod tests {
         assert_eq!(export.project, project);
         assert_eq!(export.sources.len(), 1);
         assert!(export.signals.is_empty());
+        assert!(export.cases.is_empty());
+        assert!(export.memos.is_empty());
+        assert!(export.relationships.is_empty());
+    }
+
+    #[test]
+    fn export_paged_covers_a_project_past_the_old_1000_signal_ceiling() {
+        let mut store = ResearchStore::open(":memory:").unwrap();
+        let project = store.create_project("Big archive", "").unwrap();
+        let source = source(project.id);
+        store.upsert_source(&source).unwrap();
+        let total = 1_500u64;
+        for chunk_start in (0..total).step_by(500) {
+            let batch = (chunk_start..(chunk_start + 500).min(total))
+                .map(|index| NewSignal {
+                    id: stable_id("paged-export", &index.to_string()),
+                    project_id: project.id,
+                    source_id: source.id,
+                    start_ms: index,
+                    end_ms: index,
+                    kind: "test.paged".into(),
+                    label: String::new(),
+                    payload: serde_json::json!({}),
+                    confidence: None,
+                    provenance_id: None,
+                })
+                .collect::<Vec<_>>();
+            store.append_signals(&batch).unwrap();
+        }
+        assert_eq!(store.signal_count(project.id).unwrap(), total);
+
+        // export_project (the un-paged convenience wrapper) only sees the
+        // first page — it no longer hard-fails, but it is not the full
+        // archive.
+        let first_page = store.export_project(project.id).unwrap();
+        assert_eq!(first_page.signals.len(), 1_000);
+
+        // export_project_paged lets a caller walk every page and recover
+        // the complete archive.
+        let mut collected = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let page = store.export_project_paged(project.id, 500, offset).unwrap();
+            if page.signals.is_empty() {
+                break;
+            }
+            let page_len = page.signals.len() as u64;
+            collected.extend(page.signals);
+            offset += page_len;
+        }
+        assert_eq!(collected.len() as u64, total);
+        let mut ids: Vec<_> = collected.iter().map(|signal| signal.id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len() as u64, total, "no duplicate or missing signals");
+    }
+
+    #[test]
+    fn list_cases_memos_relationships_are_scoped_and_ordered() {
+        let store = ResearchStore::open(":memory:").unwrap();
+        let first = store.create_project("First", "").unwrap();
+        let second = store.create_project("Second", "").unwrap();
+
+        assert!(store.list_cases(first.id).unwrap().is_empty());
+        assert!(store.list_memos(first.id).unwrap().is_empty());
+        assert!(store.list_relationships(first.id).unwrap().is_empty());
+
+        let src_first = source(first.id);
+        store.upsert_source(&src_first).unwrap();
+        let src_second = source(second.id);
+        store.upsert_source(&src_second).unwrap();
+
+        let case_first = ResearchCase {
+            id: Uuid::new_v4(),
+            project_id: first.id,
+            name: "Case in first".into(),
+            description: String::new(),
+            attributes: serde_json::json!({}),
+        };
+        store.create_case(&case_first).unwrap();
+        let case_second = ResearchCase {
+            id: Uuid::new_v4(),
+            project_id: second.id,
+            name: "Case in second".into(),
+            description: String::new(),
+            attributes: serde_json::json!({}),
+        };
+        store.create_case(&case_second).unwrap();
+
+        let memo_first = Memo {
+            id: Uuid::new_v4(),
+            project_id: first.id,
+            source_id: Some(src_first.id),
+            coding_id: None,
+            title: "Memo in first".into(),
+            body: "body".into(),
+            author: "analyst".into(),
+        };
+        store.add_memo(&memo_first).unwrap();
+        let memo_second = Memo {
+            id: Uuid::new_v4(),
+            project_id: second.id,
+            source_id: Some(src_second.id),
+            coding_id: None,
+            title: "Memo in second".into(),
+            body: "body".into(),
+            author: "analyst".into(),
+        };
+        store.add_memo(&memo_second).unwrap();
+
+        let rel_first = Relationship {
+            id: Uuid::new_v4(),
+            project_id: first.id,
+            from_kind: "source".into(),
+            from_id: src_first.id,
+            to_kind: "case".into(),
+            to_id: case_first.id,
+            relation: "belongs_to".into(),
+            note: String::new(),
+            author: "analyst".into(),
+        };
+        store.add_relationship(&rel_first).unwrap();
+        let rel_second = Relationship {
+            id: Uuid::new_v4(),
+            project_id: second.id,
+            from_kind: "source".into(),
+            from_id: src_second.id,
+            to_kind: "case".into(),
+            to_id: case_second.id,
+            relation: "belongs_to".into(),
+            note: String::new(),
+            author: "analyst".into(),
+        };
+        store.add_relationship(&rel_second).unwrap();
+
+        let cases = store.list_cases(first.id).unwrap();
+        assert_eq!(cases, vec![case_first.clone()]);
+        let memos = store.list_memos(first.id).unwrap();
+        assert_eq!(memos, vec![memo_first.clone()]);
+        let relationships = store.list_relationships(first.id).unwrap();
+        assert_eq!(relationships, vec![rel_first.clone()]);
+
+        assert_eq!(store.list_cases(second.id).unwrap(), vec![case_second]);
+        assert_eq!(store.list_memos(second.id).unwrap(), vec![memo_second]);
+        assert_eq!(
+            store.list_relationships(second.id).unwrap(),
+            vec![rel_second]
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # StriVo
 
-**A TUI live-stream PVR for Twitch, YouTube, and Patreon — plus a
+**A self-hosted live-stream PVR for Twitch, YouTube, and Patreon — plus a
 DAW-class plugin toolkit for everything you do with the captures
 after.**
 

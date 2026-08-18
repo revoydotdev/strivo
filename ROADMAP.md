@@ -244,6 +244,8 @@ fork.
 | Dynamic cdylib plugin loading coded but never triggered; no hot-reload | ⬜ | Deferred until third-party plugins are real |
 | `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |
 | Creator Edition clippy gate | ✅ | CI runs `-D warnings` with the Creator feature |
+| Windows build | ⬜ | The workspace does not compile on Windows: `tokio::net::Unix{Listener,Stream}` is used unconditionally in `src/daemon.rs`, `crates/strivo-web/src/ipc_client.rs`, `src/playback/mod.rs`, and `src/ipc.rs:236`. Needs a transport abstraction (named pipes), not a packaging fix |
+| Release pipeline | 🟡 | Linux proven end-to-end via `workflow_dispatch` rehearsal (run 32185451150: tarball + completions + manpage + verified sha256). macOS/Windows blocked on offline self-hosted runners |
 
 ### Adversarial-review wounds (from the 2026-05-29 review, folded in)
 1. **Identity collapse** — resolved: the PVR is now the product, the engine is
@@ -291,26 +293,31 @@ to the next phase when these land. Keep in sync with the tables above.
 
 <!-- revoy:begin -->
 ```toml
-phase = "post-near-term hardening (v0.5.x)"
+phase = "v0.6.0 release hardening"
 
 [[todo]]
-line = "Move synchronous ffmpeg/ffprobe shell-outs in creator handlers (editor_render, clipper_extract, thumbnails_generate, reuse_generate) onto spawn_blocking (audit F-32)"
-difficulty = 30
+line = "Port the daemon/web IPC off unconditional tokio::net::Unix* onto a transport abstraction (named pipes on Windows) so the workspace compiles on Windows at all"
+difficulty = 60
 priority = "HIGH"
 
 [[todo]]
-line = "Add acquisition timeouts to pipeline resource-lock semaphores so a wedged subprocess cannot stall all Creator stages (audit F-37)"
-difficulty = 30
+line = "Bring the macos-sonoma and win11-ci self-hosted runners back online; both are offline and the release workflow cannot build those platforms without them"
+difficulty = 20
 priority = "HIGH"
 
 [[todo]]
-line = "Gate licence trial/activate buttons on the backend implemented flag and wire the ui.reduce_motion setting for real (audit F-11, F-18)"
-difficulty = 25
+line = "Reconcile CHANGELOG: write the missing [0.4.0] and [0.5.0] sections, promote [Unreleased] to [0.6.0], bump the workspace version"
+difficulty = 20
 priority = "MED"
 
 [[todo]]
-line = "Clean 44 Creator-crate clippy warnings (across tool crates); gate on cargo clippy --features creator"
-difficulty = 25
+line = "Update packaging/aur/PKGBUILD from 0.3.0 and decide whether the AUR package keeps --all-features (it currently ships Creator Edition, unlike the release tarballs)"
+difficulty = 15
+priority = "MED"
+
+[[todo]]
+line = "Marketplace catalog lists speculative plugins with author 'Chorosyne' and repo URLs that do not resolve; decide the brand string and whether the catalog ships at all"
+difficulty = 15
 priority = "LOW"
 ```
 <!-- revoy:end -->

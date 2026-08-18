@@ -338,8 +338,9 @@ awareness of concrete plugins; the binary pulls both together.
 - **Daemon mode is Unix-only.** Linux and macOS work; Windows is unsupported
   until the named-pipe transport lands.
 - **In-flight recordings are not durable across daemon crashes.** A persisted
-  journal exists for status replay but does not yet recover an in-flight
-  ffmpeg process; the durability work is tracked in M1 / 0.4.0.
+  journal exists for status replay, and the daemon marks orphaned jobs
+  `interrupted` at startup so nothing looks falsely in flight, but it does not
+  resume the ffmpeg process itself — an interrupted capture must be restarted.
 - **Transcription jobs cannot be cancelled or retried** after timeout — a
   single failure currently terminates the job.
 - **Plugins require same-toolchain compilation** against the exact strivo

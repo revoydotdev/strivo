@@ -1,4 +1,4 @@
-use axum::extract::Path;
+use axum::extract::{Path, RawQuery};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -7,18 +7,22 @@ use axum::Router;
 use crate::assets::Assets;
 use crate::server::AppState;
 
-async fn asset(Path(path): Path<String>) -> Response {
+async fn asset(Path(path): Path<String>, RawQuery(query): RawQuery) -> Response {
     match Assets::get(&path) {
         Some(content) => {
             let mime = mime_for(&path);
+            // Only a content-versioned URL (`?v=<hash>`) is safe to cache
+            // forever, because a deploy changes the hash and therefore the URL.
+            // Anything fetched without a version — notably the ES modules that
+            // `spa.js` imports by relative path — must revalidate, or a deploy
+            // would leave browsers on an indefinitely stale copy.
+            let cache = if query.is_some_and(|q| q.starts_with("v=") || q.contains("&v=")) {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            };
             (
-                [
-                    (header::CONTENT_TYPE, mime),
-                    // Asset URLs are content-versioned by the shell
-                    // (`?v=<hash>`), so a given URL is safe to cache
-                    // forever — a deploy changes the hash and the URL.
-                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                ],
+                [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, cache)],
                 content.data.into_owned(),
             )
                 .into_response()

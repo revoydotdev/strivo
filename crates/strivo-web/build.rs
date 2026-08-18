@@ -1,18 +1,29 @@
 //! Build script for strivo-web.
 //!
-//! In PVR mode (no `creator` feature), strips `/* @creator-start */` …
-//! `/* @creator-end */` blocks from `spa.js` and writes the cleaned copy
-//! to `$OUT_DIR/assets/`.  Creator mode copies assets unchanged.
+//! In PVR mode (no `creator` feature) the copied asset tree is reduced to the
+//! PVR surface two ways:
+//!
+//!   1. `/* @creator-start */` … `/* @creator-end */` blocks are stripped from
+//!      **every** `.js` file, not just `spa.js`.
+//!   2. `assets/research/` is dropped wholesale — those modules are the
+//!      Creator-only research UI and have no PVR content to keep.
+//!
+//! Both matter: the `spa.js` seam that imports the research modules lives in a
+//! creator block (so PVR never imports them), and dropping the directory means
+//! the code is not shipped even as dead bytes.
+//!
+//! Creator mode copies assets unchanged.
 //!
 //! `src/assets.rs` points `RustEmbed` at `$OUT_DIR/assets` so it always
-//! picks up the (possibly-stripped) file rather than the source tree.
+//! picks up the (possibly-stripped) tree rather than the source tree.
 
 use std::{env, fs, io, path::Path};
 
 fn main() {
-    // Rerun when any source asset changes or the feature set changes.
-    println!("cargo:rerun-if-changed=assets/spa.js");
-    println!("cargo:rerun-if-changed=assets/spa.css");
+    // Watch the whole asset tree: naming individual files here meant a new
+    // module could be edited without triggering a rebuild, so the binary would
+    // silently keep serving the previous copy.
+    println!("cargo:rerun-if-changed=assets");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CREATOR");
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
@@ -29,12 +40,27 @@ fn main() {
     let _ = fs::remove_file(dst_assets.join("img/chorosyne-logo.png"));
 
     if !creator_enabled {
-        let spa_src = src_assets.join("spa.js");
-        let spa_dst = dst_assets.join("spa.js");
-        let content = fs::read_to_string(&spa_src).expect("failed to read spa.js");
-        let stripped = strip_creator_blocks(&content);
-        fs::write(&spa_dst, stripped).expect("failed to write stripped spa.js");
+        // The research UI is Creator-only in its entirety; ship none of it.
+        let _ = fs::remove_dir_all(dst_assets.join("research"));
+        strip_js_tree(&dst_assets).expect("failed to strip creator blocks from assets");
     }
+}
+
+/// Strip creator blocks from every `.js` file in the copied asset tree.
+fn strip_js_tree(dir: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            strip_js_tree(&path)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("js") {
+            let content = fs::read_to_string(&path)?;
+            if content.contains("@creator-start") {
+                fs::write(&path, strip_creator_blocks(&content))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Copy a directory tree from `src` to `dst`, creating `dst` if needed.

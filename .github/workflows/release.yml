@@ -55,7 +55,14 @@ jobs:
       - name: Stage tarball
         id: stage
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          # On a tag push the ref is the version; on a rehearsal dispatch the ref
+          # is a branch name, so fall back to the crate version and mark it -dev
+          # so a rehearsal artifact can never be mistaken for a release.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/strivo-bin/Cargo.toml | head -1)-dev"
+          fi
           PKG="strivo-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir -p "dist/${PKG}"
           cp target/release/strivo                  "dist/${PKG}/"
@@ -99,7 +106,14 @@ jobs:
       - name: Stage tarball
         id: stage
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          # On a tag push the ref is the version; on a rehearsal dispatch the ref
+          # is a branch name, so fall back to the crate version and mark it -dev
+          # so a rehearsal artifact can never be mistaken for a release.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/strivo-bin/Cargo.toml | head -1)-dev"
+          fi
           PKG="strivo-${VERSION}-x86_64-apple-darwin"
           mkdir -p "dist/${PKG}"
           cp target/release/strivo                  "dist/${PKG}/"
@@ -146,7 +160,11 @@ jobs:
         id: stage
         shell: pwsh
         run: |
-          $VERSION = $env:GITHUB_REF_NAME -replace '^v',''
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $VERSION = $env:GITHUB_REF_NAME -replace '^v',''
+          } else {
+            $VERSION = ((Select-String -Path crates\strivo-bin\Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value) + '-dev'
+          }
           $PKG = "strivo-$VERSION-x86_64-pc-windows-msvc"
           New-Item -ItemType Directory -Force -Path "dist\$PKG" | Out-Null
           Copy-Item target\release\strivo.exe              "dist\$PKG\"

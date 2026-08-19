@@ -80,6 +80,14 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 # as the host — see docs/PLUGIN-MANIFEST.md for the same-toolchain caveat.
 libloading = "0.8"
 
+[target.'cfg(windows)'.dependencies]
+# Process-liveness probe (OpenProcess/GetExitCodeProcess) and the
+# ERROR_PIPE_BUSY retry check for the named-pipe IPC transport.
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 

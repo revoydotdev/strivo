@@ -3,6 +3,11 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+};
+
 use crate::events::DaemonEvent;
 use crate::platform::{ChannelEntry, PlatformKind};
 use crate::recording::job::RecordingJob;
@@ -188,9 +193,27 @@ pub enum ServerMessage {
     Unknown,
 }
 
-/// Socket path for the daemon
+/// Name of the Windows named pipe the daemon listens on. Unlike the Unix
+/// socket, this has no filesystem entry — it lives in the kernel object
+/// namespace for the lifetime of the listener.
+#[cfg(windows)]
+const PIPE_NAME: &str = r"\\.\pipe\strivo";
+
+/// Socket path for the daemon (Unix) — kept as the display/legacy accessor
+/// so callers that only want a human-readable location (e.g. `strivo
+/// status`) don't need to know about the platform split. On Windows this
+/// returns the pipe name as a `PathBuf`; it is not a filesystem path and
+/// must not be used with `std::fs` or `UnixStream::connect`. Use
+/// [`Endpoint::current`] for the real cross-platform connect target.
 pub fn socket_path() -> std::path::PathBuf {
-    crate::config::AppConfig::state_dir().join("strivo.sock")
+    #[cfg(unix)]
+    {
+        crate::config::AppConfig::state_dir().join("strivo.sock")
+    }
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(PIPE_NAME)
+    }
 }
 
 /// PID file path for the daemon
@@ -205,58 +228,330 @@ pub fn encode_message<T: Serialize>(msg: &T) -> Result<String, serde_json::Error
     Ok(s)
 }
 
-/// Check if the daemon is running.
-///
-/// `kill(pid, 0)` alone can produce false positives: PIDs get recycled
-/// after a crash, and the recorded PID may belong to an unrelated
-/// process. Before trusting the PID we also confirm the Unix socket is
-/// bound *and* still accepting connections. A blocking connect with a
-/// ~200 ms budget is the cheapest definitive liveness probe; a dead
-/// socket rejects `connect(2)` with `ECONNREFUSED` almost instantly.
-pub fn is_daemon_running() -> bool {
-    let pid_file = pid_path();
-    let sock_file = socket_path();
-    if !pid_file.exists() || !sock_file.exists() {
+/// Where the daemon's IPC transport lives: a Unix domain socket path, or a
+/// Windows named pipe name. `Listener::bind` and `Stream::connect` are the
+/// only things that need to know which.
+#[derive(Debug, Clone)]
+pub enum Endpoint {
+    Path(std::path::PathBuf),
+    Pipe(String),
+}
+
+impl Endpoint {
+    /// The daemon's real connect target for this platform.
+    pub fn current() -> Self {
+        #[cfg(unix)]
+        {
+            Endpoint::Path(socket_path())
+        }
+        #[cfg(windows)]
+        {
+            Endpoint::Pipe(PIPE_NAME.to_string())
+        }
+    }
+}
+
+/// A bidirectional IPC connection: a Unix domain socket on Unix, a named
+/// pipe instance on Windows. Implements `AsyncRead`/`AsyncWrite`, so the
+/// existing newline-delimited-JSON framing (`tokio::io::split`,
+/// `BufReader::read_line`, `write_all`) works unchanged.
+pub enum Stream {
+    #[cfg(unix)]
+    Unix(tokio::net::UnixStream),
+    #[cfg(windows)]
+    PipeServer(NamedPipeServer),
+    #[cfg(windows)]
+    PipeClient(NamedPipeClient),
+}
+
+impl Stream {
+    /// Connect to the daemon's endpoint as a client.
+    pub async fn connect(endpoint: &Endpoint) -> anyhow::Result<Self> {
+        match endpoint {
+            #[cfg(unix)]
+            Endpoint::Path(path) => Ok(Stream::Unix(tokio::net::UnixStream::connect(path).await?)),
+            #[cfg(not(unix))]
+            Endpoint::Path(_) => anyhow::bail!("Unix socket endpoint used on a non-Unix platform"),
+            #[cfg(windows)]
+            Endpoint::Pipe(name) => {
+                // A pending accept re-arm (see Listener::accept) can lose a
+                // narrow race with a connecting client, which surfaces as
+                // ERROR_PIPE_BUSY (231) rather than a hard failure. Retry
+                // briefly instead of treating that as "daemon not running".
+                const ERROR_PIPE_BUSY: i32 = 231;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                loop {
+                    match ClientOptions::new().open(name) {
+                        Ok(client) => return Ok(Stream::PipeClient(client)),
+                        Err(e)
+                            if e.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            Endpoint::Pipe(_) => {
+                anyhow::bail!("named pipe endpoint used on a non-Windows platform")
+            }
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for Stream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            #[cfg(windows)]
+            Stream::PipeServer(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            #[cfg(windows)]
+            Stream::PipeClient(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            #[cfg(windows)]
+            Stream::PipeServer(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            #[cfg(windows)]
+            Stream::PipeClient(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_flush(cx),
+            #[cfg(windows)]
+            Stream::PipeServer(s) => std::pin::Pin::new(s).poll_flush(cx),
+            #[cfg(windows)]
+            Stream::PipeClient(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            #[cfg(windows)]
+            Stream::PipeServer(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            #[cfg(windows)]
+            Stream::PipeClient(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+/// The daemon's accept loop. On Unix this is a thin wrapper around
+/// `UnixListener`. On Windows a `NamedPipeServer` instance *is* the
+/// connection — once `connect().await` resolves, that instance belongs to
+/// the client and a fresh instance must exist before we return, or a
+/// second client arriving in the gap gets `ERROR_PIPE_BUSY` with nothing
+/// listening to retry into.
+pub enum Listener {
+    #[cfg(unix)]
+    Unix(tokio::net::UnixListener),
+    #[cfg(windows)]
+    Pipe {
+        /// The next not-yet-connected instance, pre-armed and waiting.
+        next: NamedPipeServer,
+        name: String,
+    },
+}
+
+impl Listener {
+    /// Bind the daemon's listening endpoint, removing any stale Unix
+    /// socket file first. Windows named pipes have no filesystem entry to
+    /// clean up; the OS reclaims the name when the previous daemon's
+    /// process exits.
+    pub async fn bind(endpoint: &Endpoint) -> anyhow::Result<Self> {
+        match endpoint {
+            #[cfg(unix)]
+            Endpoint::Path(path) => {
+                let _ = std::fs::remove_file(path);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                Ok(Listener::Unix(tokio::net::UnixListener::bind(path)?))
+            }
+            #[cfg(not(unix))]
+            Endpoint::Path(_) => anyhow::bail!("Unix socket endpoint used on a non-Unix platform"),
+            #[cfg(windows)]
+            Endpoint::Pipe(name) => {
+                // Must be the first instance created for this pipe name:
+                // it fails outright if another server is already bound,
+                // rather than silently queuing behind it (a stale/rogue
+                // daemon holding the name should be a startup error, not a
+                // silent no-op second daemon).
+                let first = ServerOptions::new()
+                    .first_pipe_instance(true)
+                    .create(name)?;
+                Ok(Listener::Pipe {
+                    next: first,
+                    name: name.clone(),
+                })
+            }
+            #[cfg(not(windows))]
+            Endpoint::Pipe(_) => {
+                anyhow::bail!("named pipe endpoint used on a non-Windows platform")
+            }
+        }
+    }
+
+    /// Accept the next client connection.
+    pub async fn accept(&mut self) -> anyhow::Result<Stream> {
+        match self {
+            #[cfg(unix)]
+            Listener::Unix(l) => {
+                let (stream, _addr) = l.accept().await?;
+                Ok(Stream::Unix(stream))
+            }
+            #[cfg(windows)]
+            Listener::Pipe { next, name } => {
+                next.connect().await?;
+                // Re-arm *before* handing the connected instance back to
+                // the caller, so there is no window where a new client
+                // finds nobody listening.
+                let armed = ServerOptions::new().create(name)?;
+                let connected = std::mem::replace(next, armed);
+                Ok(Stream::PipeServer(connected))
+            }
+        }
+    }
+}
+
+/// Portable process-liveness check. A pid alone does not prove liveness on
+/// either platform: pids get recycled after a crash. `kill(pid, 0)` on
+/// Unix and `OpenProcess`/`GetExitCodeProcess` on Windows both just answer
+/// "does a process with this pid currently exist" — callers still cross-
+/// check against the IPC endpoint itself (see `is_daemon_running`).
+#[cfg(unix)]
+fn is_process_alive(pid: i32) -> bool {
+    // Safety: kill(pid, 0) is the canonical reachability probe — no signal
+    // is delivered.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn is_process_alive(pid: i32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    if pid <= 0 {
         return false;
     }
+    // Safety: OpenProcess/GetExitCodeProcess/CloseHandle is the standard
+    // Win32 liveness triple. The handle is always closed before returning.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+        if handle.is_null() {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE as u32
+    }
+}
+
+/// Check if the daemon is running.
+///
+/// The pid check alone can produce false positives: PIDs get recycled
+/// after a crash, and the recorded PID may belong to an unrelated
+/// process. Before trusting the pid we also confirm the IPC endpoint is
+/// bound *and* still accepting connections.
+///
+/// On Unix that's a blocking connect with a ~200 ms budget — the cheapest
+/// definitive liveness probe; a dead socket rejects `connect(2)` with
+/// `ECONNREFUSED` almost instantly. On Windows a named pipe has no
+/// filesystem entry to `.exists()`-check first, so the connect attempt
+/// *is* the existence probe: `ERROR_FILE_NOT_FOUND` means nobody is
+/// listening, while `ERROR_PIPE_BUSY` means a server exists but every
+/// instance is currently claimed — that still counts as "running".
+pub fn is_daemon_running() -> bool {
+    let pid_file = pid_path();
     let Ok(pid_str) = std::fs::read_to_string(&pid_file) else {
         return false;
     };
     let Ok(pid) = pid_str.trim().parse::<i32>() else {
         return false;
     };
-    // Safety: kill(pid, 0) is the canonical reachability probe — no signal
-    // is delivered.
-    if unsafe { libc::kill(pid, 0) } != 0 {
+    if !is_process_alive(pid) {
         return false;
     }
-    // Cross-check: actually connect to the socket. If the daemon crashed
-    // and the PID got recycled, the socket file may still sit on disk
-    // but nothing is accept(2)ing on it.
-    match std::os::unix::net::UnixStream::connect(&sock_file) {
-        Ok(stream) => {
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
-            true
+
+    #[cfg(unix)]
+    {
+        let sock_file = socket_path();
+        if !sock_file.exists() {
+            return false;
         }
-        Err(_) => false,
+        match std::os::unix::net::UnixStream::connect(&sock_file) {
+            Ok(stream) => {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+                true
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(windows)]
+    {
+        const ERROR_PIPE_BUSY_RAW: i32 = 231;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(PIPE_NAME)
+        {
+            Ok(_) => true,
+            Err(e) => e.raw_os_error() == Some(ERROR_PIPE_BUSY_RAW),
+        }
     }
 }
 
 /// Remove stale pid + socket files left by a previous daemon that
 /// crashed. Safe to call at the start of every `daemon` command.
+///
+/// Windows named pipes have no filesystem entry — they die with the
+/// process that created them, so there is nothing to sweep on that side;
+/// only the pid file needs clearing.
 pub fn sweep_stale_files() {
     let pid_file = pid_path();
-    let sock_file = socket_path();
     let stale_pid = match std::fs::read_to_string(&pid_file) {
         Ok(s) => match s.trim().parse::<i32>() {
-            Ok(pid) => unsafe { libc::kill(pid, 0) != 0 },
+            Ok(pid) => !is_process_alive(pid),
             Err(_) => true,
         },
         Err(_) => !pid_file.exists(),
     };
     if stale_pid {
         let _ = std::fs::remove_file(&pid_file);
-        let _ = std::fs::remove_file(&sock_file);
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(socket_path());
+        }
     }
 }
 

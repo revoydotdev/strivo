@@ -12,6 +12,7 @@
 //!   for every subsequent broadcast. Wired into the `/events` SSE
 //!   endpoint so HTMX `hx-sse` clients see live updates.
 
+#[cfg(test)]
 use std::path::PathBuf;
 use std::pin::Pin;
 
@@ -19,13 +20,12 @@ use anyhow::{anyhow, Context, Result};
 use async_stream::try_stream;
 use futures::Stream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 
 use strivo_core::events::DaemonEvent;
-use strivo_core::ipc::{self, ClientMessage, ServerMessage};
+use strivo_core::ipc::{self, ClientMessage, Endpoint, ServerMessage, Stream as IpcStream};
 
 pub struct IpcClient {
-    socket_path: PathBuf,
+    endpoint: Endpoint,
 }
 
 impl IpcClient {
@@ -34,7 +34,7 @@ impl IpcClient {
             return Err(anyhow!("daemon not running; start it with `strivo daemon`"));
         }
         Ok(Self {
-            socket_path: ipc::socket_path(),
+            endpoint: Endpoint::current(),
         })
     }
 
@@ -45,7 +45,7 @@ impl IpcClient {
     /// `/events` SSE stream the browser is already subscribed to, so
     /// no per-call response is needed. (W1.)
     pub async fn send_command(&self, msg: ClientMessage) -> Result<()> {
-        let mut stream = UnixStream::connect(&self.socket_path)
+        let mut stream = IpcStream::connect(&self.endpoint)
             .await
             .context("connect to daemon socket")?;
         let payload = ipc::encode_message(&msg)?;
@@ -62,16 +62,16 @@ impl IpcClient {
     #[cfg(test)]
     pub(crate) fn disconnected() -> Self {
         Self {
-            socket_path: PathBuf::from("/nonexistent-strivo-test-socket"),
+            endpoint: Endpoint::Path(PathBuf::from("/nonexistent-strivo-test-socket")),
         }
     }
 
     /// — fast enough that we don't bother caching at the web layer.
     pub async fn snapshot(&self) -> Result<ServerMessage> {
-        let stream = UnixStream::connect(&self.socket_path)
+        let stream = IpcStream::connect(&self.endpoint)
             .await
             .context("connect to daemon socket")?;
-        let (reader, mut writer) = stream.into_split();
+        let (reader, mut writer) = tokio::io::split(stream);
         let payload = ipc::encode_message(&ClientMessage::Hello {
             version: ipc::IPC_PROTOCOL_VERSION,
         })?;
@@ -93,12 +93,12 @@ impl IpcClient {
     /// broadcast. Terminates when the daemon socket closes; callers
     /// (e.g. the SSE endpoint) reconnect as needed.
     pub fn events(&self) -> Pin<Box<dyn Stream<Item = Result<DaemonEvent>> + Send>> {
-        let path = self.socket_path.clone();
+        let endpoint = self.endpoint.clone();
         Box::pin(try_stream! {
-            let stream = UnixStream::connect(&path)
+            let stream = IpcStream::connect(&endpoint)
                 .await
                 .context("connect to daemon socket for /events")?;
-            let (reader, mut writer) = stream.into_split();
+            let (reader, mut writer) = tokio::io::split(stream);
             let payload = ipc::encode_message(&ClientMessage::Hello {
                 version: ipc::IPC_PROTOCOL_VERSION,
             })?;

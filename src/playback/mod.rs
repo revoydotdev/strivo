@@ -1,11 +1,17 @@
-use anyhow::{bail, Context, Result};
+#[cfg(unix)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
+
+use crate::ipc::{Endpoint, Stream as IpcStream};
 
 pub struct MpvController {
     child: Option<Child>,
+    /// mpv's `--input-ipc-server` value: a filesystem socket path on
+    /// Unix, a `\\.\pipe\<name>` pipe name on Windows. mpv accepts both
+    /// forms verbatim on their respective platforms.
     socket_path: String,
 }
 
@@ -18,9 +24,45 @@ impl Default for MpvController {
 impl MpvController {
     pub fn new() -> Self {
         let pid = std::process::id();
+        #[cfg(unix)]
+        let socket_path = format!("/tmp/strivo-mpv-{pid}.sock");
+        #[cfg(windows)]
+        let socket_path = format!(r"\\.\pipe\strivo-mpv-{pid}");
         Self {
             child: None,
-            socket_path: format!("/tmp/strivo-mpv-{pid}.sock"),
+            socket_path,
+        }
+    }
+
+    fn endpoint(&self) -> Endpoint {
+        #[cfg(unix)]
+        {
+            Endpoint::Path(std::path::PathBuf::from(&self.socket_path))
+        }
+        #[cfg(windows)]
+        {
+            Endpoint::Pipe(self.socket_path.clone())
+        }
+    }
+
+    /// Does mpv's IPC endpoint currently exist? A Unix socket has a
+    /// filesystem entry to check; a Windows named pipe does not, so the
+    /// existence probe there is folded into `send_command`'s connect
+    /// attempt instead (see its Windows branch).
+    fn socket_exists(&self) -> bool {
+        #[cfg(unix)]
+        {
+            Path::new(&self.socket_path).exists()
+        }
+        #[cfg(windows)]
+        {
+            // mpv creates the pipe synchronously at startup, so a quick
+            // connect attempt is the only reliable existence check.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.socket_path)
+                .is_ok()
         }
     }
 
@@ -29,7 +71,9 @@ impl MpvController {
         // Kill existing instance if any
         self.quit().await.ok();
 
-        // Clean up stale socket
+        // Clean up a stale socket file (Unix only — named pipes have no
+        // filesystem entry to remove).
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
 
         let child = Command::new("mpv")
@@ -48,9 +92,9 @@ impl MpvController {
 
         self.child = Some(child);
 
-        // Wait briefly for socket to appear
+        // Wait briefly for the IPC endpoint to appear
         for _ in 0..20 {
-            if Path::new(&self.socket_path).exists() {
+            if self.socket_exists() {
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -69,6 +113,7 @@ impl MpvController {
     pub async fn play_file_at(&mut self, path: &Path, start_secs: f64) -> Result<()> {
         // Kill existing instance if any
         self.quit().await.ok();
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
         let child = Command::new("mpv")
             .args([
@@ -86,7 +131,7 @@ impl MpvController {
             .context("Failed to launch mpv - is it installed?")?;
         self.child = Some(child);
         for _ in 0..20 {
-            if Path::new(&self.socket_path).exists() {
+            if self.socket_exists() {
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -96,12 +141,16 @@ impl MpvController {
 
     /// Send a JSON IPC command to mpv
     async fn send_command(&self, command: &[&str]) -> Result<String> {
-        let socket_path = Path::new(&self.socket_path);
-        if !socket_path.exists() {
+        // On Unix we can cheaply check for the socket file before
+        // connecting. On Windows there is no filesystem entry to check;
+        // `IpcStream::connect` itself is the existence probe there, and
+        // its failure surfaces as the same "not found" error below.
+        #[cfg(unix)]
+        if !self.socket_exists() {
             bail!("mpv IPC socket not found");
         }
 
-        let stream = UnixStream::connect(socket_path)
+        let stream = IpcStream::connect(&self.endpoint())
             .await
             .context("Failed to connect to mpv IPC socket")?;
 
@@ -164,7 +213,7 @@ impl MpvController {
     /// Quit mpv
     pub async fn quit(&mut self) -> Result<()> {
         // Try IPC quit first (before borrowing self.child mutably)
-        if Path::new(&self.socket_path).exists() {
+        if self.socket_exists() {
             self.send_command(&["quit"]).await.ok();
         }
 
@@ -180,6 +229,7 @@ impl MpvController {
             self.child = None;
         }
 
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
         Ok(())
     }
@@ -208,6 +258,7 @@ impl Drop for MpvController {
             // Can't do async in drop, just kill
             let _ = child.start_kill();
         }
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }

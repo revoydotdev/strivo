@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -689,14 +688,10 @@ pub async fn run_with_plugins_at(
     );
     pipeline_runtime.wake();
 
-    // Set up Unix socket
+    // Set up the IPC transport (Unix socket, or a named pipe on Windows).
     let socket_path = ipc::socket_path();
-    // Remove stale socket
-    let _ = std::fs::remove_file(&socket_path);
-    if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let listener = UnixListener::bind(&socket_path)?;
+    let endpoint = ipc::Endpoint::current();
+    let mut listener = ipc::Listener::bind(&endpoint).await?;
     tracing::info!("Listening on {}", socket_path.display());
 
     // Signal handler
@@ -762,7 +757,7 @@ pub async fn run_with_plugins_at(
             // Accept new client connections
             result = listener.accept() => {
                 match result {
-                    Ok((stream, _)) => {
+                    Ok(stream) => {
                         let permit = match client_sem.clone().try_acquire_owned() {
                             Ok(p) => p,
                             Err(_) => {
@@ -918,7 +913,7 @@ pub async fn run_with_plugins_at(
 }
 
 async fn handle_client(
-    stream: tokio::net::UnixStream,
+    stream: ipc::Stream,
     snapshot: ServerMessage,
     broadcast_rx: broadcast::Receiver<DaemonEvent>,
     recording_tx: mpsc::UnboundedSender<RecordingCommand>,

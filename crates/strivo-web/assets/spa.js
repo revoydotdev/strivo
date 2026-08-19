@@ -953,6 +953,7 @@ function teardownAcrossRoutes() {
   // Player controllers hold live vendor connections; dropping the DOM does
   // not close them.
   if (typeof destroyAllControllers === "function") destroyAllControllers();
+  if (typeof destroyChannelDetailPreview === "function") destroyChannelDetailPreview();
   // Modals: kbd-help + body class + every app-modal still in the DOM.
   document.getElementById("kbd-help")?.classList.remove("open");
   // B3: route change always zeroes the modal-open ref count + the
@@ -2064,6 +2065,39 @@ function liveThumbUrl(c) {
   return `${sized}${sized.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
 
+/// The channel-detail preview owns ONE player at a time, tracked here
+/// rather than in playerState.controllers. That registry is pruned against
+/// the multi-view layout, so a preview registered in it would be destroyed
+/// the moment the wall reconciled — and vice versa.
+let _cdPreviewController = null;
+function destroyChannelDetailPreview() {
+  if (_cdPreviewController) {
+    try {
+      _cdPreviewController.destroy();
+    } catch (_) {
+      /* best effort */
+    }
+    _cdPreviewController = null;
+  }
+}
+/// Mount (or replace) the preview player for the currently-open channel.
+function mountChannelDetailPreview(root) {
+  destroyChannelDetailPreview();
+  const mount = (root || document).querySelector(".cd-preview .cd-mount");
+  if (!mount) return;
+  try {
+    _cdPreviewController = _playerControllerFactory(mount.dataset.kind || "twitch", {
+      embedUrl: mount.dataset.embedBase || "",
+      muted: true, // a preview that starts talking over you is hostile
+      playing: true,
+      volume: 0,
+    });
+    _cdPreviewController.mount(mount);
+  } catch (_) {
+    _cdPreviewController = null;
+  }
+}
+
 function livePreviewHtml(c) {
   if (!c.is_live) return "";
   const src = liveEmbedSrc(c);
@@ -2077,9 +2111,12 @@ function livePreviewHtml(c) {
   // viewport-throttles lazy iframes during the top-layer transition that
   // fullscreen triggers on cross-origin embeds, which stalls Twitch playback.
   if (!thumb && src) {
+    // Mount point rather than a raw iframe, so this preview goes through the
+    // same controller as the wall and inherits the vendor JS API (and the
+    // iframe fallback when that fails to load).
     return `<div class="cd-preview" data-embed-src="${htmlEscape(src)}" data-focus="${htmlEscape(focus)}">
-      <iframe src="${htmlEscape(src)}" title="Live preview"
-              allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write" allowfullscreen></iframe>
+      <div class="ms-mount cd-mount" data-kind="${c.platform === "YouTube" ? "youtube" : "twitch"}"
+           data-embed-base="${htmlEscape(src)}"></div>
     </div>`;
   }
   if (!thumb) return "";
@@ -2129,7 +2166,11 @@ function attachFullscreenBugfix(previewEl) {
 function wireChannelDetail() {
   // Clear any preview refresh timer from a previously-open detail (item 23).
   teardownLivePreview();
+  // Bring up this channel's preview player (no-op unless the poster-less
+  // branch rendered a mount point).
+  mountChannelDetailPreview(document);
   document.querySelector('[data-action="cd-close"]')?.addEventListener("click", () => {
+    destroyChannelDetailPreview();
     teardownLivePreview();
     selectedChannelKey = null;
     render();

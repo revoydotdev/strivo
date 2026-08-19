@@ -95,11 +95,12 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Licence backend typecheck
+      - name: Licence backend typecheck + tests
         working-directory: licence-backend
         run: |
-          npm ci --ignore-scripts
+          npm ci
           npm run typecheck
+          npm test
 
       - name: Web UI browser smoke tests
         working-directory: crates/strivo-web/e2e

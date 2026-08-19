@@ -69,8 +69,16 @@ pub(crate) fn parse_download_line(line: &str) -> Option<DownloadProgress> {
     if toks.next()? != "of" {
         return None;
     }
-    let size_tok = toks.next()?;
-    let bytes_total = parse_size_bytes(size_tok);
+    // Fragmented downloads (HLS/DASH — Patreon posts, YouTube live) render
+    // the total as an estimate, and yt-dlp pads the tilde into its OWN
+    // token: `of ~ 324.23MiB`. Reading that as the size left the next token
+    // where "at" was expected, so the whole line failed to parse and every
+    // fragmented download reported no progress at all.
+    let mut size_tok = toks.next()?;
+    if size_tok == "~" {
+        size_tok = toks.next()?;
+    }
+    let bytes_total = parse_size_bytes(size_tok.trim_start_matches('~'));
     if toks.next()? != "at" {
         return None;
     }
@@ -604,6 +612,39 @@ mod tests {
     }
 
     #[test]
+    /// Captured verbatim from `yt-dlp --newline --progress-delta 0.5`
+    /// against a fragmented HLS source. The tilde is its own token here;
+    /// the hand-written `~1.23GiB` fixture below never exercised that, which
+    /// is how fragmented downloads shipped with progress permanently stuck.
+    #[test]
+    fn parse_download_fragmented_estimate_with_padded_tilde() {
+        let p = parse_download_line(
+            "[download]   0.0% of ~ 324.23MiB at      0.00B/s ETA Unknown (frag 0/64)",
+        )
+        .expect("real fragmented progress line must parse");
+        assert_eq!(p.pct, Some(0.0));
+        assert!(p.bytes_total.is_some(), "estimated total should still parse");
+        assert_eq!(p.eta_secs, None, "ETA Unknown");
+
+        let p = parse_download_line(
+            "[download]   0.3% of ~ 356.16MiB at  336.35KiB/s ETA 14:45 (frag 0/64)",
+        )
+        .expect("real fragmented progress line must parse");
+        assert_eq!(p.pct, Some(0.3));
+        assert_eq!(p.eta_secs, Some(14 * 60 + 45));
+        assert!(p.rate_bps.unwrap() > 0);
+    }
+
+    /// Also captured verbatim — a plain (non-fragmented) download, which
+    /// pads fields with runs of spaces.
+    #[test]
+    fn parse_download_real_plain_progress_line() {
+        let p = parse_download_line("[download]   0.6% of   20.65MiB at  299.70KiB/s ETA 01:10")
+            .expect("real plain progress line must parse");
+        assert_eq!(p.pct, Some(0.6));
+        assert_eq!(p.eta_secs, Some(70));
+    }
+
     fn parse_download_non_progress_lines_ignored() {
         assert!(parse_download_line("[info] foo").is_none());
         assert!(parse_download_line("ERROR: nope").is_none());

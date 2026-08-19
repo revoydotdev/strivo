@@ -1256,7 +1256,7 @@ function setupChromeHandlers() {
   // a transient /settings error doesn't blank the topbar.
   API.settings().then((s) => {
     maxConcurrentSlots = (s && s.monitor_limits && s.monitor_limits.max_concurrent_recordings) || 0;
-    updateLiveCount(recCache.filter((r) => isInProgress(r.state)).length);
+    updateLiveCount();
   }).catch(() => {});
   // Channel list lives in the left rail on every page.
   paintChannelList();
@@ -1399,7 +1399,7 @@ function paintChannelList() {
   const cmp = (RAIL_SORTS[railSort()] || RAIL_SORTS.name).cmp;
   const live = channels.filter((c) => c.is_live).sort(cmp);
   const offline = channels.filter((c) => !c.is_live).sort(cmp);
-  updateLiveCount(recCache.filter((r) => isInProgress(r.state)).length);
+  updateLiveCount();
 
   const recordingChannelIds = new Set(
     recCache.filter((r) => isInProgress(r.state)).map((r) => r.channel_id),
@@ -13934,11 +13934,37 @@ function buildCalStrip(entries) {
 // Both pills sit in the topbar. The slot pill shows "N / M rec" where N
 // is in-progress count and M is monitor_limits.max_concurrent_recordings.
 // maxConcurrentSlots is populated by setupChromeHandlers from /settings.
-function updateLiveCount(n) {
+/// Is this job a VOD/post download rather than a live capture? Downloads
+/// carry the source they were pulled from; live captures have none.
+function isDownloadJob(r) {
+  return !!(r && r.source_url);
+}
+
+/// Refresh the top-bar activity pills from the recording cache.
+///
+/// Takes no argument on purpose: five call sites each recomputed the same
+/// `recCache.filter(isInProgress).length`, and passing that single number
+/// is what made a Patreon post download announce itself as "● LIVE". A
+/// download occupies a capture slot — so it belongs in the slot pill — but
+/// nothing about it is live.
+function updateLiveCount() {
+  const inProgress = (recCache || []).filter((r) => isInProgress(r.state));
+  const downloads = inProgress.filter(isDownloadJob).length;
+  const captures = inProgress.length - downloads;
+  const n = inProgress.length; // slots consumed: the daemon caps on all of them
+
   const pill = document.getElementById("live-pill");
   if (pill) {
-    if (n > 0) {
-      pill.textContent = `● LIVE: ${n}`;
+    if (captures > 0) {
+      pill.textContent = `● LIVE: ${captures}`;
+      pill.className = "live-pill";
+      pill.title = `${captures} live capture${captures === 1 ? "" : "s"} in progress`;
+      pill.style.display = "";
+    } else if (downloads > 0) {
+      // Still show activity, but do not call a download live.
+      pill.textContent = `↓ ${downloads}`;
+      pill.className = "live-pill live-pill-download";
+      pill.title = `${downloads} download${downloads === 1 ? "" : "s"} in progress`;
       pill.style.display = "";
     } else {
       pill.style.display = "none";
@@ -13953,7 +13979,7 @@ function updateLiveCount(n) {
       slotPill.className = `storage-pill${saturated ? " storage-pill-warn" : ""}`;
       slotPill.title = saturated
         ? `⚠ Concurrent cap hit: ${n}/${maxConcurrentSlots} — click to adjust`
-        : `${n} of ${maxConcurrentSlots} recording slots in use — click to manage`;
+        : `${n} of ${maxConcurrentSlots} capture slots in use (downloads count toward the cap) — click to manage`;
     } else if (n > 0) {
       slotPill.textContent = `${n} rec`;
       slotPill.style.display = "";
@@ -14533,7 +14559,7 @@ events.on((event) => {
       // the whole channel detail every 2s).
       updateVodProgressDom(j);
     }
-    updateLiveCount(recCache.filter((r) => isInProgress(r.state)).length);
+    updateLiveCount();
     // Coalesce broader-subtree repaints to one per animation frame.
     // The SSE stream fires RecordingProgress every ~2s per active job;
     // without coalescing, an N-recording session would full-repaint N×
@@ -14553,7 +14579,7 @@ events.on((event) => {
         recCache = d.recordings || [];
         dashRecordings = recCache;
         seedVodDownloadStateFromRecCache();
-        updateLiveCount(recCache.filter((r) => isInProgress(r.state)).length);
+        updateLiveCount();
         if (currentRoute() === "recordings") renderRecordings().catch(() => {});
         else {
           paintDashboard();
@@ -14578,7 +14604,7 @@ events.on((event) => {
     if (ids.size) {
       recCache = recCache.filter((r) => !ids.has(r.id));
       dashRecordings = recCache;
-      updateLiveCount(recCache.filter((r) => isInProgress(r.state)).length);
+      updateLiveCount();
       if (currentRoute() === "recordings") renderRecordings().catch(() => {});
       else { paintDashboard(); paintChannelList(); }
     }

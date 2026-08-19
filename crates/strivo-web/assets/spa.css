@@ -5490,3 +5490,11 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   min-width: 0;
   min-height: 0;
 }
+
+/* A download is activity, but it is not live — so it never wears the
+   recording red. */
+.live-pill.live-pill-download {
+  background: var(--overlay);
+  color: var(--muted);
+  border-color: var(--border);
+}

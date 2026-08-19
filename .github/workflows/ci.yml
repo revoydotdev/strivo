@@ -18,17 +18,16 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Cross-check the Windows target from Linux. The port is in progress, so this
-  # reports without blocking; flip continue-on-error off once it goes green.
+  # Cross-check the Windows target from Linux. Required as of the port landing:
+  # it is what stops a Unix-only API sneaking back into the daemon or recorder.
   #
   # GNU target, not MSVC: it needs only mingw-w64, which the runner already has,
   # and it catches the cfg-gated API errors that make up the bulk of the port.
   # It does NOT catch MSVC linking — the release artifacts are MSVC, so a real
   # build on win11-ci remains the gate.
   windows-cross:
-    name: windows cross-check (advisory)
+    name: windows cross-check
     runs-on: [self-hosted, linux, x64, arch]
-    continue-on-error: true
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

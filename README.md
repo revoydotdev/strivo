@@ -13,7 +13,7 @@ strivo ships in two editions from one codebase. The default build is the **pure 
 [![MSRV](https://img.shields.io/badge/MSRV-1.75%2B-orange?logo=rust&logoColor=white)](Cargo.toml)
 [![License](https://img.shields.io/github/license/revoydotdev/strivo?color=blue)](LICENSE)
 [![AUR](https://img.shields.io/aur/version/strivo?label=AUR&logo=archlinux&logoColor=white)](https://aur.archlinux.org/packages/strivo)
-[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-1f6feb?logo=linux&logoColor=white)](#platform-support)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-1f6feb?logo=linux&logoColor=white)](#platform-support)
 [![Made with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
 > **Status: alpha (0.5.0).** The configuration format, daemon IPC protocol, and plugin ABI
@@ -335,8 +335,13 @@ awareness of concrete plugins; the binary pulls both together.
 
 ## Known limitations (0.5.0 alpha)
 
-- **Daemon mode is Unix-only.** Linux and macOS work; Windows is unsupported
-  until the named-pipe transport lands.
+- **Windows support is new and less exercised.** The daemon talks to its
+  clients over a named pipe (`\\.\pipe\strivo`) instead of a Unix socket,
+  and recordings are stopped with ffmpeg's `q` command rather than SIGINT.
+  Both paths are covered by tests that run on Windows, but the platform has far
+  less real-world use behind it than Linux and macOS. `strivo enable` installs
+  a Task Scheduler logon task there rather than a systemd user service, and has
+  no crash-restart equivalent.
 - **In-flight recordings are not durable across daemon crashes.** A persisted
   journal exists for status replay, and the daemon marks orphaned jobs
   `interrupted` at startup so nothing looks falsely in flight, but it does not

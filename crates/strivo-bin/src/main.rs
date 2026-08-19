@@ -1726,8 +1726,10 @@ mod tests {
         match resolve_on_path("envchain") {
             Some(bin) => {
                 let unit = rendered.expect("envchain present, so rendering must succeed");
-                let expected =
-                    format!("ExecStart={} mistral \"/usr/bin/strivo\"\n", systemd_quote(bin.as_os_str()));
+                let expected = format!(
+                    "ExecStart={} mistral \"/usr/bin/strivo\"\n",
+                    systemd_quote(bin.as_os_str())
+                );
                 assert!(unit.contains(&expected), "got:\n{unit}");
                 assert!(bin.is_absolute());
             }

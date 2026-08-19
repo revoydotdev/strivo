@@ -1040,7 +1040,10 @@ mod live_detection_tests {
             Liveness::Settled
         );
         // Ordinary upload: no streaming details at all.
-        assert_eq!(YouTubePlatform::classify(Some("none"), None, None), Liveness::Settled);
+        assert_eq!(
+            YouTubePlatform::classify(Some("none"), None, None),
+            Liveness::Settled
+        );
     }
 
     /// If the snippet is missing, fall back to the streaming details rather
@@ -1059,6 +1062,9 @@ mod live_detection_tests {
             ),
             Liveness::Settled
         );
-        assert_eq!(YouTubePlatform::classify(None, None, None), Liveness::Settled);
+        assert_eq!(
+            YouTubePlatform::classify(None, None, None),
+            Liveness::Settled
+        );
     }
 }

@@ -611,7 +611,6 @@ mod tests {
         assert_eq!(p.eta_secs, Some(5025));
     }
 
-    #[test]
     /// Captured verbatim from `yt-dlp --newline --progress-delta 0.5`
     /// against a fragmented HLS source. The tilde is its own token here;
     /// the hand-written `~1.23GiB` fixture below never exercised that, which
@@ -623,7 +622,10 @@ mod tests {
         )
         .expect("real fragmented progress line must parse");
         assert_eq!(p.pct, Some(0.0));
-        assert!(p.bytes_total.is_some(), "estimated total should still parse");
+        assert!(
+            p.bytes_total.is_some(),
+            "estimated total should still parse"
+        );
         assert_eq!(p.eta_secs, None, "ETA Unknown");
 
         let p = parse_download_line(
@@ -645,6 +647,7 @@ mod tests {
         assert_eq!(p.eta_secs, Some(70));
     }
 
+    #[test]
     fn parse_download_non_progress_lines_ignored() {
         assert!(parse_download_line("[info] foo").is_none());
         assert!(parse_download_line("ERROR: nope").is_none());

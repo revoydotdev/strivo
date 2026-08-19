@@ -547,11 +547,39 @@ pub async fn run_with_plugins_at(
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             };
-            let all_ids: Vec<String> = match th.read().await.fetch_followed_channels().await {
-                Ok(chs) => chs.into_iter().map(|c| c.id).collect(),
-                Err(e) => {
-                    tracing::warn!("twitch eventsub: could not list follows: {e:#}");
-                    return;
+            // Having an access token is not the same as being ready to call
+            // the API: the client also has to resolve the user id, and it does
+            // that slightly later. Listing follows can therefore fail with
+            // "not authenticated" even though the token gate above passed.
+            //
+            // Retry instead of returning. The previous code abandoned EventSub
+            // for the lifetime of the process on a single early failure, so a
+            // race lost by a couple of seconds silently downgraded Twitch from
+            // sub-second push to 90-second polling until the next restart.
+            let all_ids: Vec<String> = {
+                const MAX_ATTEMPTS: u32 = 10;
+                let mut attempt = 0;
+                loop {
+                    if cancel_es.is_cancelled() {
+                        return;
+                    }
+                    match th.read().await.fetch_followed_channels().await {
+                        Ok(chs) => break chs.into_iter().map(|c| c.id).collect(),
+                        Err(e) => {
+                            attempt += 1;
+                            if attempt >= MAX_ATTEMPTS {
+                                tracing::warn!(
+                                    "twitch eventsub: could not list follows after {attempt} \
+                                     attempts, falling back to polling: {e:#}"
+                                );
+                                return;
+                            }
+                            tracing::debug!(
+                                "twitch eventsub: follows not ready (attempt {attempt}): {e:#}"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        }
+                    }
                 }
             };
             if all_ids.is_empty() {

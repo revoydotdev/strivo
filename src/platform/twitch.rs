@@ -468,8 +468,16 @@ impl TwitchPlatform {
     }
 
     #[allow(dead_code)]
+    /// Ready to serve API calls — which is not the same as holding a token.
+    ///
+    /// Every followed-channel and live-status call needs the numeric user id,
+    /// and that is resolved on a separate round trip after the token loads.
+    /// Reporting readiness on the token alone meant callers fired the moment
+    /// it arrived and got "User ID not available" back: the monitor logged a
+    /// warning on every startup, and EventSub needed its own retry loop to
+    /// work around the same gap.
     pub async fn is_authenticated(&self) -> bool {
-        self.access_token.read().await.is_some()
+        self.access_token.read().await.is_some() && self.user_id.read().await.is_some()
     }
 }
 

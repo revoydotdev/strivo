@@ -174,6 +174,11 @@ impl ChannelMonitor {
             }
         }
 
+        // Let any remaining platforms finish authenticating so the first
+        // snapshot is complete rather than arriving in two visible steps.
+        self.settle_before_first_poll(std::time::Duration::from_secs(8))
+            .await;
+
         // Immediate first poll
         if let Err(e) = self.poll_all().await {
             tracing::error!("Initial poll error: {e}");
@@ -238,6 +243,40 @@ impl ChannelMonitor {
         }
     }
 
+    /// Are all configured platforms ready to serve requests?
+    async fn all_platforms_authenticated(&self) -> bool {
+        for platform in &self.platforms {
+            let plat = platform.read().await;
+            if !plat.is_authenticated().await {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Give the stragglers a moment before the very first poll.
+    ///
+    /// Platforms authenticate at different speeds — Twitch has to resolve a
+    /// user id after loading its token — and the monitor wakes as soon as the
+    /// FIRST one is ready. Polling right then produces a first snapshot that
+    /// is missing whole platforms, so the channel list visibly jumps a
+    /// moment later. A short bounded wait costs nothing on a healthy start
+    /// and avoids that flicker; if a platform is genuinely broken we stop
+    /// waiting and poll with whoever is ready.
+    async fn settle_before_first_poll(&self, budget: std::time::Duration) {
+        let deadline = std::time::Instant::now() + budget;
+        while std::time::Instant::now() < deadline {
+            if self.all_platforms_authenticated().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        tracing::debug!(
+            "monitor: not every platform authenticated within {:?}; polling with those that are",
+            budget
+        );
+    }
+
     async fn any_platform_authenticated(&self) -> bool {
         for platform in &self.platforms {
             let plat = platform.read().await;
@@ -274,6 +313,18 @@ impl ChannelMonitor {
                     let (kind, channels_result) = {
                         let plat = platform.read().await;
                         let kind = plat.kind();
+                        // A platform that has not finished authenticating yet
+                        // is skipped rather than called. The monitor starts
+                        // its first poll as soon as ANY platform authenticates,
+                        // and holding an access token is not the same as being
+                        // able to serve requests — Twitch resolves its user id
+                        // a moment later. Calling anyway produced a warning on
+                        // every startup that resolved itself one cycle later,
+                        // which trains people to ignore warnings.
+                        if !plat.is_authenticated().await {
+                            tracing::debug!("{kind}: not authenticated yet; skipping this poll");
+                            return (kind, Ok(Vec::new()), None);
+                        }
                         let result = plat.fetch_followed_channels().await;
                         (kind, result)
                     };

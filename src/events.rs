@@ -42,6 +42,12 @@ pub enum DaemonEvent {
         job_id: Uuid,
         final_state: RecordingState,
         error: Option<String>,
+        /// Set when finalisation moved the file — today that means its
+        /// extension was corrected to match the container actually written.
+        /// The daemon updates its in-memory job (and therefore the journal)
+        /// so the library keeps pointing at the file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_path: Option<std::path::PathBuf>,
     },
     Notification {
         title: String,

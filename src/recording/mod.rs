@@ -270,6 +270,7 @@ fn finalize_completion(
             job_id: id,
             final_state,
             error,
+            new_path: None,
         });
         return;
     }
@@ -278,6 +279,7 @@ fn finalize_completion(
             job_id: id,
             final_state,
             error,
+            new_path: None,
         });
         return;
     };
@@ -322,6 +324,7 @@ fn finalize_completion(
                             job_id,
                             final_state: RecordingState::Finished,
                             error: Some(format!("merged segments preserved as {}", temp.display())),
+                            new_path: None,
                         });
                         return;
                     }
@@ -387,10 +390,25 @@ fn finalize_completion(
             }
         }
 
+        // Last of all, make the name honest. The steps above may have
+        // remuxed MPEG-TS into Matroska, but a capture can equally land as
+        // MP4 or (for an audio-only pull) MP3 while the filename template
+        // still says .mkv. Correcting the extension here is what stops the
+        // library drifting away from what is actually on disk; the new path
+        // rides back on the event so the journal follows the file.
+        let renamed = match container::normalize_extension(&base) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(job_id = %job_id, error = %e, "could not correct container extension; leaving the name as it is");
+                None
+            }
+        };
+
         let _ = etx.send(DaemonEvent::RecordingFinished {
             job_id,
             final_state: RecordingState::Finished,
             error: warn,
+            new_path: renamed,
         });
     });
 }
@@ -866,7 +884,7 @@ pub async fn run_manager(
                         Err(e) => {
                             rec.job.state = RecordingState::Failed;
                             rec.job.error = Some(e.clone());
-                            let _ = event_tx.send(DaemonEvent::RecordingFinished { job_id, final_state: RecordingState::Failed, error: Some(e.clone()) });
+                            let _ = event_tx.send(DaemonEvent::RecordingFinished { job_id, final_state: RecordingState::Failed, error: Some(e.clone()), new_path: None });
                             let _ = event_tx.send(DaemonEvent::Error(e));
                         }
                     }

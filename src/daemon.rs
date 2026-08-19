@@ -104,10 +104,18 @@ impl DaemonState {
                 job_id,
                 final_state,
                 error,
+                new_path,
             } => {
                 if let Some(job) = self.recordings.get_mut(job_id) {
                     job.state = *final_state;
                     job.error = error.clone();
+                    // Finalisation may have corrected the extension to match
+                    // the container that was actually written. Adopt the new
+                    // path before anything persists, or the journal keeps
+                    // pointing at a name that no longer exists.
+                    if let Some(p) = new_path {
+                        job.output_path = p.clone();
+                    }
                 }
                 self.evict_old_terminal();
             }
@@ -1594,6 +1602,9 @@ async fn persist_event(
             job_id,
             final_state,
             error,
+            // The path fix is already applied to the in-memory job by the
+            // state handler above, and `snapshot` serialises that job.
+            new_path: _,
         } => {
             let Some(pj) = snapshot(job_id, *final_state, error.clone()) else {
                 return;
@@ -1639,6 +1650,56 @@ mod tests {
         j.state = state;
         j.started_at = chrono::Utc::now() - chrono::Duration::seconds(age_secs);
         j
+    }
+
+    /// Finalisation can rename a capture so its extension matches the
+    /// container actually written. If the daemon ignored that, the journal
+    /// would keep the old name and the library would show a file that is not
+    /// there — which is exactly the failure this plumbing exists to prevent.
+    #[test]
+    fn finishing_adopts_a_corrected_output_path() {
+        let mut st = empty_state();
+        let mut j = job(RecordingState::Recording, 1);
+        j.output_path = std::path::PathBuf::from("/tmp/capture.mkv");
+        let id = j.id;
+        st.recordings.insert(id, j);
+
+        st.apply(&DaemonEvent::RecordingFinished {
+            job_id: id,
+            final_state: RecordingState::Finished,
+            error: None,
+            new_path: Some(std::path::PathBuf::from("/tmp/capture.mp4")),
+        });
+
+        let got = st.recordings.get(&id).expect("job survives finishing");
+        assert_eq!(got.state, RecordingState::Finished);
+        assert_eq!(
+            got.output_path,
+            std::path::PathBuf::from("/tmp/capture.mp4")
+        );
+    }
+
+    /// The common case: nothing was renamed, so the path must not move.
+    #[test]
+    fn finishing_without_a_rename_leaves_the_path_alone() {
+        let mut st = empty_state();
+        let mut j = job(RecordingState::Recording, 1);
+        j.output_path = std::path::PathBuf::from("/tmp/capture.mkv");
+        let id = j.id;
+        st.recordings.insert(id, j);
+
+        st.apply(&DaemonEvent::RecordingFinished {
+            job_id: id,
+            final_state: RecordingState::Finished,
+            error: None,
+            new_path: None,
+        });
+
+        let got = st.recordings.get(&id).unwrap();
+        assert_eq!(
+            got.output_path,
+            std::path::PathBuf::from("/tmp/capture.mkv")
+        );
     }
 
     #[test]

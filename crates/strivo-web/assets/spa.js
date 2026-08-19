@@ -6387,6 +6387,44 @@ function makeRecordingController(spec) {
   el.preload = playing ? "metadata" : "none";
   if (playing) el.autoplay = true;
   if (spec.src) el.src = spec.src;
+
+  // A recording can be on disk, non-zero, and still unplayable — an
+  // interrupted VOD pull leaves a truncated MP4 with no moov atom, and the
+  // browser then hunts forever for an index that was never written. Without
+  // this the tile just sits there looking like it is still loading, which is
+  // indistinguishable from a slow network.
+  const fail = (why) => {
+    if (el.dataset.failed) return;
+    el.dataset.failed = "1";
+    const note = document.createElement("div");
+    note.className = "ms-media-error";
+    note.innerHTML =
+      `<strong>Can't play this recording</strong><span>${htmlEscape(why)}</span>` +
+      `<span class="pg-cap-hint">The file is on disk but its container is unreadable — ` +
+      `an interrupted capture usually leaves it without an index.</span>`;
+    el.parentElement?.appendChild(note);
+  };
+  el.addEventListener("error", () => {
+    const codes = {
+      1: "playback aborted",
+      2: "network error",
+      3: "the file could not be decoded",
+      4: "the format is not supported",
+    };
+    fail(codes[el.error?.code] || "the media failed to load");
+  });
+  // `error` never fires for a file that merely never finishes loading its
+  // metadata, which is exactly the truncated-MP4 case, so time it out too.
+  let settled = false;
+  const seen = () => { settled = true; };
+  el.addEventListener("loadedmetadata", seen);
+  el.addEventListener("playing", seen);
+  setTimeout(() => {
+    if (!settled && el.isConnected && el.readyState === 0) {
+      fail("it never returned any playable data");
+    }
+  }, 15000);
+
   return {
     kind: "recording",
     root: el,
@@ -7299,10 +7337,26 @@ async function renderWatch() {
   const slotIsEmpty = playerState.layout.kind === "slot"
     && (playerState.layout.streamId == null || playerState.layout.streamId === "")
     && (playerState.layout.recordingId == null || playerState.layout.recordingId === "");
-  if ((focusId || recordingId) && (fresh || slotIsEmpty)) {
-    playerState.preset = "single";
-    if (recordingId) playerState.layout = _slot(null, recordingId);
-    else playerState.layout = _slot(focusId);
+  if (focusId || recordingId) {
+    const target = recordingId ? _slot(null, recordingId) : _slot(focusId);
+    if (fresh || slotIsEmpty || playerState.layout.kind === "slot") {
+      // Single-tile layout (or an explicit reset): the request owns the wall.
+      // This used to require the slot be EMPTY, so clicking a live channel
+      // while the last thing you watched was still loaded silently did
+      // nothing and left you staring at that old recording.
+      playerState.preset = "single";
+      playerState.layout = target;
+    } else {
+      // Multi-tile: honour the click without destroying the wall — fill the
+      // first empty tile, else replace the first one.
+      const dest = firstEmptyPath(playerState.layout) ?? firstLeafPath(playerState.layout);
+      if (dest !== null && dest !== undefined) {
+        playerState.layout = setNodeAt(playerState.layout, dest, target);
+      }
+    }
+    // An explicit "watch this" click is a request to watch it, so it starts
+    // playing even though the wall opens paused by default.
+    setTilePlaying(target, true);
     savePlayerLayout();
   }
 
@@ -8035,6 +8089,17 @@ function composerMapHtml(node, path, streams) {
     <div class="msc-cell${sel}" data-path="${htmlEscape(path)}" tabindex="0">
       <span class="msc-cell-empty">+</span>
     </div>`;
+}
+
+/// Path of the first leaf in reading order, empty or not. Used as the
+/// fallback destination when a wall is full but the viewer asked for
+/// something specific.
+function firstLeafPath(layout) {
+  let found = null;
+  walkLayout(layout, (node, path) => {
+    if (found === null && node.kind === "slot") found = path;
+  });
+  return found;
 }
 
 function firstEmptyPath(layout) {

@@ -424,3 +424,27 @@ test("a YouTube tile without a video id still plays via the iframe", async ({ pa
   const media = page.locator(".ms-leaf .ms-iframe");
   await expect(media).toHaveCount(1);
 });
+
+// ── Routing a click to the wall ─────────────────────────────────────────
+//
+// Clicking a live channel used to be silently ignored whenever the
+// persisted layout still held something — the guard required the slot be
+// EMPTY — so you were left looking at the last recording you watched.
+test("clicking a live channel replaces whatever was loaded", async ({ page }) => {
+  await installFakePlayers(page);
+  // Persist a layout holding a recording, exactly as a previous session would.
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "strivo-player-layout",
+      JSON.stringify({ kind: "slot", streamId: null, recordingId: "rec-from-last-time" }),
+    );
+  });
+
+  await page.goto("/app#/watch?mode=focus&focus=Twitch:twitch-live-1");
+
+  // The requested stream owns the tile; the stale recording is gone.
+  await expect(page.locator('.ms-leaf[data-stream-id="Twitch:twitch-live-1"]')).toHaveCount(1);
+  await expect(page.locator(".ms-leaf-rec")).toHaveCount(0);
+  // And an explicit "watch this" starts playing rather than sitting paused.
+  await expect(page.locator(".fake-player")).toHaveCount(1);
+});

@@ -5513,3 +5513,20 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
 .ms-leaf:hover .ms-vol,
 .ms-vol:hover,
 .ms-vol:focus-visible { opacity: 1; }
+
+/* Shown over a tile whose media will never play, so a broken file reads as
+   broken rather than as "still loading". */
+.ms-media-error {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.6rem 0.7rem;
+  background: hsla(0, 60%, 20%, 0.92);
+  border-top: 1px solid hsl(0, 70%, 60%);
+  color: var(--fg);
+  font-size: 0.78rem;
+  z-index: 4;
+}
+.ms-media-error strong { font-size: 0.82rem; }

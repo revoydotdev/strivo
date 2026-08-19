@@ -266,10 +266,15 @@ fork.
   ffmpeg recording, playback, daemon, CLI, TOML config + keyring. *(TUI; removed.)*
 - **0.2.0 – 0.3.0** (2026-04-19) — Tier-1 UX + P0/P1 quality.
 - **0.3.0 → 0.4.0** — DAW phase-1 closeout (iters 21–53) + E2E audit + SPA polish.
-- **0.4.0 → 0.5.0** — TUI removed (web-only), `strivo-plugins` folded into the
-  workspace, `ab-render` + `submix`, backend integration batches (iters 54–84).
-- **0.5.0 (post)** — **PVR / Creator Edition split** (the `creator` feature);
-  sweep fixes (notify dispatch, atomic config/schedule writes, `creator_enabled`).
+- **0.4.0 → 0.5.0** (2026-05-28) — backend integration batches (iters 54–79):
+  editor beat-grid + loudness gauge, schedule-optimizer auto-feed, multistream
+  layout presets, SPA polish.
+- **0.5.0 → 0.6.0** (2026-08-18) — TUI removed (web-only, `2ab4e6c`, which
+  landed *after* the 0.5.0 tag despite an earlier note here placing it before);
+  `strivo-plugins` folded into the workspace; PVR / Creator Edition split (the
+  `creator` feature); CE-Fusion wave; the Coding Studio and the research
+  kernel's reachability work (kappa, REFI-QDA, paged export); **the Windows
+  port**; and the first release pipeline that actually publishes.
 
 ---
 
@@ -293,31 +298,36 @@ to the next phase when these land. Keep in sync with the tables above.
 
 <!-- revoy:begin -->
 ```toml
-phase = "v0.6.0 release hardening"
+phase = "post-0.6.0"
 
 [[todo]]
-line = "Port the daemon/web IPC off unconditional tokio::net::Unix* onto a transport abstraction (named pipes on Windows) so the workspace compiles on Windows at all"
-difficulty = 60
+line = "Deploy licence-backend to Cloudflare — it is fully written but wrangler.toml still holds REPLACE_WITH_D1_ID and no workflow deploys it, so Pro cannot be sold"
+difficulty = 25
 priority = "HIGH"
 
 [[todo]]
-line = "Provision the win11-ci VM with MSVC Build Tools + rustup + ffmpeg (currently bare: no Rust, no compiler) and fix the runner service failing to auto-start despite StartType=Automatic"
-difficulty = 20
+line = "Ship a Docker image — no Dockerfile or compose file exists, which puts StriVo behind every peer in the self-hosted PVR class"
+difficulty = 25
 priority = "HIGH"
 
 [[todo]]
-line = "Reconcile CHANGELOG: write the missing [0.4.0] and [0.5.0] sections, promote [Unreleased] to [0.6.0], bump the workspace version"
+line = "Wire or delete ab-render and submix: both have zero Rust callers yet spa.js:7074 routes #/studio/ab and #/studio/submix at them, so the nav leads nowhere"
 difficulty = 20
 priority = "MED"
 
 [[todo]]
-line = "Update packaging/aur/PKGBUILD from 0.3.0 and decide whether the AUR package keeps --all-features (it currently ships Creator Edition, unlike the release tarballs)"
+line = "Reconcile /api/v1/pipelines/dag with real run state — it returns four hardcoded templates while actual pipeline state lives elsewhere"
+difficulty = 30
+priority = "MED"
+
+[[todo]]
+line = "Test the unoccupied-niche positioning claim against MrBrax/LiveStreamDVR before repeating it in customer-facing copy"
 difficulty = 15
 priority = "MED"
 
 [[todo]]
-line = "Marketplace catalog lists speculative plugins with author 'Chorosyne' and repo URLs that do not resolve; decide the brand string and whether the catalog ships at all"
-difficulty = 15
+line = "Guard STRIVO_DEV_UNLOCK_ALL behind debug_assertions so a release build cannot ship fully unlocked"
+difficulty = 10
 priority = "LOW"
 ```
 <!-- revoy:end -->

@@ -5,9 +5,62 @@ All notable changes to strivo will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-08-18
 
 ### Added
+- **Windows support.** StriVo builds and runs on Windows for the first time.
+  The daemon and its clients talk over a named pipe (`\\.\pipe\strivo`)
+  instead of a Unix socket, behind an `Endpoint`/`Listener`/`Stream`
+  abstraction in `src/ipc.rs`; the newline-delimited JSON protocol is
+  unchanged. Process liveness uses `OpenProcess`/`GetExitCodeProcess`, the
+  disk-budget gate and storage gauge use `GetDiskFreeSpaceExW` (both were
+  silently disabled on Windows), mpv playback uses a named pipe, and
+  `strivo enable` installs a Task Scheduler logon task. Verified on a real
+  MSVC build: the daemon runs headless, the web UI serves, and a stopped
+  recording is finalised. CI cross-checks the Windows target on every push.
+- **Coding Studio.** The research kernel's API was complete but almost
+  entirely unreachable — the interface exposed 8 of 15 routes and none of the
+  codebook. Adds Codebook (hierarchical codes, codings, apply-coding), Corpus
+  (sources, cases, signal browser), and Notebook (memos, relationships,
+  agreement, export) surfaces, plus the nine read routes they need.
+- **Inter-coder reliability.** Cohen's kappa over two coders' codings
+  (`crates/research/src/agreement.rs`), with observed and expected agreement.
+- **REFI-QDA export.** Project export in the Rotterdam Exchange Format
+  (`crates/research/src/refi.rs`), so a corpus can move to NVivo, ATLAS.ti, or
+  MAXQDA. Built against the published v1.5 standard.
+- `scripts/check-windows.sh` — cross-checks the Windows target from Linux.
+
+### Fixed
+- **Recordings stopped on Windows are no longer truncated.** ffmpeg only
+  writes the Matroska trailer on a graceful shutdown; the Windows path
+  hard-killed it, producing files that played but had no duration and could
+  not seek. ffmpeg now receives `q` on stdin — which needs no console, so it
+  works from a headless daemon — with a console-attach `CTRL_BREAK` fallback
+  for yt-dlp. Covered by `tests/graceful_stop.rs` on both platforms.
+- **Project export no longer fails past 1,000 signals.** `export_project`
+  returned a validation error rather than paginating, so any archive more than
+  a few weeks old could not be exported at all.
+- **All research routes require the Pro entitlement.** 13 of 15 checked only
+  authentication, so an authenticated client could create codes, codings, and
+  memos and trigger migrations without a licence. **Breaking** for any API-key
+  client relying on the old behaviour.
+- The daemon no longer reports every external tool as missing on Windows: it
+  shelled out to the `which` binary, which does not exist there.
+- `strivo doctor` gives platform-appropriate install advice instead of always
+  suggesting `pacman`, and now checks `ffprobe`, which the multitrack path
+  requires.
+- The daemon shuts down gracefully on Windows (`CTRL_CLOSE`/`CTRL_SHUTDOWN`);
+  it previously had no graceful path there at all.
+- The release workflow can be rehearsed via `workflow_dispatch` without
+  burning a tag, and every build job is time-bounded — a prior release sat on
+  an offline runner for 24 hours. Linux and macOS artifacts verified
+  end-to-end.
+- CI is green again after three weeks red: Node is pinned rather than
+  inherited from the runner, and the end-to-end lockfile is tracked instead of
+  gitignored while `npm ci` required it.
+- Every public URL pointed at a GitHub org that does not resolve.
+
+### Added — Creator Edition (CE-Fusion wave)
 - **CE-Fusion wave (NVivo-meets-Riverside bridge).** Strategy recorded in
   `docs/STRATEGY-NVIVO-RIVERSIDE.md`; roadmap section `CE-Fusion` in
   `ROADMAP.md`.
@@ -144,6 +197,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - `docs/ROADMAP.md` — stale internal engineering checklist (mostly
   completed phases); the public product roadmap stays at `/ROADMAP.md`.
 
+## [0.5.0] — 2026-05-28
+
+Reconstructed from the git history; this release was tagged without a
+changelog entry at the time.
+
+### Added
+- Backend integration batches (iterations 54–79): editor beat-grid strip with
+  snap-to-beat splitting and an I/TP/LRA loudness gauge, schedule-optimizer
+  auto-feed from history and chat density, heatmap deep-links into the
+  optimizer, three multistream layout presets (Quadrant, Highlight, Theatre),
+  SPA polish and audit surfaces, and chat/CI backend work.
+
+---
+
+## [0.4.0] — 2026-05-28
+
+Reconstructed from the git history; this release was tagged without a
+changelog entry at the time.
+
+### Added
+- DAW phase-1 closeout (iterations 21–53): the edit-decision-list editor and
+  the surrounding tool crates, an end-to-end audit pass, and substantial SPA
+  polish. The largest single release in the project's history by commit count.
+
+---
+
 ## [0.3.0] — 2026-05-18
 
 ### Added
@@ -239,7 +318,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - Dialog system for confirmations and input.
 - Color theme system for the TUI.
 
-[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/revoydotdev/strivo/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/revoydotdev/strivo/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/revoydotdev/strivo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/revoydotdev/strivo/releases/tag/v0.3.0
 [0.2.0]: https://github.com/revoydotdev/strivo/releases/tag/v0.2.0
 [0.1.0]: https://github.com/revoydotdev/strivo/releases/tag/v0.1.0

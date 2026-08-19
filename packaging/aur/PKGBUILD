@@ -1,10 +1,10 @@
 # Maintainer: revelri <slrevoy@mailbox.org>
 pkgname=strivo
-pkgver=0.3.0
+pkgver=0.6.0
 pkgrel=1
-pkgdesc="TUI Live Stream PVR for Twitch and YouTube"
+pkgdesc="Self-hosted live-stream PVR for Twitch, YouTube, and Patreon"
 arch=('x86_64')
-url="https://github.com/revelri/strivo"
+url="https://github.com/revoydotdev/strivo"
 license=('MIT')
 depends=('gcc-libs' 'ffmpeg' 'mpv' 'streamlink' 'yt-dlp')
 optdepends=('openai-whisper: local transcription via Crunchr plugin')
@@ -24,7 +24,12 @@ build() {
   cd "$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  cargo build --frozen --release --all-features
+  # Default features only: this package is the free PVR edition, matching the
+  # published release tarballs. --all-features would enable `creator`, shipping
+  # the Creator Edition toolkit under the same package name and diverging from
+  # what everyone else gets. Creator Edition is a source build:
+  #   cargo build --release -p strivo-bin --features creator
+  cargo build --frozen --release
 }
 
 check() {

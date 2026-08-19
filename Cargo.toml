@@ -10,7 +10,7 @@ resolver = "2"
 
 [package]
 name = "strivo-core"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Core library for StriVo — self-hosted live-stream PVR"
 authors = ["revelri <slrevoy@mailbox.org>"]

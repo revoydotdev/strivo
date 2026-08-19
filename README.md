@@ -16,7 +16,7 @@ strivo ships in two editions from one codebase. The default build is the **pure 
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-1f6feb?logo=linux&logoColor=white)](#platform-support)
 [![Made with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
-> **Status: alpha (0.5.0).** The configuration format, daemon IPC protocol, and plugin ABI
+> **Status: alpha (0.6.0).** The configuration format, daemon IPC protocol, and plugin ABI
 > are still unstable and will keep changing until 1.0. Expect to re-edit `config.toml`
 > across releases. See [ROADMAP.md](./ROADMAP.md) for the stability timeline and
 > [CHANGELOG.md](./CHANGELOG.md) for migration notes.
@@ -333,7 +333,7 @@ awareness of concrete plugins; the binary pulls both together.
 | Plugin event bus | Transcription and archival react to recording events without coupling to the recording pipeline |
 | OS keyring | Credentials never touch disk as plaintext — uses platform-native secret storage |
 
-## Known limitations (0.5.0 alpha)
+## Known limitations (0.6.0 alpha)
 
 - **Windows support is new and less exercised.** The daemon talks to its
   clients over a named pipe (`\\.\pipe\strivo`) instead of a Unix socket,

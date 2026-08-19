@@ -1,6 +1,6 @@
 [package]
 name = "strivo-bin"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "StriVo — self-hosted live-stream PVR, CLI + daemon binary"
 authors = ["revelri <slrevoy@mailbox.org>"]

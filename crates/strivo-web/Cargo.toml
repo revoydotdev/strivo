@@ -1,6 +1,6 @@
 [package]
 name = "strivo-web"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "*arr-style web UI for StriVo, talking to the daemon over IPC"
 authors = ["revelri <slrevoy@mailbox.org>"]

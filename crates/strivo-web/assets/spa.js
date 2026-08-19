@@ -6143,6 +6143,47 @@ function tileSrc(embedUrl, { muted, playing }) {
   return embedUrl + (embedUrl.includes("?") ? "&" : "?") + params.join("&");
 }
 
+// Multi-view quality defaults, per provider.
+//
+// Deliberately NOT normalised into one cross-platform scale: the same
+// "1080p" is a different bitrate on Twitch than on YouTube, and differs
+// between streamers on the same platform. The UI therefore offers what each
+// provider actually exposes, and says plainly where a provider exposes
+// nothing.
+const MULTIVIEW_QUALITY_KEY = "strivo:multiview-quality";
+const MULTIVIEW_QUALITY_DEFAULTS = { twitch: "best", youtube: "auto" };
+const MULTIVIEW_QUALITY_CHOICES = [
+  ["best", "Best available"],
+  ["auto", "Let the platform decide"],
+  ["low", "Lowest (save bandwidth/CPU)"],
+  ["focus", "Best on the focused tile, lowest on the rest"],
+];
+function multiviewQuality() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MULTIVIEW_QUALITY_KEY) || "{}");
+    return { ...MULTIVIEW_QUALITY_DEFAULTS, ...(raw && typeof raw === "object" ? raw : {}) };
+  } catch (_) {
+    return { ...MULTIVIEW_QUALITY_DEFAULTS };
+  }
+}
+function setMultiviewQuality(provider, value) {
+  const next = { ...multiviewQuality(), [provider]: value };
+  try {
+    localStorage.setItem(MULTIVIEW_QUALITY_KEY, JSON.stringify(next));
+  } catch (_) {
+    /* private mode */
+  }
+}
+/// Resolve the effective policy for one tile. "focus" is the only setting
+/// that varies per tile; everything else applies uniformly.
+function qualityPolicyFor(kind, path) {
+  const provider = kind === "youtube" ? "youtube" : "twitch";
+  const setting = multiviewQuality()[provider] || "auto";
+  if (setting !== "focus") return setting;
+  const focused = playerState.soloPath || "";
+  return path === focused ? "best" : "low";
+}
+
 // ── Player controllers ───────────────────────────────────────────────
 //
 // A tile's vendor player is owned by a controller keyed on CONTENT
@@ -6277,8 +6318,206 @@ function makeRecordingController(spec) {
   };
 }
 
+/// Load Twitch's embed SDK once, shared by every tile.
+///
+/// Memoised on the PROMISE, not a boolean: two tiles starting at the same
+/// moment must share one in-flight load rather than injecting the script
+/// twice. Rejection is sticky and harmless — the factory simply keeps
+/// handing out iframe controllers.
+let _twitchSdk = null;
+function loadTwitchSdkOnce() {
+  if (_twitchSdk) return _twitchSdk;
+  _twitchSdk = new Promise((resolve, reject) => {
+    if (window.Twitch && window.Twitch.Player) return resolve(window.Twitch);
+    const el = document.createElement("script");
+    el.src = "https://player.twitch.tv/js/embed/v1.js";
+    el.async = true;
+    el.onload = () =>
+      window.Twitch && window.Twitch.Player
+        ? resolve(window.Twitch)
+        : reject(new Error("Twitch SDK loaded without a Player"));
+    el.onerror = () => reject(new Error("Twitch SDK failed to load"));
+    document.head.appendChild(el);
+  });
+  return _twitchSdk;
+}
+
+/// Pull the channel and parent back out of an embed URL we built ourselves.
+function parseTwitchEmbed(url) {
+  try {
+    const u = new URL(url);
+    return {
+      channel: u.searchParams.get("channel") || "",
+      parent: u.searchParams.get("parent") || embedParentHost(),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Twitch tile driven through `Twitch.Player`.
+///
+/// The whole point: mute, volume and quality are method calls, so none of
+/// them reload the stream the way rewriting an iframe `src` does. Quality is
+/// the big one on a wall — several 1080p60 decodes is the dominant cost, and
+/// background tiles do not need source.
+function makeTwitchController(spec) {
+  const host = document.createElement("div");
+  host.className = "watch-tile-iframe ms-iframe ms-twitch";
+  const parsed = parseTwitchEmbed(spec.embedUrl) || { channel: "", parent: embedParentHost() };
+
+  let player = null;
+  let ready = false;
+  let qualities = [];
+  let pendingQualityTier = null;
+  let muted = !!spec.muted;
+  let volume = typeof spec.volume === "number" ? spec.volume : 1;
+
+  /// Map a policy onto whatever this stream actually offers.
+  ///
+  /// The quality string vocabulary is NOT documented by Twitch — community
+  /// reports resolution-coded names like "1080p60 (source)" — so options are
+  /// discovered per player and never hardcoded. A resolution label is also
+  /// not a quality measure: the same "1080p" differs in bitrate between
+  /// streamers and platforms, which is why nothing here normalises across
+  /// providers. Anything unexpected means: do nothing and let Twitch's own
+  /// auto stand, which is always a safe answer.
+  const applyQuality = (policy) => {
+    if (!player || !ready || !policy || policy === "auto") return;
+    // getQualities() returns entries with a `group` id and a human `name`.
+    // Drop the synthetic "auto" entry; what remains is highest-first per
+    // Twitch's ordering, but do not rely on that — pick by explicit ends.
+    const usable = qualities.filter((q) => q && q.group && q.group !== "auto");
+    if (usable.length < 2) return;
+    const pick = policy === "low" ? usable[usable.length - 1] : usable[0];
+    if (!pick || !pick.group) return;
+    try {
+      if (player.getQuality() !== pick.group) player.setQuality(pick.group);
+    } catch (_) {
+      /* advisory only — never worse than leaving auto alone */
+    }
+  };
+
+  loadTwitchSdkOnce()
+    .then((Twitch) => {
+      if (!host.isConnected && !host.parentElement) {
+        // Tile was removed while the SDK was loading.
+        return;
+      }
+      player = new Twitch.Player(host, {
+        channel: parsed.channel,
+        parent: [parsed.parent],
+        width: "100%",
+        height: "100%",
+        muted,
+        autoplay: spec.playing !== false,
+      });
+      player.addEventListener(Twitch.Player.READY, () => {
+        ready = true;
+        try {
+          // getQualities() ordering is not documented either; sort so the
+          // highest is first regardless of what Twitch hands back.
+          qualities = (player.getQualities() || []).slice();
+        } catch (_) {
+          qualities = [];
+        }
+        try {
+          player.setMuted(muted);
+          player.setVolume(volume);
+        } catch (_) {
+          /* pre-ready calls can throw on some builds */
+        }
+        if (pendingQualityTier) applyQuality(pendingQualityTier);
+      });
+    })
+    .catch(() => {
+      // SDK blocked or offline: fall back to a plain iframe in place, so
+      // the tile still plays rather than sitting empty.
+      const fb = makeIframeController(spec);
+      host.replaceWith(fb.root);
+      player = null;
+      controller.root = fb.root;
+      controller.setMuted = fb.setMuted;
+      controller.setVolume = fb.setVolume;
+      controller.repoint = fb.repoint;
+      controller.destroy = fb.destroy;
+      controller.mount = fb.mount;
+    });
+
+  const controller = {
+    kind: "twitch",
+    root: host,
+    mount(container) {
+      if (controller.root.parentElement !== container) container.appendChild(controller.root);
+    },
+    destroy() {
+      try {
+        // The SDK exposes no documented destroy; dropping the node releases
+        // the iframe it created underneath.
+        player = null;
+      } finally {
+        controller.root.remove();
+      }
+    },
+    setMuted(next) {
+      muted = next;
+      if (player && ready) {
+        try {
+          player.setMuted(next);
+          return;
+        } catch (_) {
+          /* fall through */
+        }
+      }
+    },
+    setVolume(v) {
+      volume = Math.max(0, Math.min(1, v));
+      if (player && ready) {
+        try {
+          player.setVolume(volume);
+        } catch (_) {
+          /* advisory */
+        }
+      }
+    },
+    setQuality(tier) {
+      pendingQualityTier = tier;
+      applyQuality(tier);
+    },
+    getPlaybackStats() {
+      try {
+        return player && ready ? player.getPlaybackStats() : null;
+      } catch (_) {
+        return null;
+      }
+    },
+    repoint(next) {
+      const p = next && next.embedUrl ? parseTwitchEmbed(next.embedUrl) : null;
+      if (!p || !p.channel || p.channel === parsed.channel) return;
+      parsed.channel = p.channel;
+      if (player) {
+        try {
+          // Retarget in place — no teardown, no reload.
+          player.setChannel(p.channel);
+        } catch (_) {
+          /* leave the tile on its current channel rather than blanking it */
+        }
+      }
+    },
+    isReady() {
+      return ready;
+    },
+  };
+  return controller;
+}
+
 function defaultPlayerControllerFactory(kind, spec) {
-  return kind === "recording" ? makeRecordingController(spec) : makeIframeController(spec);
+  if (kind === "recording") return makeRecordingController(spec);
+  if (kind === "twitch") return makeTwitchController(spec);
+  // YouTube stays on the plain iframe for now: YT.Player addresses content
+  // by video id, and the live embed strivo builds addresses a CHANNEL, so
+  // there is no video id to hand it without new plumbing.
+  return makeIframeController(spec);
 }
 
 let _playerControllerFactory = defaultPlayerControllerFactory;
@@ -6334,6 +6573,7 @@ function reconcileControllers(stage) {
     }
     ctl.mount(mount);
     ctl.setMuted(muted);
+    ctl.setQuality(qualityPolicyFor(mount.dataset.kind || "", path));
   }
 }
 
@@ -11606,6 +11846,7 @@ const SETTINGS_SECTIONS = [
   { slug: "platforms", label: "Platforms", icon: "🔌" },
   { slug: "plugins", label: "Plugins", icon: "🧩" },
   { slug: "interface", label: "Interface", icon: "🎨" },
+  { slug: "multiview", label: "Multi-view", icon: "▦" },
   { slug: "advanced", label: "Advanced", icon: "🛠" },
   { slug: "about", label: "About", icon: "ℹ" },
 ];
@@ -11682,6 +11923,23 @@ function wireSettingsSearch() {
 function wireSettingsControls() {
   const pane = document.getElementById("stg-pane");
   if (!pane) return;
+  // Multi-view quality selects are browser-local, so they persist straight
+  // to localStorage rather than through the daemon config endpoint. Applying
+  // takes effect on the next reconcile — no reload, that being the point.
+  pane.querySelectorAll("[data-mv-quality]").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      setMultiviewQuality(sel.dataset.mvQuality, sel.value);
+      Toast.info("Multi-view quality updated — applies to open tiles immediately.");
+      for (const [, ctl] of playerState.controllers) {
+        try {
+          ctl.setQuality(qualityPolicyFor(ctl.kind, ""));
+        } catch (_) {
+          /* advisory */
+        }
+      }
+    });
+  });
+
   // Configure / Reconfigure buttons on the Platforms section open a
   // wizard modal per platform.
   pane.querySelectorAll(".stg-cfg-btn").forEach((btn) => {
@@ -12012,6 +12270,48 @@ function renderSettingsPane(slug, s) {
     </section>`;
 
   switch (slug) {
+    case "multiview": {
+      const q = multiviewQuality();
+      const opts = (current) =>
+        MULTIVIEW_QUALITY_CHOICES.map(
+          ([v, label]) =>
+            `<option value="${v}"${v === current ? " selected" : ""}>${htmlEscape(label)}</option>`,
+        ).join("");
+      return [
+        group("Stream quality", [
+          row(
+            "Twitch",
+            `<select class="stg-select" data-mv-quality="twitch">${opts(q.twitch)}</select>`,
+            "Applied per tile without reloading the stream. The options a stream " +
+              "actually offers are discovered from the player at runtime, so this " +
+              "picks an end of that list rather than a fixed resolution.",
+          ),
+          row(
+            "YouTube",
+            `<select class="stg-select" disabled><option>Controlled by YouTube</option></select>`,
+            "YouTube decommissioned quality control in its player API — setPlaybackQuality " +
+              "is now a no-op, so nothing here could take effect. The only remaining " +
+              "influence is how large the tile is drawn.",
+          ),
+        ].join("")),
+        group("About these settings", [
+          row(
+            "Why no single scale",
+            "&mdash;",
+            "A resolution label is not a quality measure: the same \"1080p\" is a " +
+              "different bitrate between platforms and between streamers on one " +
+              "platform. Each provider is therefore offered on its own terms rather " +
+              "than flattened into a shared ladder.",
+          ),
+          row(
+            "Where this is stored",
+            "&mdash;",
+            "Per browser, alongside your layout and volume preferences — a laptop on " +
+              "hotel wifi and a desktop on gigabit want different answers.",
+          ),
+        ].join("")),
+      ].join("");
+    }
     case "general":
       return [
         group("At a glance", [

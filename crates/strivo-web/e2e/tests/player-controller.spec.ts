@@ -280,3 +280,72 @@ test("a preset change preserves a playing tile", async ({ page }) => {
   expect(log.created).toHaveLength(1);
   await expect(page.locator(".fake-player")).toHaveCount(1);
 });
+
+// Play-all deliberately forces a full repaint (every tile's playing state
+// changes at once). The tile already running must ride through it.
+test("play-all starts the rest without rebuilding what is already playing", async ({ page }) => {
+  await installFakePlayers(page);
+  await page.goto("/app#/watch");
+
+  await page.locator(".ms-preset-summary").click();
+  await page.locator('.ms-preset-opt[data-preset="split-screen"]').click();
+  const pickers = page.locator(".ms-slot-pick");
+  await pickers.first().selectOption("live:Twitch:twitch-live-1");
+  await expect(pickers).toHaveCount(1);
+  await pickers.first().selectOption("live:YouTube:UClive0000000000000000aa");
+
+  // Start exactly one tile.
+  await page.locator(".ms-play").first().click();
+  await expect(page.locator(".fake-player")).toHaveCount(1);
+  const firstId = await page.evaluate(() => (window as any).__fakeLog.created[0]);
+
+  await page.locator("#watch-playall").click();
+
+  // Second tile joins; the first is neither destroyed nor recreated.
+  await expect(page.locator(".fake-player")).toHaveCount(2);
+  const log = await page.evaluate(() => (window as any).__fakeLog);
+  expect(log.destroyed).not.toContain(firstId);
+  expect(log.created).toHaveLength(2);
+});
+
+// ── Vendor SDK ──────────────────────────────────────────────────────────
+//
+// The safety property that matters most: if Twitch's script is blocked,
+// offline, or simply slow to fail, the tile must still play. A missing SDK
+// degrades to the plain iframe of before, never to an empty tile.
+test("a blocked Twitch SDK degrades to a working iframe", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+  // Deterministic: never reach the real CDN from a test.
+  await page.route("**/player.twitch.tv/js/embed/v1.js", (r) => r.abort());
+  await page.goto("/app#/watch");
+
+  await page.locator(".ms-slot-pick").first().selectOption("live:Twitch:twitch-live-1");
+  await page.locator(".ms-play").first().click();
+
+  // The controller swaps its host element for a real iframe on SDK failure.
+  const frame = page.locator(".ms-leaf iframe.ms-iframe");
+  await expect(frame).toHaveCount(1);
+  await expect(frame).toHaveAttribute("src", /player\.twitch\.tv/);
+});
+
+// ── Multi-view settings ─────────────────────────────────────────────────
+test("multi-view settings offer Twitch quality and are honest about YouTube", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+  await page.goto("/app#/settings/multiview");
+
+  const twitch = page.locator('[data-mv-quality="twitch"]');
+  await expect(twitch).toBeVisible();
+  // Ships defaulting to the best the stream offers.
+  await expect(twitch).toHaveValue("best");
+
+  // YouTube's quality API is decommissioned, so offering a control that
+  // silently did nothing would be worse than offering none.
+  const yt = page.locator(".stg-select[disabled]");
+  await expect(yt).toBeVisible();
+  await expect(yt).toContainText("Controlled by YouTube");
+
+  // The choice persists per browser.
+  await twitch.selectOption("low");
+  await page.reload();
+  await expect(page.locator('[data-mv-quality="twitch"]')).toHaveValue("low");
+});

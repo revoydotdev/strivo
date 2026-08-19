@@ -30,7 +30,7 @@ export async function sendPurchaseReceipt(
     <p>Your licence key:</p>
     <pre style="font-family:monospace;font-size:14px;background:#f4f4f6;padding:12px;border-radius:6px">${licenceKey}</pre>
     <p>Paste it into the <em>I have a key</em> dialog on the Plugins page in StriVo. The key activates one machine — if you change machines, contact support and we'll move it.</p>
-    <p>— Chorosyne</p>`;
+    <p>— StriVo</p>`;
   await send(env, to, "Your Strivo Pro licence", html);
 }
 
@@ -41,6 +41,6 @@ export async function sendRefundNotice(
   const html = `
     <p>Your Strivo Pro licence has been refunded and will stop unlocking Pro plugins within 72 hours.</p>
     <p>If this wasn't you, reply to this email and we'll sort it out.</p>
-    <p>— Chorosyne</p>`;
+    <p>— StriVo</p>`;
   await send(env, to, "Strivo Pro refund processed", html);
 }

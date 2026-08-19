@@ -11,8 +11,16 @@ database_name = "strivo-licence"
 database_id = "REPLACE_WITH_D1_ID"
 
 # Non-secret vars — secrets go via `wrangler secret put`.
+#
+# PUBLIC_BASE_URL: chorosyne.com is retired; this project ships under
+# revoydotdev. TODO(owner): set this to the real domain the Worker will
+# be routed to (e.g. https://licence.strivo.dev) before deploying — it
+# becomes the JWT `iss` claim and MUST exactly match (mod trailing
+# slash) the `STRIVO_LICENCE_URL` the client is configured with, or
+# every token fails verification in src/licence/verify.rs. See
+# docs/LICENCE-BACKEND-DEPLOY.md.
 [vars]
-PUBLIC_BASE_URL = "https://licence.chorosyne.com"
+PUBLIC_BASE_URL = "https://REPLACE_WITH_LICENCE_DOMAIN.example"
 TRIAL_DURATION_HOURS = "72"
 REFRESH_INTERVAL_HOURS = "72"
 LEMONSQUEEZY_STORE_ID = ""        # numeric, set per-environment

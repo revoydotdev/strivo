@@ -12,4 +12,4 @@ LEMONSQUEEZY_API_KEY="ls_api_key_here"
 
 # Resend API key
 RESEND_API_KEY="re_xxx"
-RESEND_FROM="StriVo <licence@chorosyne.com>"
+RESEND_FROM="StriVo <licence@REPLACE_WITH_LICENCE_DOMAIN.example>"

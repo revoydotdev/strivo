@@ -54,29 +54,48 @@ cp .dev.vars.example .dev.vars  # fill secrets
 npm run dev                     # wrangler dev on :8787
 ```
 
-## Deploy
+## Testing
 
 ```bash
-npx wrangler d1 create strivo-licence            # one-time
-# copy the database_id into wrangler.toml
-npx wrangler d1 execute strivo-licence --file schema.sql
-npx wrangler secret put JWT_PRIVATE_KEY          # PEM, ES256
-npx wrangler secret put LEMONSQUEEZY_WEBHOOK_SECRET
-npx wrangler secret put RESEND_API_KEY
+npm test        # vitest, running the real Worker code in workerd via
+                 # @cloudflare/vitest-pool-workers (Miniflare) — not a
+                 # mock runtime. D1 migrations, rate limiting, and the
+                 # ES256 signer all run for real; only the outbound
+                 # Lemon Squeezy / Resend HTTP calls are stubbed.
+npm run typecheck
+```
+
+See `test/jwt-contract.test.ts` for the cross-runtime check that a
+token this backend signs is byte-shape-compatible with what
+`src/licence/verify.rs` (the Rust client) requires.
+
+## Deploy
+
+Full first-time deployment (D1 creation, secrets, Lemon Squeezy,
+Resend, DNS, client config) is documented step by step in
+[`docs/LICENCE-BACKEND-DEPLOY.md`](../docs/LICENCE-BACKEND-DEPLOY.md).
+Short version, once you've done that once:
+
+```bash
+npm run typecheck
+npm test
 npx wrangler deploy
 ```
+
+CI does the same three steps automatically on push to `licence-backend/**`
+via `.github/workflows/deploy-licence.yml`, gated on the
+`CLOUDFLARE_API_TOKEN` repo secret.
 
 ## Key generation
 
 ```bash
-# Generate P-256 keypair for ES256 JWT.
-openssl ecparam -genkey -name prime256v1 -noout -out jwt-private.pem
-openssl ec -in jwt-private.pem -pubout -out jwt-public.pem
-
-# The PRIVATE key goes into the Worker secret JWT_PRIVATE_KEY.
-# Give the PUBLIC key to the StriVo service as
-# STRIVO_LICENCE_PUBLIC_KEY (the PEM contents).
+./scripts/gen-keypair.sh /path/to/output/dir
 ```
+
+Produces a fresh P-256 keypair for ES256. The **private** key goes into
+the Worker secret `JWT_PRIVATE_KEY`; the **public** key's PEM contents
+go to the StriVo client as `STRIVO_LICENCE_PUBLIC_KEY`. Never commit
+either file.
 
 The client fails closed if either `STRIVO_LICENCE_URL` or
 `STRIVO_LICENCE_PUBLIC_KEY` is absent. Local self-issued trials are not

@@ -13,7 +13,7 @@ the daemon in the background and attach a TUI client when you want one.
 
 ```bash
 strivo daemon start      # spawn the background service
-strivo daemon status     # report running / not running, pid, socket
+strivo status            # report running / not running, pid, socket
 strivo daemon stop       # graceful shutdown (SIGTERM)
 strivo daemon install    # write a systemd --user unit file
 ```
@@ -74,7 +74,7 @@ source.
 ## Health checks
 
 ```bash
-strivo daemon status        # exits 0 if running, 3 if not
+strivo status               # exits 0 if running, 3 if not
 ```
 
 Use that exit code in monitoring scripts. For Prometheus / observability

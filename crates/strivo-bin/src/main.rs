@@ -864,6 +864,15 @@ async fn probe_platform_credentials() -> String {
     out
 }
 
+/// Exit code reported when the daemon is not running.
+///
+/// 3 is the LSB "program is not running" convention, and it is what
+/// `docs/DAEMON.md` has always told operators to branch on in monitoring
+/// scripts. This used to return `Ok(())` in both branches, so every such
+/// script reported healthy no matter what the daemon was doing — a
+/// documented contract the binary quietly did not honour.
+const EXIT_DAEMON_NOT_RUNNING: i32 = 3;
+
 fn handle_status() -> Result<()> {
     if ipc::is_daemon_running() {
         println!("StriVo daemon is running");
@@ -872,12 +881,13 @@ fn handle_status() -> Result<()> {
             println!("PID: {}", pid.trim());
         }
         println!("Socket: {}", ipc::socket_path().display());
+        Ok(())
     } else {
         println!("StriVo daemon is not running");
         println!("Start with: strivo daemon");
         println!("Or enable as service: strivo enable");
+        std::process::exit(EXIT_DAEMON_NOT_RUNNING);
     }
-    Ok(())
 }
 
 #[cfg(unix)]

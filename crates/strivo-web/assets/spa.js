@@ -2000,17 +2000,55 @@ function channelDetailHtml(c) {
 // model: show a refreshing thumbnail poster first, upgrade to the platform's
 // embed player on click (tap-to-play — avoids auto-spinning a player for every
 // open and works on mobile). Patreon has no live concept (thumbnail-only).
-function liveEmbedSrc(c) {
-  const host = location.hostname || "127.0.0.1";
-  if (c.platform === "Twitch") {
-    return `https://player.twitch.tv/?channel=${encodeURIComponent(c.name)}` +
-      `&parent=${encodeURIComponent(host)}&muted=true&autoplay=true`;
+/// Derive Twitch's `parent=` value from a host string.
+///
+/// Twitch accepts a HOSTNAME ONLY — a scheme or port produces "embed
+/// misconfigured" / "refused to connect". It also rejects bare IPv4, so a
+/// LAN address is rewritten to the matching `<ip-dashed>.nip.io`, which
+/// resolves to the same IP through wildcard DNS.
+///
+/// This mirrors `strivo_multistream::embed_url`'s host handling
+/// (crates/multistream/src/lib.rs) so every embed surface derives the same
+/// parent. Three call sites used to do this independently and disagree:
+/// the wall went through the Rust builder, while the channel-detail preview
+/// used a bare `location.hostname` (no port stripping, no nip.io) and would
+/// break for anyone reaching strivo over a LAN IP.
+function embedParentHost(host) {
+  const raw = host || location.host || "127.0.0.1";
+  const bare = raw
+    .replace(/^https?:\/\//, "")
+    .split("/")[0]
+    .split(":")[0];
+  return /^\d+\.\d+\.\d+\.\d+$/.test(bare)
+    ? `${bare.replace(/\./g, "-")}.nip.io`
+    : bare;
+}
+
+/// Single builder for live embed URLs. `muted`/`autoplay` are omitted from
+/// the URL entirely when left undefined, so callers that manage playback
+/// through a player API do not bake a conflicting state into the src.
+function buildEmbedUrl(platform, embedKey, opts = {}) {
+  const { host, muted, autoplay } = opts;
+  const key = encodeURIComponent(embedKey || "");
+  if (platform === "Twitch") {
+    let u = `https://player.twitch.tv/?channel=${key}` +
+      `&parent=${encodeURIComponent(embedParentHost(host))}`;
+    if (muted != null) u += `&muted=${!!muted}`;
+    if (autoplay != null) u += `&autoplay=${!!autoplay}`;
+    return u;
   }
-  if (c.platform === "YouTube") {
-    return `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(c.id)}` +
-      `&autoplay=1&mute=1&playsinline=1`;
+  if (platform === "YouTube") {
+    let u = `https://www.youtube.com/embed/live_stream?channel=${key}`;
+    if (muted != null) u += `&mute=${muted ? 1 : 0}`;
+    if (autoplay != null) u += `&autoplay=${autoplay ? 1 : 0}`;
+    return u + "&playsinline=1";
   }
   return null;
+}
+
+function liveEmbedSrc(c) {
+  const key = c.platform === "YouTube" ? c.id : c.name;
+  return buildEmbedUrl(c.platform, key, { muted: true, autoplay: true });
 }
 
 // Substitute Twitch's {width}x{height} placeholders and cache-bust so the
@@ -5987,7 +6025,6 @@ async function renderViewer() {
   const rawHost = location.host;
   const hostNoPort = rawHost.split(":")[0];
   const port = rawHost.includes(":") ? rawHost.split(":")[1] : "";
-  const isBareIp = /^\d+\.\d+\.\d+\.\d+$/.test(hostNoPort);
   const isLocalhost = hostNoPort === "localhost" || hostNoPort === "127.0.0.1";
   const isHttps = location.protocol === "https:";
   // Twitch's parent= validator + its embed CSP together require:
@@ -5996,9 +6033,7 @@ async function renderViewer() {
   // Anything else gets the 'embed misconfigured' / CSP-violation
   // error. We rewrite bare IP → nip.io so the parent= validator
   // passes, but the CSP rule still needs https for nip.io.
-  const parent = isBareIp
-    ? `${hostNoPort.replace(/\./g, "-")}.nip.io`
-    : hostNoPort;
+  const parent = embedParentHost(rawHost);
   const embedBlocked = !isLocalhost && !isHttps;
   const stage = document.querySelector(".viewer-stage");
   if (embedBlocked) {
@@ -6023,7 +6058,7 @@ async function renderViewer() {
     stage.prepend(banner);
   }
   document.getElementById("viewer-iframe").src =
-    `https://player.twitch.tv/?channel=${encodeURIComponent(room)}&parent=${encodeURIComponent(parent)}`;
+    buildEmbedUrl("Twitch", room, { host: rawHost });
   // Sidepane toggle persists.
   document.getElementById("viewer-toggle-side").addEventListener("click", () => {
     const root_ = document.getElementById("viewer-root");
@@ -6077,10 +6112,13 @@ async function renderViewer() {
 let _watchRefreshTimer = null;
 
 // Append the muted-state parameter Twitch / YouTube embeds use.
-function withMuted(url, muted) {
-  if (!url) return url;
-  const param = url.includes("youtube.com") ? `mute=${muted ? 1 : 0}` : `muted=${muted}`;
-  return url + (url.includes("?") ? "&" : "?") + param;
+/// Should the tile at `path` be muted?
+///
+/// Mute-all is the default; a soloed path is the single audible tile. This
+/// was computed inline in three places (renderSlot, tryPatchPlayerStage,
+/// and the play-button handler), which is how they could drift.
+function computeMuted(path) {
+  return playerState.soloPath ? playerState.soloPath !== path : true;
 }
 
 // Single source of truth for a live tile's iframe src.
@@ -6806,7 +6844,7 @@ function wireTileHandlers(tile, stage, watch, streams) {
     e.stopPropagation();
     const path = e.currentTarget.dataset.path || "";
     setTilePlaying(path, true);
-    const muted = playerState.soloPath ? playerState.soloPath !== path : true;
+    const muted = computeMuted(path);
     const poster = tile.querySelector(".ms-poster");
     const base =
       poster?.getAttribute("data-embed-base") ||
@@ -6868,7 +6906,7 @@ function tryPatchPlayerStage(watch, prev, curr, streams) {
       (prevNode.recordingId || null) === (currNode.recordingId || null);
     if (sameContent) {
       // Same content. Mute state may have flipped — sync iframe/video.
-      const muted = playerState.soloPath ? playerState.soloPath !== path : true;
+      const muted = computeMuted(path);
       const iframe = tile.querySelector(".ms-iframe");
       const video = tile.querySelector(".ms-video");
       if (iframe) {
@@ -7499,7 +7537,7 @@ function tilePosterUrl(s) {
 }
 
 function renderSlot(slot, path, streams) {
-  const muted = playerState.soloPath ? playerState.soloPath !== path : true;
+  const muted = computeMuted(path);
   const playing = tilePlaying(path);
   // ─ Recording playback path ─
   if (slot.recordingId) {
@@ -14452,3 +14490,28 @@ fetchEdition()
       setTimeout(startOnboardingTour, 600);
     }
   });
+
+// ── Test hooks ───────────────────────────────────────────────────────
+//
+// spa.js is loaded as a module, so its top-level declarations are
+// module-scoped and unreachable from Playwright's page.evaluate. Rather
+// than leak the whole module onto window, a narrow surface is exported for
+// e2e — and only when the page explicitly opts in, so an ordinary session
+// gains no extra globals and no way to swap the player factory.
+if (typeof window !== "undefined") {
+  try {
+    const optedIn =
+      localStorage.getItem("strivo:e2e") === "1" ||
+      new URLSearchParams(location.search).get("e2e") === "1";
+    if (optedIn) {
+      window.__strivoTestHooks = {
+        embedParentHost,
+        buildEmbedUrl,
+        computeMuted,
+        playerState,
+      };
+    }
+  } catch (_) {
+    /* private mode / blocked storage — hooks simply stay off */
+  }
+}

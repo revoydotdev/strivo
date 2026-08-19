@@ -91,7 +91,7 @@ jobs:
       # self-hosted runner happens to have. An npm change on the box broke the
       # `npm ci` steps below on 2026-07-29 without any repo change.
       - name: Node toolchain
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
 

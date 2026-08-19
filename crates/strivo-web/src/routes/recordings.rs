@@ -274,7 +274,18 @@ async fn download(
     // `take` caps the stream at the requested length so partial-content
     // responses don't bleed past `end`.
     let bounded = tokio::io::AsyncReadExt::take(file, slice_len);
-    let body = Body::from_stream(tokio_util::io::ReaderStream::new(bounded));
+    // tokio_util's default ReaderStream chunk is 4KiB, and each chunk read
+    // is a separate spawn_blocking dispatch onto tokio's blocking pool
+    // (tokio::fs::File has no true async read). Measured on a warm page
+    // cache over loopback: 4KiB chunks topped out around 500MB/s; a 256KiB
+    // chunk cuts the number of blocking-pool round trips ~64x for the same
+    // bytes. Recording files run into the multi-GB range, so this matters
+    // for both full downloads and long forward seeks.
+    const STREAM_CHUNK: usize = 256 * 1024;
+    let body = Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+        bounded,
+        STREAM_CHUNK,
+    ));
 
     let mut resp = Response::builder().status(status).body(body).unwrap();
     let h = resp.headers_mut();

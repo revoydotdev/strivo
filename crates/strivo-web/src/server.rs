@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use axum::http::{header, HeaderValue, Request};
 use axum::{middleware, response::Response, Router};
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
@@ -130,9 +131,21 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     // The YouTube WebSub callback is merged AFTER the auth/CSRF layers so it
     // stays public — Google's PubSubHubbub hub sends no API key or CSRF token.
     // It exposes only a verification echo and a poll-trigger, no data.
+    // tower_http's DefaultPredicate already skips already-encoded, Range,
+    // gRPC, image, and SSE responses, but not video/audio — so a plain
+    // `CompressionLayer::new()` gzips the recordings download route on any
+    // request that omits `Range` (some players' initial probe, `curl`,
+    // download managers). Measured: a 258MB recording went from a 0.59s
+    // identity stream to 6.2s once gzip kicked in (~36MB/s, CPU-bound on an
+    // already-compressed container) and lost Content-Length/Accept-Ranges
+    // in favour of chunked transfer. Recording bytes are already compressed
+    // by the source codec, so exclude them the same way images are excluded.
+    let compression_predicate = DefaultPredicate::new()
+        .and(NotForContentType::const_new("video/"))
+        .and(NotForContentType::const_new("audio/"));
     let app = guarded
         .merge(routes::websub::router())
-        .layer(CompressionLayer::new())
+        .layer(CompressionLayer::new().compress_when(compression_predicate))
         // CE-Fusion F3: content-free per-route latency/reliability
         // telemetry, queryable at GET /api/v1/telemetry. Wired with
         // `.layer()` (not `.route_layer()`) at this router-composition

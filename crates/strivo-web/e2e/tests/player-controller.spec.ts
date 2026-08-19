@@ -386,3 +386,41 @@ test("multi-view settings offer Twitch quality and are honest about YouTube", as
   await page.reload();
   await expect(page.locator('[data-mv-quality="twitch"]')).toHaveValue("low");
 });
+
+// ── YouTube ─────────────────────────────────────────────────────────────
+//
+// Google's script must never load merely because the wall was opened —
+// DESIGN.md records avoiding Google for fonts on exactly this reasoning.
+// It may load only once a YouTube tile is actually played, by which point
+// the viewer has chosen to contact Google anyway.
+test("YouTube's script loads on demand, not on page load", async ({ page }) => {
+  const googleHits: string[] = [];
+  await page.route("**/www.youtube.com/iframe_api*", (r) => {
+    googleHits.push(r.request().url());
+    return r.abort(); // never actually reach Google from a test
+  });
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+
+  await page.goto("/app#/watch");
+  expect(googleHits, "opening the wall must not contact Google").toHaveLength(0);
+
+  // A Twitch tile must not drag the Google script in either.
+  await page.locator(".ms-slot-pick").first().selectOption("live:Twitch:twitch-live-1");
+  await page.locator(".ms-play").first().click();
+  await page.waitForTimeout(300);
+  expect(googleHits, "a Twitch tile must not contact Google").toHaveLength(0);
+});
+
+test("a YouTube tile without a video id still plays via the iframe", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+  await page.route("**/www.youtube.com/iframe_api*", (r) => r.abort());
+  await page.goto("/app#/watch");
+
+  await page.locator(".ms-slot-pick").first().selectOption("live:YouTube:UClive0000000000000000aa");
+  await page.locator(".ms-play").first().click();
+
+  // Whether the API is reachable or not, the tile must end up with a
+  // working player rather than an empty box.
+  const media = page.locator(".ms-leaf .ms-iframe");
+  await expect(media).toHaveCount(1);
+});

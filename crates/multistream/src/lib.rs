@@ -31,6 +31,14 @@ pub struct Stream {
     /// Channel login / handle / id used to build the platform embed URL.
     pub embed_key: String,
     pub viewer_count: Option<u32>,
+    /// Video id of the broadcast currently airing, where the platform
+    /// addresses live content that way.
+    ///
+    /// YouTube's IFrame Player API drives a VIDEO, not a channel, so a
+    /// YouTube tile cannot be controlled through that API without this.
+    /// Twitch leaves it None — its player is pointed at a channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +374,7 @@ mod tests {
             platform: Platform::Twitch,
             embed_key: id.to_lowercase(),
             viewer_count: None,
+            video_id: None,
         }
     }
 
@@ -557,6 +566,7 @@ mod tests {
             platform: Platform::YouTube,
             embed_key: "UCBJycsmduvYEL83R_U4JriQ".into(),
             viewer_count: None,
+            video_id: None,
         };
         let url = embed_url(&yt, "ignored.host");
         assert_eq!(

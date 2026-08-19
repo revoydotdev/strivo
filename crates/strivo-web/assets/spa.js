@@ -6613,12 +6613,168 @@ function makeTwitchController(spec) {
   return controller;
 }
 
+/// Load YouTube's IFrame Player API — ON DEMAND ONLY.
+///
+/// This is a Google-hosted script executing with page privileges, which is a
+/// heavier trust posture than a sandboxed cross-origin iframe. DESIGN.md
+/// records choosing Bunny Fonts specifically to avoid leaking IP/referer to
+/// Google, so this must never load merely because someone opened the wall:
+/// it loads the first time a YouTube tile is actually played, at which point
+/// the viewer has already chosen to contact Google.
+///
+/// Memoised on the PROMISE so two YouTube tiles started together share one
+/// in-flight load rather than injecting the script twice.
+let _ytApi = null;
+function loadYouTubeApiOnce() {
+  if (_ytApi) return _ytApi;
+  _ytApi = new Promise((resolve, reject) => {
+    if (window.YT && window.YT.Player) return resolve(window.YT);
+    // The API signals readiness through this single global callback, so
+    // chain rather than clobber any existing one.
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof prev === "function") {
+        try {
+          prev();
+        } catch (_) {
+          /* not ours to fix */
+        }
+      }
+      window.YT && window.YT.Player
+        ? resolve(window.YT)
+        : reject(new Error("YouTube API ready without a Player"));
+    };
+    const el = document.createElement("script");
+    el.src = "https://www.youtube.com/iframe_api";
+    el.async = true;
+    el.onerror = () => reject(new Error("YouTube IFrame API failed to load"));
+    document.head.appendChild(el);
+  });
+  return _ytApi;
+}
+
+/// YouTube tile driven through `YT.Player`.
+///
+/// Parity with Twitch on the basics — mute and volume without reloading —
+/// which is the point: a mute button that works on one platform and not the
+/// other is more confusing than either behaviour applied consistently.
+///
+/// Quality is deliberately absent. Google decommissioned it: setPlaybackQuality
+/// is a documented no-op, so a control here could not take effect.
+function makeYouTubeController(spec) {
+  const host = document.createElement("div");
+  host.className = "watch-tile-iframe ms-iframe ms-youtube";
+
+  let player = null;
+  let ready = false;
+  let muted = !!spec.muted;
+  let volume = typeof spec.volume === "number" ? spec.volume : 1;
+  let videoId = spec.videoId || "";
+
+  // No video id means no player API: YT.Player addresses a video, and the
+  // live embed strivo builds addresses a channel. Fall straight back rather
+  // than construct something that cannot work.
+  if (!videoId) return makeIframeController(spec);
+
+  loadYouTubeApiOnce()
+    .then((YT) => {
+      if (!host.parentElement) return; // tile removed while loading
+      player = new YT.Player(host, {
+        videoId,
+        playerVars: {
+          autoplay: spec.playing !== false ? 1 : 0,
+          mute: muted ? 1 : 0,
+          playsinline: 1,
+          enablejsapi: 1,
+          origin: window.location.origin,
+        },
+        events: {
+          onReady: () => {
+            ready = true;
+            try {
+              if (muted) player.mute();
+              else player.unMute();
+              player.setVolume(Math.round(volume * 100));
+            } catch (_) {
+              /* pre-ready races */
+            }
+          },
+        },
+      });
+    })
+    .catch(() => {
+      const fb = makeIframeController(spec);
+      host.replaceWith(fb.root);
+      player = null;
+      controller.root = fb.root;
+      controller.setMuted = fb.setMuted;
+      controller.setVolume = fb.setVolume;
+      controller.repoint = fb.repoint;
+      controller.destroy = fb.destroy;
+      controller.mount = fb.mount;
+    });
+
+  const controller = {
+    kind: "youtube",
+    root: host,
+    mount(container) {
+      if (controller.root.parentElement !== container) container.appendChild(controller.root);
+    },
+    destroy() {
+      try {
+        if (player && typeof player.destroy === "function") player.destroy();
+      } catch (_) {
+        /* fall through to dropping the node */
+      }
+      player = null;
+      controller.root.remove();
+    },
+    setMuted(next) {
+      muted = next;
+      if (player && ready) {
+        try {
+          next ? player.mute() : player.unMute();
+        } catch (_) {
+          /* advisory */
+        }
+      }
+    },
+    setVolume(v) {
+      volume = Math.max(0, Math.min(1, v));
+      if (player && ready) {
+        try {
+          player.setVolume(Math.round(volume * 100));
+        } catch (_) {
+          /* advisory */
+        }
+      }
+    },
+    setQuality() {
+      // Intentionally empty: Google decommissioned setPlaybackQuality.
+    },
+    repoint(next) {
+      const id = next && next.videoId;
+      if (!id || id === videoId) return;
+      videoId = id;
+      if (player && ready) {
+        try {
+          player.loadVideoById(id);
+        } catch (_) {
+          /* leave the tile where it is rather than blanking it */
+        }
+      }
+    },
+    isReady() {
+      return ready;
+    },
+  };
+  return controller;
+}
+
 function defaultPlayerControllerFactory(kind, spec) {
   if (kind === "recording") return makeRecordingController(spec);
   if (kind === "twitch") return makeTwitchController(spec);
-  // YouTube stays on the plain iframe for now: YT.Player addresses content
-  // by video id, and the live embed strivo builds addresses a CHANNEL, so
-  // there is no video id to hand it without new plumbing.
+  if (kind === "youtube") return makeYouTubeController(spec);
   return makeIframeController(spec);
 }
 
@@ -6659,7 +6815,11 @@ function reconcileControllers(stage) {
         ctl = _playerControllerFactory(mount.dataset.kind || "iframe-fallback", {
           embedUrl: mount.dataset.embedBase || "",
           src: mount.dataset.src || "",
+          // YouTube's player API addresses a video; the daemon resolves the
+          // airing broadcast's id during live detection.
+          videoId: mount.dataset.videoId || "",
           muted,
+          volume: tileVolumeForKey(key),
           playing: mount.dataset.playing !== "0",
         });
       } catch (e) {
@@ -6671,7 +6831,11 @@ function reconcileControllers(stage) {
     } else if (mount.dataset.embedBase || mount.dataset.src) {
       // Same content, different URL (host changed, for instance) — retarget
       // rather than rebuild.
-      ctl.repoint({ embedUrl: mount.dataset.embedBase || "", src: mount.dataset.src || "" });
+      ctl.repoint({
+        embedUrl: mount.dataset.embedBase || "",
+        src: mount.dataset.src || "",
+        videoId: mount.dataset.videoId || "",
+      });
     }
     ctl.mount(mount);
     const vol = tileVolumeForKey(key);
@@ -8137,6 +8301,7 @@ function renderSlot(slot, path, streams) {
           ? `<div class="ms-mount" data-content-key="s:${htmlEscape(s.stream_id)}"
                   data-kind="${s.platform === "YouTube" ? "youtube" : "twitch"}"
                   data-path="${htmlEscape(path)}" data-playing="1"
+                  ${s.video_id ? `data-video-id="${htmlEscape(s.video_id)}"` : ""}
                   data-embed-base="${htmlEscape(s.embed_url)}"></div>`
           : `<div class="ms-poster" data-embed-base="${htmlEscape(s.embed_url)}">
                ${tilePosterUrl(s) ? `<img class="ms-poster-img" loading="lazy" alt="" src="${htmlEscape(tilePosterUrl(s))}" onerror="this.remove()">` : ""}

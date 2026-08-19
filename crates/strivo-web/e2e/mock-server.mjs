@@ -349,6 +349,7 @@ const server = createServer(async (req, res) => {
             channel_name: "Live Channel",
             platform: "YouTube",
             viewer_count: 1234,
+            video_id: "ytlive123456",
             embed_url: "https://www.youtube.com/embed/live_stream?channel=UClive0000000000000000aa",
           },
         ],

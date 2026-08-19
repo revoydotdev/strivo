@@ -475,7 +475,7 @@ impl YouTubePlatform {
                     .unwrap_or_default();
 
                 live_channels.push((
-                    video_id,
+                    video_id.clone(),
                     ChannelEntry {
                         id: channel_id.clone(),
                         platform: PlatformKind::YouTube,
@@ -489,6 +489,10 @@ impl YouTubePlatform {
                         thumbnail_url: thumbnail,
                         auto_record: false,
                         last_live_at: None,
+                        // The id of the broadcast actually airing. YouTube's
+                        // player API addresses a video, not a channel, so the
+                        // web UI cannot drive a YouTube tile without it.
+                        live_video_id: Some(video_id),
                     },
                 ));
             }
@@ -829,6 +833,7 @@ impl Platform for YouTubePlatform {
                         thumbnail_url: None,
                         auto_record: false,
                         last_live_at: None,
+                        live_video_id: None,
                     });
                 }
             }

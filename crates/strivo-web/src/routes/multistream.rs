@@ -74,6 +74,7 @@ async fn multistream_tiles(
                 platform,
                 embed_key: c.name,
                 viewer_count: c.viewer_count.map(|v| v as u32),
+                video_id: c.live_video_id,
             })
         })
         .collect();
@@ -91,6 +92,7 @@ async fn multistream_tiles(
                 "channel_name": s.channel_name,
                 "platform": s.platform,
                 "viewer_count": s.viewer_count,
+                "video_id": s.video_id,
                 "embed_url": strivo_multistream::embed_url(s, &q.host),
             })
         })

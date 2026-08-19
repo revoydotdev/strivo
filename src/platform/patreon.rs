@@ -66,6 +66,7 @@ impl PatreonCreator {
             thumbnail_url: None,
             auto_record: false,
             last_live_at: None,
+                        live_video_id: None,
         }
     }
 }

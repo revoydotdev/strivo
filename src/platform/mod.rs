@@ -80,6 +80,16 @@ pub struct ChannelEntry {
     /// last-live tracking; platform builders leave it None.
     #[serde(default)]
     pub last_live_at: Option<DateTime<Utc>>,
+    /// The video id of the broadcast currently airing, when the platform
+    /// addresses live content that way.
+    ///
+    /// YouTube needs this and Twitch does not: a Twitch player is pointed at
+    /// a channel, but YouTube's IFrame Player API addresses a VIDEO, so the
+    /// web UI cannot drive a YouTube tile through the player API from a
+    /// channel id alone. Resolved during live detection, where the id is
+    /// already in hand, and left None everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_video_id: Option<String>,
 }
 
 /// One past video / VOD / video-bearing post returned from a channel's back catalog.

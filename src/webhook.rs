@@ -195,6 +195,7 @@ mod tests {
             started_at: None,
             thumbnail_url: None,
             last_live_at: None,
+            live_video_id: None,
         }
     }
 

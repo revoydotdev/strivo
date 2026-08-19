@@ -315,6 +315,12 @@ impl ChannelMonitor {
                                     ch.viewer_count = live.viewer_count;
                                     ch.started_at = live.started_at;
                                     ch.thumbnail_url = live.thumbnail_url.clone();
+                                    // Only live detection knows which video is
+                                    // airing; the followed-channel list never
+                                    // carries it. Dropping it here would leave
+                                    // the web UI unable to drive a YouTube tile
+                                    // through the player API.
+                                    ch.live_video_id = live.live_video_id.clone();
                                 }
                             }
                         }

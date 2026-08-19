@@ -340,14 +340,19 @@ const server = createServer(async (req, res) => {
           {
             stream_id: "Twitch:twitch-live-1",
             channel_name: "twitchlive",
-            platform: "Twitch",
+            // Serialised exactly as the Rust side emits it: multistream's
+            // Platform is snake_case, unlike PlatformKind on /channels. The
+            // fixture used to say "YouTube" here, which is why a build that
+            // routed every YouTube stream into the Twitch player still
+            // passed its tests.
+            platform: "twitch",
             viewer_count: 4321,
             embed_url: "https://player.twitch.tv/?channel=twitchlive&parent=localhost",
           },
           {
             stream_id: "YouTube:UClive0000000000000000aa",
             channel_name: "Live Channel",
-            platform: "YouTube",
+            platform: "you_tube",
             viewer_count: 1234,
             video_id: "ytlive123456",
             embed_url: "https://www.youtube.com/embed/live_stream?channel=UClive0000000000000000aa",

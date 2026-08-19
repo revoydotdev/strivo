@@ -2051,7 +2051,7 @@ function buildEmbedUrl(platform, embedKey, opts = {}) {
 }
 
 function liveEmbedSrc(c) {
-  const key = c.platform === "YouTube" ? c.id : c.name;
+  const key = isYouTubePlatform(c.platform) ? c.id : c.name;
   return buildEmbedUrl(c.platform, key, { muted: true, autoplay: true });
 }
 
@@ -2115,7 +2115,7 @@ function livePreviewHtml(c) {
     // same controller as the wall and inherits the vendor JS API (and the
     // iframe fallback when that fails to load).
     return `<div class="cd-preview" data-embed-src="${htmlEscape(src)}" data-focus="${htmlEscape(focus)}">
-      <div class="ms-mount cd-mount" data-kind="${c.platform === "YouTube" ? "youtube" : "twitch"}"
+      <div class="ms-mount cd-mount" data-kind="${isYouTubePlatform(c.platform) ? "youtube" : "twitch"}"
            data-embed-base="${htmlEscape(src)}"></div>
     </div>`;
   }
@@ -6303,6 +6303,18 @@ function qualityPolicyFor(kind, path) {
 // Every controller is created through a swappable factory so e2e can inject
 // a fake and assert on lifecycle without loading a real vendor player.
 
+/// Is this platform YouTube, whichever way the API spelled it?
+///
+/// `/channels` serialises PlatformKind as "YouTube" while
+/// `/multistream/tiles` serialises multistream::Platform as "you_tube".
+/// Comparing against a single spelling sent YouTube streams to the Twitch
+/// controller, which handed a YouTube channel id to player.twitch.tv and
+/// produced "Failed to determine content classification" — a Twitch error,
+/// for a Twitch player, about a channel that was never Twitch's.
+function isYouTubePlatform(p) {
+  return String(p || "").toLowerCase().replace(/[_\s-]/g, "") === "youtube";
+}
+
 /// Stable identity for whatever a slot holds. Returns null for empty slots.
 function contentKeyOf(node) {
   if (!node) return null;
@@ -6714,6 +6726,43 @@ function makeYouTubeController(spec) {
   // than construct something that cannot work.
   if (!videoId) return makeIframeController(spec);
 
+  /// Swap this controller's guts for the plain iframe, in place.
+  ///
+  /// `spec.embedUrl` is the channel-live embed, which is a different (and
+  /// historically more forgiving) surface than addressing the video by id,
+  /// so this is a genuine second chance rather than a repeat of the same
+  /// request. Idempotent: a failing player can report more than once.
+  let fellBack = false;
+  const fallBackToIframe = () => {
+    if (fellBack) return;
+    fellBack = true;
+    let fb;
+    try {
+      if (player && typeof player.destroy === "function") player.destroy();
+    } catch (_) {
+      /* the node is replaced below regardless */
+    }
+    player = null;
+    ready = false;
+    fb = makeIframeController(spec);
+    const parent = controller.root.parentElement;
+    controller.root.replaceWith(fb.root);
+    controller.root = fb.root;
+    controller.setMuted = fb.setMuted;
+    controller.setVolume = fb.setVolume;
+    controller.repoint = fb.repoint;
+    controller.destroy = fb.destroy;
+    controller.mount = fb.mount;
+    controller.isReady = fb.isReady;
+    if (parent) fb.mount(parent);
+    // Re-apply the level the tile is supposed to be at.
+    try {
+      fb.setMuted(muted);
+    } catch (_) {
+      /* best effort */
+    }
+  };
+
   loadYouTubeApiOnce()
     .then((YT) => {
       if (!host.parentElement) return; // tile removed while loading
@@ -6737,20 +6786,28 @@ function makeYouTubeController(spec) {
               /* pre-ready races */
             }
           },
+          // Any player-side failure falls back to the plain channel-live
+          // iframe — the path used before this controller existed. The API
+          // is only worth having when it works; when it does not, playing
+          // the stream matters more than being able to set its volume.
+          onError: (e) => {
+            const codes = {
+              2: "invalid parameter",
+              5: "HTML5 player error",
+              100: "video not found",
+              101: "embedding disallowed by the owner",
+              150: "embedding disallowed by the owner",
+              153: "missing referer",
+            };
+            console.warn(
+              `[strivo] YouTube player error ${e && e.data} (${codes[e && e.data] || "unknown"}) — falling back to the iframe embed`,
+            );
+            fallBackToIframe();
+          },
         },
       });
     })
-    .catch(() => {
-      const fb = makeIframeController(spec);
-      host.replaceWith(fb.root);
-      player = null;
-      controller.root = fb.root;
-      controller.setMuted = fb.setMuted;
-      controller.setVolume = fb.setVolume;
-      controller.repoint = fb.repoint;
-      controller.destroy = fb.destroy;
-      controller.mount = fb.mount;
-    });
+    .catch(() => fallBackToIframe());
 
   const controller = {
     kind: "youtube",
@@ -8364,7 +8421,7 @@ function renderSlot(slot, path, streams) {
         </div>
         ${playing
           ? `<div class="ms-mount" data-content-key="s:${htmlEscape(s.stream_id)}"
-                  data-kind="${s.platform === "YouTube" ? "youtube" : "twitch"}"
+                  data-kind="${isYouTubePlatform(s.platform) ? "youtube" : "twitch"}"
                   data-path="${htmlEscape(path)}" data-playing="1"
                   ${s.video_id ? `data-video-id="${htmlEscape(s.video_id)}"` : ""}
                   data-embed-base="${htmlEscape(s.embed_url)}"></div>`

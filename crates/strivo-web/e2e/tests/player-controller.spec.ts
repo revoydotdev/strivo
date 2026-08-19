@@ -448,3 +448,62 @@ test("clicking a live channel replaces whatever was loaded", async ({ page }) =>
   // And an explicit "watch this" starts playing rather than sitting paused.
   await expect(page.locator(".fake-player")).toHaveCount(1);
 });
+
+// A YouTube player that fails at runtime must not strand the tile showing
+// Google's error text. The channel-live iframe is a different embed surface
+// from addressing the video by id, so falling back to it is a genuine second
+// chance — and it is what strivo used before the player API existed.
+test("a failing YouTube player falls back to the iframe", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("strivo-tour-done", "1");
+    // Stand in for the real SDK with one that always reports an error, so
+    // the fallback path is exercised without depending on Google.
+    (window as any).YT = {
+      Player: function (el: HTMLElement, opts: any) {
+        setTimeout(() => opts?.events?.onError?.({ data: 150 }), 0);
+        return { destroy() {}, mute() {}, unMute() {}, setVolume() {} };
+      },
+    };
+  });
+  // The SDK script must not be fetched: window.YT is already present.
+  await page.route("**/www.youtube.com/iframe_api*", (r) => r.abort());
+
+  await page.goto("/app#/watch");
+  await page.locator(".ms-slot-pick").first().selectOption("live:YouTube:UClive0000000000000000aa");
+  await page.locator(".ms-play").first().click();
+
+  // Ends up on a real iframe rather than a dead mount point.
+  const frame = page.locator(".ms-leaf iframe.ms-iframe");
+  await expect(frame).toHaveCount(1);
+  await expect(frame).toHaveAttribute("src", /youtube\.com\/embed\/live_stream/);
+});
+
+// The two APIs spell the platform differently — /channels says "YouTube",
+// /multistream/tiles says "you_tube" — and a single-spelling comparison sent
+// every YouTube stream to the Twitch controller, which handed a YouTube
+// channel id to player.twitch.tv.
+test("a YouTube stream is never routed to the Twitch player", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+  await page.route("**/www.youtube.com/iframe_api*", (r) => r.abort());
+  await page.goto("/app#/watch");
+
+  await page.locator(".ms-slot-pick").first().selectOption("live:YouTube:UClive0000000000000000aa");
+  await page.locator(".ms-play").first().click();
+
+  const mount = page.locator(".ms-leaf .ms-mount");
+  await expect(mount).toHaveAttribute("data-kind", "youtube");
+  // Whatever it falls back to, it must never be a Twitch player.
+  await expect(page.locator('.ms-leaf iframe[src*="player.twitch.tv"]')).toHaveCount(0);
+});
+
+test("a Twitch stream still routes to the Twitch player", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
+  await page.route("**/player.twitch.tv/js/embed/v1.js", (r) => r.abort());
+  await page.goto("/app#/watch");
+
+  await page.locator(".ms-slot-pick").first().selectOption("live:Twitch:twitch-live-1");
+  await page.locator(".ms-play").first().click();
+
+  await expect(page.locator(".ms-leaf .ms-mount")).toHaveAttribute("data-kind", "twitch");
+  await expect(page.locator('.ms-leaf iframe[src*="player.twitch.tv"]')).toHaveCount(1);
+});

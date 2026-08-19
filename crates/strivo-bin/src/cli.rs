@@ -23,9 +23,10 @@ pub struct Args {
 pub enum Command {
     /// Run background daemon (foreground, for systemd)
     Daemon,
-    /// Install and start systemd user service
+    /// Install and start as a background service: a systemd user service on
+    /// Linux/macOS, a Task Scheduler task (runs at sign-in) on Windows
     Enable,
-    /// Stop and remove systemd user service
+    /// Stop and remove the background service installed by `enable`
     Disable,
     /// Check if daemon is running
     Status,

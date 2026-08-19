@@ -247,6 +247,46 @@ async fn import_browser_cookies(
             .with_context(|| format!("secure {}", output.display()))?;
     }
 
+    #[cfg(windows)]
+    {
+        // Windows files inherit their parent directory's ACL — there is no
+        // chmod. `icacls` ships with every Windows install, so it is used
+        // in preference to pulling in the full Win32 ACL/security-descriptor
+        // API just to replicate `chmod 0600`: `/inheritance:r` strips the
+        // inherited ACEs (that's the world-readable gap), then
+        // `/grant:r <user>:F` re-grants access solely to the account
+        // running strivo, the closest equivalent to owner-only read/write.
+        //
+        // If this fails for any reason (icacls missing/blocked, unresolved
+        // identity), the file was already written by yt-dlp — warn loudly
+        // rather than silently leaving an exported session cookie readable
+        // by every account on the machine.
+        let user = std::env::var("USERDOMAIN")
+            .ok()
+            .filter(|d| !d.is_empty())
+            .zip(std::env::var("USERNAME").ok())
+            .map(|(domain, name)| format!("{domain}\\{name}"))
+            .or_else(|| std::env::var("USERNAME").ok());
+        let secured = match user {
+            Some(user) => std::process::Command::new("icacls")
+                .arg(&output)
+                .args(["/inheritance:r", "/grant:r", &format!("{user}:F")])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false),
+            None => false,
+        };
+        if !secured {
+            eprintln!(
+                "warning: could not restrict permissions on {}; the exported \
+                 session cookie may be readable by other accounts on this \
+                 machine. Move it to a private location or set its \
+                 permissions manually via File Properties > Security.",
+                output.display()
+            );
+        }
+    }
+
     match platform {
         CookiePlatform::Youtube => {
             let current = cfg.youtube.take();
@@ -681,6 +721,7 @@ async fn handle_doctor() -> Result<()> {
 
     let tools: &[(&str, &str)] = &[
         ("ffmpeg", "recording (required)"),
+        ("ffprobe", "multitrack stream inspection (required)"),
         ("mpv", "playback (required)"),
         ("streamlink", "Twitch stream resolution (required)"),
         ("yt-dlp", "YouTube/Patreon resolution (required)"),
@@ -831,6 +872,7 @@ fn handle_status() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 async fn handle_enable(config_path: Option<&std::path::Path>) -> Result<()> {
     let exe = std::env::current_exe()?;
     let config_arg = config_path
@@ -877,11 +919,13 @@ async fn handle_enable(config_path: Option<&std::path::Path>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn systemd_quote(value: &std::ffi::OsStr) -> String {
     let value = value.to_string_lossy();
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[cfg(unix)]
 async fn handle_disable() -> Result<()> {
     let status = std::process::Command::new("systemctl")
         .args(["--user", "disable", "--now", "strivo.service"])
@@ -904,6 +948,110 @@ async fn handle_disable() -> Result<()> {
     Ok(())
 }
 
+// Windows has no systemd-user-service concept. The closest equivalent that
+// doesn't require an elevated SCM install (Windows Services live in a
+// privileged, machine-wide registry and need `sc.exe create` run as
+// Administrator, which would make `strivo enable` silently fail or prompt
+// UAC for what is, on Linux/macOS, an unprivileged per-user action) is a
+// Task Scheduler task registered under `/sc onlogon`: it starts the daemon
+// automatically at user sign-in, same as the systemd `default.target` user
+// unit does, without requiring admin rights. It does not get systemd's
+// `Restart=on-failure` crash-recovery — Task Scheduler's failure-restart
+// policy is a machine-task-only feature — so a crashed daemon stays down
+// until the next sign-in. That gap is called out below rather than hidden.
+#[cfg(windows)]
+const WINDOWS_TASK_NAME: &str = "StriVo";
+
+/// Build the `/tr` (task run) command line for `schtasks /create`, quoting
+/// the exe path and optional `--config` value so paths with spaces survive
+/// Task Scheduler's own re-tokenizing of the string.
+#[cfg(windows)]
+fn windows_task_run_command(
+    exe: &std::path::Path,
+    config_path: Option<&std::path::Path>,
+) -> String {
+    let mut tr = format!("\"{}\" daemon", exe.display());
+    if let Some(path) = config_path {
+        tr.push_str(&format!(" --config \"{}\"", path.display()));
+    }
+    tr
+}
+
+#[cfg(windows)]
+async fn handle_enable(config_path: Option<&std::path::Path>) -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let tr = windows_task_run_command(&exe, config_path);
+
+    let status = std::process::Command::new("schtasks")
+        .args([
+            "/create",
+            "/tn",
+            WINDOWS_TASK_NAME,
+            "/tr",
+            &tr,
+            "/sc",
+            "onlogon",
+            "/rl",
+            "limited",
+            "/f",
+        ])
+        .status()
+        .context("failed to run schtasks (Task Scheduler unavailable?)")?;
+    if !status.success() {
+        anyhow::bail!("schtasks /create failed");
+    }
+
+    let status = std::process::Command::new("schtasks")
+        .args(["/run", "/tn", WINDOWS_TASK_NAME])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!(
+            "schtasks /run failed to start the daemon now (it will still start at next sign-in)"
+        );
+    }
+
+    println!("StriVo daemon registered as a Task Scheduler task and started");
+    println!(
+        "Note: unlike the systemd unit on Linux/macOS, this task does not \
+         auto-restart on crash — it (re)starts only at sign-in. Run \
+         `strivo daemon` directly for a supervised long-running session."
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn handle_disable() -> Result<()> {
+    let status = std::process::Command::new("schtasks")
+        .args(["/end", "/tn", WINDOWS_TASK_NAME])
+        .status();
+    if status.map(|s| !s.success()).unwrap_or(true) {
+        eprintln!("Warning: schtasks /end may have failed (task may not be running)");
+    }
+
+    let status = std::process::Command::new("schtasks")
+        .args(["/delete", "/tn", WINDOWS_TASK_NAME, "/f"])
+        .status()?;
+    if !status.success() {
+        eprintln!("Warning: schtasks /delete may have failed (task may not exist)");
+    }
+
+    println!("StriVo daemon disabled");
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn handle_enable(_config_path: Option<&std::path::Path>) -> Result<()> {
+    anyhow::bail!("`strivo enable` has no service-manager integration on this platform; run `strivo daemon` directly")
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn handle_disable() -> Result<()> {
+    anyhow::bail!(
+        "`strivo enable` has no service-manager integration on this platform; nothing to disable"
+    )
+}
+
+#[cfg(unix)]
 fn dirs_home() -> std::path::PathBuf {
     directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
@@ -1409,7 +1557,7 @@ fn register_first_party_plugins(registry: &mut plugin::registry::PluginRegistry)
     registry.register(Box::new(strivo_plugins::viewguard::ViewguardPlugin::new()));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -1423,5 +1571,31 @@ mod tests {
     fn systemd_quote_escapes_quotes_and_backslashes() {
         let quoted = systemd_quote(std::ffi::OsStr::new("/tmp/a\\b\"c"));
         assert_eq!(quoted, "\"/tmp/a\\\\b\\\"c\"");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn windows_task_run_command_quotes_exe_and_omits_config_when_absent() {
+        let cmd = windows_task_run_command(
+            std::path::Path::new(r"C:\Program Files\StriVo\strivo.exe"),
+            None,
+        );
+        assert_eq!(cmd, r#""C:\Program Files\StriVo\strivo.exe" daemon"#);
+    }
+
+    #[test]
+    fn windows_task_run_command_appends_quoted_config_path() {
+        let cmd = windows_task_run_command(
+            std::path::Path::new(r"C:\StriVo\strivo.exe"),
+            Some(std::path::Path::new(r"C:\Users\me\My Config\strivo.toml")),
+        );
+        assert_eq!(
+            cmd,
+            r#""C:\StriVo\strivo.exe" daemon --config "C:\Users\me\My Config\strivo.toml""#
+        );
     }
 }

@@ -4,17 +4,14 @@
 #![allow(clippy::too_many_arguments)]
 
 pub fn check_external_tools() {
+    // Resolve through the `which` crate rather than shelling out to the
+    // `which` binary: that binary does not exist on Windows, so the daemon
+    // reported every tool as missing there even when all of them were on
+    // PATH. The crate also honours %PATHEXT%, so `ffmpeg` resolves to
+    // `ffmpeg.exe`, and it saves three process spawns on every start.
     for tool in &["ffmpeg", "streamlink", "yt-dlp"] {
-        match std::process::Command::new("which")
-            .arg(tool)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            _ => {
-                eprintln!("Warning: '{tool}' not found in PATH. Some features may not work.");
-            }
+        if which::which(tool).is_err() {
+            eprintln!("Warning: '{tool}' not found in PATH. Some features may not work.");
         }
     }
 }

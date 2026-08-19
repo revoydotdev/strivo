@@ -743,10 +743,18 @@ async fn handle_doctor() -> Result<()> {
     }
     println!();
     if missing_required > 0 {
-        println!(
-            "{} required tool(s) missing. Install via: pacman -S ffmpeg mpv streamlink yt-dlp",
-            missing_required
-        );
+        // The hint has to match the machine it is printed on. It read
+        // "pacman -S ..." unconditionally, which is wrong on every platform
+        // except Arch and actively confusing on Windows and macOS.
+        let hint = if cfg!(target_os = "windows") {
+            "winget install Gyan.FFmpeg mpv.net yt-dlp.yt-dlp  (streamlink: pip install streamlink)"
+        } else if cfg!(target_os = "macos") {
+            "brew install ffmpeg mpv streamlink yt-dlp"
+        } else {
+            "your package manager, e.g. pacman -S ffmpeg mpv streamlink yt-dlp \
+             or apt install ffmpeg mpv streamlink yt-dlp"
+        };
+        println!("{missing_required} required tool(s) missing. Install via: {hint}");
         std::process::exit(1);
     } else {
         println!("All required tools present.");

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -322,6 +323,15 @@ impl YtDlpProcess {
 
         cmd.arg(url);
 
+        #[cfg(windows)]
+        {
+            // Own console process group so `stop()` can target yt-dlp alone
+            // with CTRL_BREAK_EVENT, mirroring `ffmpeg.rs::build()`. See
+            // `stop()` below for why CTRL_BREAK is used here too.
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        }
+
         cmd.stdin(std::process::Stdio::null());
         // Capture stdout so the `[download]` progress lines can be parsed
         // (was Stdio::null() — file-size polling is fine for live captures
@@ -377,7 +387,14 @@ impl YtDlpProcess {
         })
     }
 
-    /// Gracefully stop by sending SIGINT, then wait
+    /// Gracefully stop the download. Same rationale and CTRL_BREAK_EVENT
+    /// choice on Windows as `FfmpegProcess::stop()` in `ffmpeg.rs` — see
+    /// that doc comment for the full writeup of the three options
+    /// considered. The short version specific to yt-dlp: writing `q` to
+    /// stdin is ffmpeg's interactive quit, not yt-dlp's — yt-dlp has no
+    /// equivalent stdin command, so that approach was never viable here,
+    /// which is one of the reasons CTRL_BREAK_EVENT (works for both) won
+    /// out over a per-program answer.
     pub async fn stop(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
@@ -385,24 +402,38 @@ impl YtDlpProcess {
                 unsafe {
                     libc::kill(pid as i32, libc::SIGINT);
                 }
-                match tokio::time::timeout(std::time::Duration::from_secs(15), self.child.wait())
-                    .await
-                {
-                    Ok(Ok(_)) => return Ok(()),
-                    Ok(Err(e)) => {
-                        tracing::warn!("yt-dlp wait error: {e}");
-                    }
-                    Err(_) => {
-                        tracing::warn!("yt-dlp didn't stop in 15s, killing");
-                        self.child.kill().await.ok();
-                    }
+                if wait_for_graceful_exit(&mut self.child, Duration::from_secs(15)).await {
+                    return Ok(());
                 }
+                tracing::warn!("yt-dlp didn't stop in 15s, killing");
+                self.child.kill().await.ok();
             }
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            self.child.kill().await.ok();
+            if let Some(pid) = self.child.id() {
+                // SAFETY: see `FfmpegProcess::stop()` — same call, same
+                // invariants (valid live pid, own process group from
+                // `with_options()`'s CREATE_NEW_PROCESS_GROUP).
+                let ok = unsafe {
+                    windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent(
+                        windows_sys::Win32::System::Console::CTRL_BREAK_EVENT,
+                        pid,
+                    )
+                };
+                if ok == 0 {
+                    tracing::warn!(
+                        "GenerateConsoleCtrlEvent failed: {:?}",
+                        std::io::Error::last_os_error()
+                    );
+                } else if wait_for_graceful_exit(&mut self.child, Duration::from_secs(15)).await {
+                    return Ok(());
+                } else {
+                    tracing::warn!("yt-dlp didn't stop in 15s, killing");
+                }
+                self.child.kill().await.ok();
+            }
         }
 
         Ok(())
@@ -435,6 +466,16 @@ impl YtDlpProcess {
     }
 }
 
+/// Wait for `child` to exit within `timeout` after a graceful-stop signal
+/// has already been sent. Returns `true` if it exited in time, `false` if
+/// the timeout elapsed — the caller escalates to a hard kill in that case.
+/// Mirrors `ffmpeg.rs::wait_for_graceful_exit` (kept as a small duplicate
+/// rather than a shared module, since it's two call sites); see that
+/// file's doc comment for why this specific piece is what's unit-tested.
+async fn wait_for_graceful_exit(child: &mut Child, timeout: Duration) -> bool {
+    matches!(tokio::time::timeout(timeout, child.wait()).await, Ok(Ok(_)))
+}
+
 impl Drop for YtDlpProcess {
     fn drop(&mut self) {
         match self.child.try_wait() {
@@ -449,6 +490,33 @@ impl Drop for YtDlpProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn graceful_exit_within_timeout_is_detected() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 0.05"])
+            .spawn()
+            .expect("spawn sh");
+        let exited = wait_for_graceful_exit(&mut child, Duration::from_secs(2)).await;
+        assert!(
+            exited,
+            "child that exits quickly should be seen as graceful"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_exit_past_timeout_is_reported_for_escalation() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("spawn sh");
+        let exited = wait_for_graceful_exit(&mut child, Duration::from_millis(50)).await;
+        assert!(
+            !exited,
+            "child still running past the deadline must be reported so the caller kills it"
+        );
+        let _ = child.kill().await;
+    }
 
     #[test]
     fn parse_full_line() {

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -154,6 +155,18 @@ impl FfmpegBuilder {
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::piped());
 
+        #[cfg(windows)]
+        {
+            // Spawn ffmpeg into its own console process group so `stop()` can
+            // target it alone with CTRL_BREAK_EVENT — without this flag the
+            // event would also reach our own process (and any other child
+            // sharing our console) since Windows console signals are
+            // group-wide, not per-process. See `stop()` below for why
+            // CTRL_BREAK is used instead of stdin `q` or TerminateProcess.
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        }
+
         let mut child = cmd.spawn()?;
 
         // Drain stderr asynchronously: a piped+un-drained stderr fills
@@ -185,7 +198,32 @@ impl FfmpegBuilder {
 }
 
 impl FfmpegProcess {
-    /// Gracefully stop recording by sending SIGINT (ffmpeg writes trailer)
+    /// Gracefully stop recording so ffmpeg writes the Matroska/MP4 trailer
+    /// and cue index before exiting. Without a clean shutdown the output
+    /// file is truncated: it may still play, but seeking and duration are
+    /// broken.
+    ///
+    /// Unix: SIGINT, which ffmpeg's own signal handler treats identically to
+    /// interactive `q`/Ctrl-C — clean stop.
+    ///
+    /// Windows: `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`, targeted at the
+    /// process group `build()` placed ffmpeg into. Two other options were
+    /// considered and rejected:
+    ///   - Writing `q` to ffmpeg's stdin: this is ffmpeg's documented
+    ///     interactive quit and would work, but stdin is wired to
+    ///     `Stdio::null()` (see `build()` — the comment there already
+    ///     explains stdin is closed specifically so signals are used
+    ///     instead). It also doesn't generalize to yt-dlp, which has no
+    ///     interactive stdin quit command, and this file's escalation logic
+    ///     is intentionally kept identical in shape to `ytdlp.rs`'s so the
+    ///     two are easy to audit together.
+    ///   - `TerminateProcess` (`Child::kill()`): this is the bug being
+    ///     fixed — no trailer is written, every Windows recording would be
+    ///     truncated.
+    ///
+    /// CTRL_BREAK_EVENT is what's left: it is delivered like a signal (no
+    /// stdin needed) and ffmpeg's console handler treats it as a shutdown
+    /// request, same as SIGINT on Unix.
     pub async fn stop(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
@@ -194,25 +232,42 @@ impl FfmpegProcess {
                 unsafe {
                     libc::kill(pid as i32, libc::SIGINT);
                 }
-                // Wait for ffmpeg to finish writing
-                match tokio::time::timeout(std::time::Duration::from_secs(10), self.child.wait())
-                    .await
-                {
-                    Ok(Ok(_)) => return Ok(()),
-                    Ok(Err(e)) => {
-                        tracing::warn!("ffmpeg wait error: {e}");
-                    }
-                    Err(_) => {
-                        tracing::warn!("ffmpeg didn't stop in 10s, killing");
-                        self.child.kill().await.ok();
-                    }
+                if wait_for_graceful_exit(&mut self.child, Duration::from_secs(10)).await {
+                    return Ok(());
                 }
+                tracing::warn!("ffmpeg didn't stop in 10s, killing");
+                self.child.kill().await.ok();
             }
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            self.child.kill().await.ok();
+            if let Some(pid) = self.child.id() {
+                // SAFETY: FFI call into the Windows API with a valid,
+                // still-live process id (we hold `self.child`); no pointers
+                // or shared state are involved. `GenerateConsoleCtrlEvent`
+                // is documented to signal every process attached to the
+                // given console process group — `build()` puts ffmpeg in
+                // its own group via CREATE_NEW_PROCESS_GROUP so this
+                // doesn't also hit our own process.
+                let ok = unsafe {
+                    windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent(
+                        windows_sys::Win32::System::Console::CTRL_BREAK_EVENT,
+                        pid,
+                    )
+                };
+                if ok == 0 {
+                    tracing::warn!(
+                        "GenerateConsoleCtrlEvent failed: {:?}",
+                        std::io::Error::last_os_error()
+                    );
+                } else if wait_for_graceful_exit(&mut self.child, Duration::from_secs(10)).await {
+                    return Ok(());
+                } else {
+                    tracing::warn!("ffmpeg didn't stop in 10s, killing");
+                }
+                self.child.kill().await.ok();
+            }
         }
 
         Ok(())
@@ -243,6 +298,17 @@ impl FfmpegProcess {
     }
 }
 
+/// Wait for `child` to exit within `timeout` after a graceful-stop signal
+/// has already been sent. Returns `true` if it exited in time, `false` if
+/// the timeout elapsed — the caller is responsible for escalating to a hard
+/// kill in that case. This is the escalation logic shared by the Unix and
+/// Windows arms of `stop()` (and mirrored in `ytdlp.rs`), pulled out so it
+/// can be exercised directly with a real child process on any platform,
+/// independent of which OS-specific signal was used to ask for the exit.
+async fn wait_for_graceful_exit(child: &mut Child, timeout: Duration) -> bool {
+    matches!(tokio::time::timeout(timeout, child.wait()).await, Ok(Ok(_)))
+}
+
 impl Drop for FfmpegProcess {
     fn drop(&mut self) {
         // If process already exited, nothing to do
@@ -253,5 +319,46 @@ impl Drop for FfmpegProcess {
                 let _ = self.child.start_kill();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These exercise `wait_for_graceful_exit` — the timeout/escalation
+    // decision shared by the Unix and Windows arms of `stop()` — against a
+    // real child process rather than a mock. What differs between
+    // platforms is only *which signal* asks the child to exit (SIGINT vs
+    // CTRL_BREAK_EVENT, tested by the human on the Windows VM per the
+    // handoff notes); the timeout/escalate decision itself is the same
+    // code path on every platform and is what's under test here.
+
+    #[tokio::test]
+    async fn graceful_exit_within_timeout_is_detected() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 0.05"])
+            .spawn()
+            .expect("spawn sh");
+        let exited = wait_for_graceful_exit(&mut child, Duration::from_secs(2)).await;
+        assert!(
+            exited,
+            "child that exits quickly should be seen as graceful"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_exit_past_timeout_is_reported_for_escalation() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("spawn sh");
+        let exited = wait_for_graceful_exit(&mut child, Duration::from_millis(50)).await;
+        assert!(
+            !exited,
+            "child still running past the deadline must be reported so the caller kills it"
+        );
+        // Clean up so the test doesn't leak a sleeping process.
+        let _ = child.kill().await;
     }
 }

@@ -5498,3 +5498,18 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   color: var(--muted);
   border-color: var(--border);
 }
+
+/* Per-tile level. Kept narrow and low-contrast so a wall of nine reads as
+   video with controls, not as a mixing desk. */
+.ms-vol {
+  width: 54px;
+  height: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  vertical-align: middle;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+.ms-leaf:hover .ms-vol,
+.ms-vol:hover,
+.ms-vol:focus-visible { opacity: 1; }

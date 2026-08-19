@@ -73,30 +73,67 @@ test("buildEmbedUrl omits playback params when the caller manages them", async (
   expect(urls.youtube).toContain("autoplay=0");
 });
 
-// ── Mute policy ─────────────────────────────────────────────────────────
+// ── Tile audio ──────────────────────────────────────────────────────────
 //
-// Mute-all is the default and one soloed path is the single audible tile.
-// This was computed inline in three places, which is how they could drift.
-test("computeMuted implements mute-all with a single audible solo", async ({ page }) => {
+// Volume per tile is the source of truth and muted means zero. Before this,
+// "which tile is focused" and "which tile is audible" were one flag, so the
+// only reachable states were one-audible or all-silent — you could not run a
+// main stream loud with a second quietly underneath.
+test("each tile carries its own level, and muted means zero", async ({ page }) => {
+  await installFakePlayers(page);
   await page.goto("/app#/watch");
 
-  const verdicts = await page.evaluate(() => {
-    const h = (window as any).__strivoTestHooks;
-    const prev = h.playerState.soloPath;
-    h.playerState.soloPath = "";
-    const allMuted = [h.computeMuted(""), h.computeMuted("a"), h.computeMuted("b.a")];
-    h.playerState.soloPath = "a";
-    const soloed = [h.computeMuted("a"), h.computeMuted("b.a"), h.computeMuted("")];
-    h.playerState.soloPath = prev;
-    return { allMuted, soloed };
-  });
+  await page.locator(".ms-preset-summary").click();
+  await page.locator('.ms-preset-opt[data-preset="split-screen"]').click();
+  const pickers = page.locator(".ms-slot-pick");
+  await pickers.first().selectOption("live:Twitch:twitch-live-1");
+  await expect(pickers).toHaveCount(1);
+  await pickers.first().selectOption("live:YouTube:UClive0000000000000000aa");
+  await page.locator("#watch-playall").click();
+  await expect(page.locator(".fake-player")).toHaveCount(2);
 
-  // No solo → everything muted, including the root path "".
-  expect(verdicts.allMuted).toEqual([true, true, true]);
-  // Solo "a" → only "a" is audible.
-  expect(verdicts.soloed).toEqual([false, true, true]);
+  // A wall opens silent — starting one that makes noise is hostile.
+  const sliders = page.locator(".ms-vol");
+  await expect(sliders).toHaveCount(2);
+  expect(await sliders.first().inputValue()).toBe("0");
+
+  // Two tiles at genuinely different levels is the whole point.
+  await sliders.nth(0).fill("80");
+  await sliders.nth(1).fill("25");
+
+  const vols = await page.evaluate(() => (window as any).__strivoTestHooks.playerState.volumes);
+  const levels = Object.values(vols).sort();
+  expect(levels).toEqual([0.25, 0.8]);
 });
 
+test("solo raises one tile and silences the rest", async ({ page }) => {
+  await installFakePlayers(page);
+  await page.goto("/app#/watch");
+
+  await page.locator(".ms-preset-summary").click();
+  await page.locator('.ms-preset-opt[data-preset="split-screen"]').click();
+  const pickers = page.locator(".ms-slot-pick");
+  await pickers.first().selectOption("live:Twitch:twitch-live-1");
+  await expect(pickers).toHaveCount(1);
+  await pickers.first().selectOption("live:YouTube:UClive0000000000000000aa");
+  await page.locator("#watch-playall").click();
+
+  // Bring both up, then solo the first.
+  const sliders = page.locator(".ms-vol");
+  await sliders.nth(0).fill("40");
+  await sliders.nth(1).fill("60");
+  await page.locator(".ms-solo").first().click();
+
+  const vols = await page.evaluate(() => (window as any).__strivoTestHooks.playerState.volumes);
+  expect(Object.values(vols).sort()).toEqual([0, 1]);
+
+  // Muted is derived, never stored separately.
+  const muted = await page.evaluate(() => {
+    const h = (window as any).__strivoTestHooks;
+    return [h.computeMuted(""), h.computeMuted("a"), h.computeMuted("b")];
+  });
+  expect(muted.filter(Boolean).length).toBeGreaterThan(0);
+});
 
 // ── Controller lifecycle ────────────────────────────────────────────────
 //

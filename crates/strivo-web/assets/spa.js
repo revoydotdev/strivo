@@ -6115,13 +6115,74 @@ async function renderViewer() {
 let _watchRefreshTimer = null;
 
 // Append the muted-state parameter Twitch / YouTube embeds use.
-/// Should the tile at `path` be muted?
-///
-/// Mute-all is the default; a soloed path is the single audible tile. This
-/// was computed inline in three places (renderSlot, tryPatchPlayerStage,
-/// and the play-button handler), which is how they could drift.
+// ── Tile audio ───────────────────────────────────────────────────────
+//
+// Volume per tile is the source of truth; muted simply means zero. That
+// split matters because "which tile is focused" and "which tile is audible"
+// were the same flag before, so you could not run a main stream loud with a
+// second quietly underneath — the only reachable states were one-audible or
+// all-silent.
+//
+// `playerState.soloPath` survives as the FOCUS marker (it steers the chat
+// rail and the focus-aware quality policy); it no longer decides audio.
+const PLAYER_VOLUME_KEY = "strivo:tile-volumes";
+function loadTileVolumes() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PLAYER_VOLUME_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch (_) {
+    return {};
+  }
+}
+function saveTileVolumes() {
+  try {
+    localStorage.setItem(PLAYER_VOLUME_KEY, JSON.stringify(playerState.volumes || {}));
+  } catch (_) {
+    /* private mode */
+  }
+}
+/// Everything starts silent: a wall that begins making noise on open is
+/// hostile, and it matches the previous mute-all default.
+function tileVolumeForKey(key) {
+  if (!key) return 0;
+  const v = (playerState.volumes || {})[key];
+  return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+}
+function tileVolumeAt(path) {
+  return tileVolumeForKey(contentKeyOf(getNodeAt(playerState.layout, path)));
+}
+function setTileVolumeAt(path, vol) {
+  const key = contentKeyOf(getNodeAt(playerState.layout, path));
+  if (!key) return;
+  playerState.volumes = { ...(playerState.volumes || {}), [key]: Math.max(0, Math.min(1, vol)) };
+  saveTileVolumes();
+}
+/// Solo is a preset, not a mode: raise this tile, silence the rest. The
+/// viewer is free to nudge any of them afterwards.
+function soloTileAt(path) {
+  const next = {};
+  walkLayout(playerState.layout, (node, p) => {
+    const key = contentKeyOf(node);
+    if (key) next[key] = p === path ? 1 : 0;
+  });
+  playerState.volumes = next;
+  playerState.soloPath = path;
+  saveTileVolumes();
+}
+function muteAllTiles() {
+  const next = {};
+  walkLayout(playerState.layout, (node) => {
+    const key = contentKeyOf(node);
+    if (key) next[key] = 0;
+  });
+  playerState.volumes = next;
+  playerState.soloPath = "";
+  saveTileVolumes();
+}
+
+/// Muted is derived, never stored: a tile is muted exactly when silent.
 function computeMuted(path) {
-  return playerState.soloPath ? playerState.soloPath !== path : true;
+  return tileVolumeAt(path) === 0;
 }
 
 // Single source of truth for a live tile's iframe src.
@@ -6572,7 +6633,9 @@ function reconcileControllers(stage) {
       ctl.repoint({ embedUrl: mount.dataset.embedBase || "", src: mount.dataset.src || "" });
     }
     ctl.mount(mount);
-    ctl.setMuted(muted);
+    const vol = tileVolumeForKey(key);
+    ctl.setMuted(vol === 0);
+    ctl.setVolume(vol);
     ctl.setQuality(qualityPolicyFor(mount.dataset.kind || "", path));
   }
 }
@@ -6753,6 +6816,7 @@ const playerState = {
   // contentKey -> PlayerController. Outlives every repaint; see the
   // "Player controllers" block for why ownership is not in the DOM.
   controllers: new Map(),
+  volumes: loadTileVolumes(), // contentKey -> 0..1; muted is volume === 0
 };
 
 // Path strings are dot-joined sequences of "a"/"b" descending the tree.
@@ -7285,14 +7349,38 @@ function wireTileHandlers(tile, stage, watch, streams) {
   // Solo / unsolo / fs / remove buttons.
   tile.querySelector(".ms-solo")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    playerState.soloPath = tile.dataset.path || "";
+    soloTileAt(tile.dataset.path || "");
     paintPlayerStage(watch, streams);
   });
   tile.querySelector(".ms-unsolo")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    playerState.soloPath = "";
+    muteAllTiles();
     paintPlayerStage(watch, streams);
   });
+  // Per-tile level. Applied straight to the controller so dragging the
+  // slider is audible immediately rather than after a repaint.
+  const vol = tile.querySelector(".ms-vol");
+  if (vol) {
+    vol.addEventListener("click", (e) => e.stopPropagation());
+    vol.addEventListener("input", () => {
+      const path = tile.dataset.path || "";
+      const v = Number(vol.value) / 100;
+      setTileVolumeAt(path, v);
+      const key = contentKeyOf(getNodeAt(playerState.layout, path));
+      const ctl = key && playerState.controllers.get(key);
+      if (ctl) {
+        try {
+          ctl.setVolume(v);
+          ctl.setMuted(v === 0);
+        } catch (_) {
+          /* advisory */
+        }
+      }
+      // Raising a tile focuses it, so chat and focus-aware quality follow
+      // what you are actually listening to.
+      if (v > 0) playerState.soloPath = path;
+    });
+  }
   tile.querySelector(".ms-fs")?.addEventListener("click", (e) => {
     e.stopPropagation();
     try {
@@ -7983,14 +8071,22 @@ function renderSlot(slot, path, streams) {
         </div>`;
     }
     const soloBtn = muted
-      ? `<button class="watch-tile-btn ms-solo" title="Unmute (solo this tile)" data-path="${htmlEscape(path)}">🔇</button>`
-      : `<button class="watch-tile-btn ms-unsolo" title="Mute (mute-all)" data-path="${htmlEscape(path)}">🔊</button>`;
+      ? `<button class="watch-tile-btn ms-solo" title="Solo — raise this tile, silence the rest" data-path="${htmlEscape(path)}">🔇</button>`
+      : `<button class="watch-tile-btn ms-unsolo" title="Silence every tile" data-path="${htmlEscape(path)}">🔊</button>`;
+    // Per-tile level, so two streams can run at different volumes rather
+    // than only one-audible or all-silent.
+    const volPct = Math.round(tileVolumeAt(path) * 100);
+    const volCtl = `<input class="ms-vol" type="range" min="0" max="100" step="1"
+             value="${volPct}" data-path="${htmlEscape(path)}"
+             aria-label="Volume for ${htmlEscape(s.channel_name)}"
+             title="Volume — ${volPct}%">`;
     return `
       <div class="ms-leaf" data-path="${htmlEscape(path)}" data-stream-id="${htmlEscape(s.stream_id)}">
         <div class="watch-tile-head">
           <span class="watch-tile-name">${htmlEscape(s.channel_name)}</span>
           <span class="watch-tile-meta">
             <span class="watch-tile-plat pg-cap-hint" data-watch-meta="plat">${htmlEscape(s.platform)}${s.viewer_count != null ? ` · <span data-watch-meta="viewers">${formatCount(s.viewer_count)}</span>` : ""}</span>
+            ${volCtl}
             ${soloBtn}
             <button class="watch-tile-btn ms-fs" title="Fullscreen this tile">⛶</button>
             <button class="watch-tile-btn ms-remove" title="Remove from layout" data-path="${htmlEscape(path)}">✕</button>

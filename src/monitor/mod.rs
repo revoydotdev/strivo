@@ -529,7 +529,8 @@ impl ChannelMonitor {
 }
 
 /// Free-space lookup for the disk-budget enforcement gate. statvfs on
-/// Unix; None on lookup failure so the gate falls through to "allow".
+/// Unix; GetDiskFreeSpaceExW on Windows; None on lookup failure so the
+/// gate falls through to "allow".
 #[cfg(unix)]
 fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
@@ -541,7 +542,70 @@ fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
     }
     Some((buf.f_bavail as u64) * (buf.f_frsize as u64))
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let mut wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
+    wide.push(0);
+
+    // `lpFreeBytesAvailable` is the bytes free on the disk that are
+    // available to the user associated with the calling thread — the
+    // Windows analogue of statvfs's `f_bavail` (blocks available to an
+    // unprivileged user), as opposed to `lpTotalNumberOfFreeBytes`
+    // which mirrors `f_bfree` and can include space reserved for
+    // higher-privileged callers (e.g. per-user disk quotas).
+    let mut free_bytes_available_to_caller: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut total_free_bytes: u64 = 0;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes_available_to_caller,
+            &mut total_bytes,
+            &mut total_free_bytes,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    Some(free_bytes_available_to_caller)
+}
+#[cfg(not(any(unix, windows)))]
 fn free_space_bytes(_dir: &std::path::Path) -> Option<u64> {
     None
+}
+
+#[cfg(any(unix, windows))]
+#[cfg(test)]
+mod free_space_tests {
+    use super::free_space_bytes;
+
+    #[test]
+    fn free_space_bytes_reports_nonzero_for_an_existing_dir() {
+        // Exercises the real statvfs/GetDiskFreeSpaceExW call against the
+        // system temp dir — the disk-budget gate falls through to "allow"
+        // on `None`, so any regression that quietly turns a real lookup
+        // into a `None` (wrong path encoding, wrong struct field, wrong
+        // Win32 out-param) must fail this rather than only showing up as
+        // an unbounded recording on a live machine.
+        let dir = std::env::temp_dir();
+        let free = free_space_bytes(&dir);
+        assert!(
+            free.is_some(),
+            "expected a free-space reading for {}",
+            dir.display()
+        );
+        // Zero would mean the disk is full or the call silently returned
+        // a zeroed-out struct; neither should happen for the temp dir on
+        // a working dev/CI machine.
+        assert!(free.unwrap() > 0);
+    }
+
+    #[test]
+    fn free_space_bytes_returns_none_for_a_nonexistent_path() {
+        let bogus = std::path::Path::new("/this/path/does/not/exist/strivo-test-9f3c2");
+        assert_eq!(free_space_bytes(bogus), None);
+    }
 }

@@ -81,11 +81,17 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 libloading = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-# Process-liveness probe (OpenProcess/GetExitCodeProcess) and the
-# ERROR_PIPE_BUSY retry check for the named-pipe IPC transport.
-windows-sys = { version = "0.60", features = [
+# Windows-only syscalls used across the port:
+#   Win32_System_Threading      - OpenProcess/GetExitCodeProcess (process liveness)
+#   Win32_Storage_FileSystem    - GetDiskFreeSpaceExW (disk-budget gate)
+#   Win32_System_Console        - GenerateConsoleCtrlEvent (graceful child stop)
+# One version, union of features, so the three port workstreams share a single
+# copy of the crate rather than pulling in three.
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
 ] }
 
 [dev-dependencies]

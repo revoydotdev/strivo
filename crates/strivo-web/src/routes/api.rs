@@ -792,7 +792,38 @@ fn statvfs_bytes(p: &std::path::Path) -> Option<(u64, u64)> {
     Some((total, avail))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn statvfs_bytes(p: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let mut wide: Vec<u16> = p.as_os_str().encode_wide().collect();
+    wide.push(0);
+
+    // `lpFreeBytesAvailable` (bytes free on the disk that are available
+    // to the calling user) is the Windows analogue of statvfs's
+    // `f_bavail`, matching the `avail` half of this function's
+    // (total, avail) contract — not `lpTotalNumberOfFreeBytes`, which
+    // mirrors `f_bfree` and can include quota-reserved space the caller
+    // cannot actually use.
+    let mut free_bytes_available_to_caller: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut total_free_bytes: u64 = 0;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes_available_to_caller,
+            &mut total_bytes,
+            &mut total_free_bytes,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    Some((total_bytes, free_bytes_available_to_caller))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn statvfs_bytes(_p: &std::path::Path) -> Option<(u64, u64)> {
     None
 }
@@ -3339,6 +3370,29 @@ mod performance_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statvfs_bytes_reports_a_sane_total_and_avail_for_an_existing_dir() {
+        // Exercises the real statvfs/GetDiskFreeSpaceExW call behind the
+        // `/api/v1/*` storage-gauge endpoints. A regression that silently
+        // turns this into `None` (wrong path encoding, wrong out-param)
+        // shows up here as `unwrap_or((0, 0))` — not as a compile error —
+        // so it needs a real assertion, not just "it compiles".
+        let dir = std::env::temp_dir();
+        let (total, avail) = statvfs_bytes(&dir)
+            .unwrap_or_else(|| panic!("expected fs stats for {}", dir.display()));
+        assert!(total > 0, "total bytes should be nonzero");
+        assert!(
+            avail <= total,
+            "avail ({avail}) should not exceed total ({total})"
+        );
+    }
+
+    #[test]
+    fn statvfs_bytes_returns_none_for_a_nonexistent_path() {
+        let bogus = std::path::Path::new("/this/path/does/not/exist/strivo-test-9f3c2");
+        assert_eq!(statvfs_bytes(bogus), None);
+    }
 
     #[test]
     fn backup_name_rejects_traversal() {

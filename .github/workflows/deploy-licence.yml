@@ -1,0 +1,64 @@
+name: Deploy licence backend
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'licence-backend/**'
+      - '.github/workflows/deploy-licence.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-licence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: typecheck, test, deploy
+    runs-on: [self-hosted, linux, x64, arch]
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: licence-backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Node toolchain
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+
+      # Full `npm ci` (scripts enabled): @cloudflare/vitest-pool-workers
+      # needs its postinstall to fetch the workerd/esbuild binaries the
+      # test suite runs against. `npm run typecheck`/`npm test` below
+      # will fail loudly if that didn't happen — that's the intended
+      # failure mode, not a silent skip.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Fail loudly and early if the deploy credential is missing, rather
+      # than letting `wrangler deploy` fail deep in its own error output
+      # (or, worse, silently no-op on a workflow_dispatch with no token).
+      - name: Require CLOUDFLARE_API_TOKEN
+        env:
+          TOKEN_SET: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN repo secret is not set — cannot deploy licence-backend." >&2
+            echo "See docs/LICENCE-BACKEND-DEPLOY.md for how to create and store it." >&2
+            exit 1
+          fi
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy

@@ -109,6 +109,29 @@ and the plugin loader contract.
 - **streamlink** — Twitch stream resolution
 - **yt-dlp** — YouTube / Patreon stream resolution
 
+### Docker
+
+```bash
+git clone https://github.com/revoydotdev/strivo.git
+cd strivo
+docker compose up -d
+```
+
+Or run the published image directly:
+
+```bash
+docker run -d --name strivo \
+  -p 8181:8181 \
+  -v strivo_recordings:/recordings \
+  -v strivo_config:/config \
+  ghcr.io/revoydotdev/strivo:latest
+```
+
+Open `http://localhost:8181`. See [docs/DOCKER.md](./docs/DOCKER.md) for
+what's in the image, the daemon/web-UI process model, the healthcheck, and
+— important if you use Twitch/YouTube/Patreon OAuth — how credential
+storage works without a desktop OS keyring.
+
 ### Arch Linux (AUR)
 
 ```bash
@@ -357,6 +380,7 @@ awareness of concrete plugins; the binary pulls both together.
 
 - [docs/FIRST-RUN.md](./docs/FIRST-RUN.md) — log paths, common failure modes
 - [docs/DAEMON.md](./docs/DAEMON.md) — daemon lifecycle, systemd integration, socket location
+- [docs/DOCKER.md](./docs/DOCKER.md) — running strivo in Docker: image contents, process model, credentials
 - [docs/PLUGIN-MANIFEST.md](./docs/PLUGIN-MANIFEST.md) — plugin trait, ABI caveats
 - [docs/PLUGIN-TEMPLATE.md](./docs/PLUGIN-TEMPLATE.md) — minimal plugin skeleton
 - [docs/SETTINGS-COVERAGE.md](./docs/SETTINGS-COVERAGE.md) — which config fields are surfaced in the settings UI

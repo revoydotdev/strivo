@@ -1,0 +1,14 @@
+target/
+node_modules/
+.git/
+.github/
+.claude/
+docs/
+*.md
+!README.md
+recordings/
+*.mkv
+*.mp4
+config.toml
+config.toml.example
+.env

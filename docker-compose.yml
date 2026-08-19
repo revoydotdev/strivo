@@ -1,0 +1,43 @@
+# docker compose up -d
+#
+# One container, two supervised processes (`strivo daemon` + `strivo serve
+# --bind 0.0.0.0:8181`, see strivo-run.sh) sharing the daemon Unix socket
+# under the /config volume. See the Dockerfile's "PROCESS MODEL" comment
+# for why this beats both the single-process default entry point (binds
+# 127.0.0.1 only) and a two-container split (needs a shared socket volume
+# for no real benefit here).
+services:
+  strivo:
+    build:
+      context: .
+      # args:
+      #   EDITION: creator   # uncomment for the Creator Edition build
+    image: strivo:latest
+    container_name: strivo
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    volumes:
+      # Recorded streams. Bind-mount a real disk path in production so the
+      # library survives `docker compose down -v`.
+      - recordings:/recordings
+      # config.toml, the plugin manifests, the OS-keyring Secret Service
+      # file, the recording journal/jobs DB, and logs — see
+      # docs/FIRST-RUN.md "Where state lives" for what lives under here.
+      - config:/config
+    # `strivo status` always exits 0 regardless of daemon state (see
+    # docs/DOCKER.md "Healthcheck" for why), so the healthcheck instead
+    # hits the real liveness+readiness endpoint (crates/strivo-web/src/routes/api.rs
+    # `GET /api/v1/health`), which round-trips the daemon IPC socket, opens
+    # the jobs DB, and checks free disk on recording_dir. Unauthenticated
+    # by design (see that file's comment) so no API key is needed here.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8181/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  recordings:
+  config:

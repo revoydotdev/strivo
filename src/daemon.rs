@@ -194,6 +194,15 @@ pub async fn run_with_plugins(host: DaemonPluginHost) -> Result<()> {
     run_with_plugins_at(host, None).await
 }
 
+/// Canonicalise for identity comparison, falling back to the path as given.
+///
+/// Two records for the same recording can spell its path differently (one
+/// from a directory walk, one from the journal), so comparing the raw
+/// strings would miss the match that matters.
+fn canonical_or_self(p: &std::path::Path) -> std::path::PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
 /// Run the daemon with the configuration selected by the process entrypoint.
 pub async fn run_with_plugins_at(
     host: DaemonPluginHost,
@@ -694,20 +703,24 @@ pub async fn run_with_plugins_at(
         patreon_creators: Vec::new(),
         patreon_posts: Vec::new(),
     };
-    for job in scanned {
-        state.recordings.insert(job.id, job);
-    }
-
-    // Replay recordings from the journal so the TUI sees jobs that
-    // started before a crash (with their original IDs, channel links,
-    // and last-known progress). Disk-scan above is the backstop for
-    // jobs that pre-date the journal; journal wins on conflict because
-    // it preserves the original Uuid and metadata.
+    // Replay recordings from the journal FIRST so the disk scan can be
+    // deduped against it. Journal entries carry the original Uuid, channel
+    // link, and progress; the scan is only a backstop for files that
+    // pre-date the journal.
+    //
+    // Dedupe is by output PATH, not by id. The scan derives a deterministic
+    // v5 uuid from the file path while the journal holds the v4 uuid minted
+    // when the capture started, so the same recording arrives under two
+    // different ids and a keyed-by-id insert never collides — which is how
+    // one file ended up listed twice in the library.
+    let mut journal_paths: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
     if let Some(ref db) = persist_db {
         match db.load_recording_jobs().await {
             Ok(jobs) => {
                 let n = jobs.len();
                 for job in jobs {
+                    journal_paths.insert(canonical_or_self(&job.output_path));
                     state.recordings.insert(job.id, job);
                 }
                 if n > 0 {
@@ -716,6 +729,19 @@ pub async fn run_with_plugins_at(
             }
             Err(e) => tracing::warn!("daemon: failed to load recording journal: {e}"),
         }
+    }
+
+    // Now fold in the disk scan, skipping anything the journal already owns.
+    let mut shadowed = 0usize;
+    for job in scanned {
+        if journal_paths.contains(&canonical_or_self(&job.output_path)) {
+            shadowed += 1;
+            continue;
+        }
+        state.recordings.insert(job.id, job);
+    }
+    if shadowed > 0 {
+        tracing::debug!("daemon: {shadowed} scanned file(s) already known to the journal");
     }
 
     let shared_recordings = Arc::new(tokio::sync::RwLock::new(state.recordings.clone()));

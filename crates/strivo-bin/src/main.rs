@@ -94,6 +94,7 @@ async fn handle_command(cmd: &Command, config_path: Option<&std::path::Path>) ->
         }
         Command::Chapter { file, every } => handle_chapter(file, *every),
         Command::Import { source } => handle_import(source, config_path),
+        Command::Repair { what } => handle_repair(what, config_path).await,
         Command::Merge { output, sources } => handle_merge(output, sources),
         Command::Thumbnail { file, seek } => handle_thumbnail(file, *seek).await,
         Command::TwitchRewind {
@@ -536,6 +537,156 @@ fn handle_import(source: &cli::ImportSource, config_path: Option<&std::path::Pat
     }
     cfg.save(config_path).context("save config")?;
     println!("Applied: {added} added, {skipped} already present.");
+    Ok(())
+}
+
+/// `strivo repair containers` — reconcile extensions with real containers.
+///
+/// Reports by default. Renaming somebody's media library is exactly the kind
+/// of thing that should never happen as a side effect, so mutation is behind
+/// --apply.
+async fn handle_repair(
+    what: &cli::RepairKind,
+    config_path: Option<&std::path::Path>,
+) -> Result<()> {
+    let cli::RepairKind::Containers { apply } = what;
+    let cfg = config::AppConfig::load(config_path).context("load config")?;
+    let dir = &cfg.recording_dir;
+    anyhow::ensure!(dir.is_dir(), "recording dir not found: {}", dir.display());
+
+    // Journal entries are keyed by path, so a rename has to update them or
+    // the library ends up pointing at files that no longer exist.
+    let db_path = config::AppConfig::data_dir().join("jobs.db");
+    let db = strivo_core::recording::persist::PersistDb::open(&db_path).ok();
+    let mut jobs_by_path: std::collections::HashMap<std::path::PathBuf, _> =
+        std::collections::HashMap::new();
+    if let Some(ref db) = db {
+        if let Ok(jobs) = db.load_recording_jobs().await {
+            for j in jobs {
+                jobs_by_path.insert(
+                    j.output_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| j.output_path.clone()),
+                    j,
+                );
+            }
+        }
+    }
+
+    use strivo_core::recording::container::{self, Container};
+    let mut ok = 0usize;
+    let mut renamed = 0usize;
+    let mut remuxed = 0usize;
+    let mut unknown = 0usize;
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    entries.sort();
+
+    for path in entries {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(ext.as_str(), "mkv" | "mp4" | "webm" | "ts" | "mp3") {
+            continue;
+        }
+        // `.orig.*` files are the pre-remux safety copies a previous
+        // normalisation kept deliberately. They are backups of a known-bad
+        // container; renaming or remuxing them defeats the point of keeping
+        // them, so they are left exactly as they are.
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.ends_with(".orig") {
+            continue;
+        }
+        let Some(actual) = container::detect_file(&path) else {
+            unknown += 1;
+            println!(
+                "  ?  {}  (unrecognised container — left alone)",
+                path.display()
+            );
+            continue;
+        };
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        // MPEG-TS is the case that actually breaks playback: browsers refuse
+        // it regardless of extension or Content-Type. Remux rather than
+        // rename so the file becomes playable, not merely honestly named.
+        if actual == Container::MpegTs {
+            remuxed += 1;
+            if *apply {
+                match strivo_core::recording::remux::normalise_container(&path).await {
+                    Ok(_) => println!("  ✓ remuxed MPEG-TS -> Matroska: {name}"),
+                    Err(e) => println!("  ! remux failed for {name}: {e}"),
+                }
+            } else {
+                println!("  → would remux MPEG-TS -> Matroska: {name}");
+            }
+            continue;
+        }
+
+        let Some(target) = container::corrected_path(&path) else {
+            ok += 1;
+            continue;
+        };
+        renamed += 1;
+        let target_name = target
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if !*apply {
+            println!(
+                "  → would rename (really {:?}): {name}  ->  {target_name}",
+                actual
+            );
+            continue;
+        }
+        match container::normalize_extension(&path) {
+            Ok(Some(new_path)) => {
+                println!("  ✓ renamed: {name}  ->  {target_name}");
+                // Keep the journal pointing at the file.
+                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if let (Some(ref db), Some(job)) = (&db, jobs_by_path.get(&key)) {
+                    let mut job = job.clone();
+                    job.output_path = new_path;
+                    // Mirrors how the daemon persists a recording: the payload
+                    // is the serialised job, so the corrected path rides along.
+                    let persisted = strivo_core::recording::persist::PersistedJob {
+                        id: job.id.to_string(),
+                        kind: "Recording".to_string(),
+                        payload: serde_json::to_string(&job).unwrap_or_default(),
+                        state: format!("{:?}", job.state).to_lowercase(),
+                        attempts: 0,
+                        last_error: job.error.clone(),
+                        episode_dir: job.output_path.parent().map(|p| p.to_path_buf()),
+                    };
+                    if let Err(e) = db.upsert_job(&persisted).await {
+                        println!("    ! journal not updated for {target_name}: {e}");
+                    }
+                }
+            }
+            Ok(None) => println!("  · skipped {name} (target name already taken)"),
+            Err(e) => println!("  ! rename failed for {name}: {e}"),
+        }
+    }
+
+    println!();
+    println!(
+        "{} correct · {} to rename · {} to remux · {} unrecognised",
+        ok, renamed, remuxed, unknown
+    );
+    if !*apply && (renamed > 0 || remuxed > 0) {
+        println!("Nothing was modified. Re-run with --apply to make these changes.");
+    }
     Ok(())
 }
 

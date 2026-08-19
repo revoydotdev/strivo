@@ -101,6 +101,13 @@ pub enum Command {
         #[command(subcommand)]
         source: ImportSource,
     },
+    /// Repair library inconsistencies. Reports by default; only touches
+    /// files when you pass --apply.
+    Repair {
+        #[command(subcommand)]
+        what: RepairKind,
+    },
+
     /// Merge resume segments back into a single MKV file (M5.5).
     /// Sources are appended in the order given; the first owns the
     /// timeline. Requires mkvtoolnix.
@@ -184,6 +191,24 @@ pub enum SetupAction {
         /// Replace an existing managed cookie file
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RepairKind {
+    /// Reconcile each recording's extension with the container actually on
+    /// disk.
+    ///
+    /// Recording names come from a template ending in a fixed extension,
+    /// but the container is whatever ffmpeg or yt-dlp produced — so a
+    /// library accumulates MP4, MPEG-TS and even MP3 wearing `.mkv`.
+    /// MPEG-TS is the one that actually breaks: browsers refuse it whatever
+    /// the extension says, so it is remuxed rather than renamed.
+    Containers {
+        /// Actually modify files and the journal. Without this the command
+        /// only reports what it would do.
+        #[arg(long)]
+        apply: bool,
     },
 }
 

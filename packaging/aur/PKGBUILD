@@ -12,7 +12,7 @@ makedepends=('cargo')
 provides=('strivo')
 conflicts=('strivo-git' 'strivo-bin')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('bd40a31c2b65300b53e376f7679bddaed5fd8ae01622e24420cc8b5a697e61c7')
 
 prepare() {
   cd "$pkgname-$pkgver"

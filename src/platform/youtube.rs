@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -848,11 +849,29 @@ impl Platform for YouTubePlatform {
         // ids already confirmed dead (ended/VOD) so quota is spent only on new
         // or still-live videos. This is the fix for the 10k/day exhaustion:
         // previously this made one videos.list call PER channel, every poll.
+        // RSS feeds are fetched concurrently (bounded) instead of one at a
+        // time: each is an independent network round-trip to
+        // youtube.com/feeds, so a sequential loop paid the full per-channel
+        // latency N times over — a poll cycle over 50 followed channels at
+        // ~200ms/request serialized to ~10s before this. Capped at 10
+        // in-flight requests so a large subscription list doesn't open
+        // dozens of simultaneous sockets to youtube.com at once.
+        const RSS_CONCURRENCY: usize = 10;
+        let rss_results: Vec<(String, Result<Vec<String>>)> =
+            futures_util::stream::iter(channel_ids.iter().cloned())
+                .map(|channel_id| async move {
+                    let result = self.check_rss_for_live(&channel_id).await;
+                    (channel_id, result)
+                })
+                .buffer_unordered(RSS_CONCURRENCY)
+                .collect()
+                .await;
+
         let mut candidates: Vec<String> = Vec::new();
         {
             let dead = self.dead_videos.read().await;
-            for channel_id in channel_ids {
-                match self.check_rss_for_live(channel_id).await {
+            for (channel_id, result) in rss_results {
+                match result {
                     Ok(video_ids) => {
                         for v in video_ids {
                             if !dead.contains(&v) {

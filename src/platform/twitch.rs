@@ -115,6 +115,11 @@ pub struct TwitchPlatform {
     /// Set during device code flow for the TUI to display
     pub pending_device_code: Arc<RwLock<Option<DeviceCodeInfo>>>,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<DaemonEvent>>,
+    /// Cached `channels/followed` result. The follow list changes rarely, so
+    /// paginating it in full on every monitor poll (default every 60s) is
+    /// wasted work — same rationale as YouTube's `subs_cache`. Twitch's
+    /// quota is generous compared to YouTube's, so the TTL is shorter.
+    channels_cache: Arc<RwLock<Option<(std::time::Instant, Vec<ChannelEntry>)>>>,
 }
 
 #[allow(dead_code)]
@@ -135,6 +140,7 @@ impl TwitchPlatform {
             user_id: Arc::new(RwLock::new(None)),
             pending_device_code: Arc::new(RwLock::new(None)),
             event_tx: None,
+            channels_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -482,6 +488,20 @@ impl Platform for TwitchPlatform {
     }
 
     async fn fetch_followed_channels(&self) -> Result<Vec<ChannelEntry>> {
+        // Follows change rarely — serve from cache for 10m instead of
+        // re-paginating the full list every poll (default poll interval is
+        // 60s, so this cuts ~10x off the "fetch followed channels" API
+        // traffic for the common case of a stable follow list).
+        const FOLLOWS_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+        {
+            let guard = self.channels_cache.read().await;
+            if let Some((at, cached)) = guard.as_ref() {
+                if at.elapsed() < FOLLOWS_TTL {
+                    return Ok(cached.clone());
+                }
+            }
+        }
+
         let user_id = self.user_id.read().await.clone();
         let Some(user_id) = user_id else {
             bail!("User ID not available - not authenticated");
@@ -521,6 +541,7 @@ impl Platform for TwitchPlatform {
             }
         }
 
+        *self.channels_cache.write().await = Some((std::time::Instant::now(), channels.clone()));
         Ok(channels)
     }
 

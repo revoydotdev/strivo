@@ -637,8 +637,22 @@ pub async fn run_with_plugins_at(
         });
     }
 
-    // Scan existing recordings
-    let scanned = crate::recording::scan::scan_existing_recordings(&config);
+    // Scan existing recordings. This walks the recording directory and
+    // stats/canonicalizes every matched file — on a large library (the
+    // documented use case) that's thousands of blocking syscalls run
+    // directly on this async task before, which stalled the tokio runtime
+    // worker thread (and everything else scheduled on it: IPC, HTTP,
+    // channel polling) for however long the scan took. Moved to
+    // spawn_blocking so it runs on the blocking thread pool instead.
+    let scan_config = config.clone();
+    let scanned = tokio::task::spawn_blocking(move || {
+        crate::recording::scan::scan_existing_recordings(&scan_config)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!("recording scan task panicked: {e}");
+        Vec::new()
+    });
 
     // Initialize daemon state
     let mut state = DaemonState {

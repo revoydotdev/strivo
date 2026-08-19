@@ -84,6 +84,11 @@ struct VideoSnippet {
     #[serde(rename = "categoryId")]
     category_id: Option<String>,
     thumbnails: Option<Thumbnails>,
+    /// "live", "upcoming", or "none". This is the authoritative liveness
+    /// signal; `liveStreamingDetails.activeLiveChatId` is not, because a
+    /// stream with chat disabled is live without one.
+    #[serde(rename = "liveBroadcastContent")]
+    live_broadcast_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,10 +106,23 @@ struct ThumbnailInfo {
 struct LiveStreamingDetails {
     #[serde(rename = "actualStartTime")]
     actual_start_time: Option<String>,
+    /// Set once the broadcast has finished. Its absence alongside a start
+    /// time is the corroborating signal that a stream is still running.
+    #[serde(rename = "actualEndTime")]
+    actual_end_time: Option<String>,
     #[serde(rename = "concurrentViewers")]
     concurrent_viewers: Option<String>,
-    #[serde(rename = "activeLiveChatId")]
-    active_live_chat_id: Option<String>,
+}
+
+/// Broadcast state of a candidate video.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Liveness {
+    /// Streaming right now.
+    Live,
+    /// Scheduled but not started. Must stay eligible for re-checking.
+    Upcoming,
+    /// A finished broadcast or an ordinary upload. Safe to stop re-checking.
+    Settled,
 }
 
 #[allow(dead_code)]
@@ -365,10 +383,39 @@ impl YouTubePlatform {
 
     /// Check if specific videos are currently live (1 API unit per call)
     /// Returns `(video_id, ChannelEntry)` for each currently-live video.
-    async fn check_videos_live(&self, video_ids: &[String]) -> Result<Vec<(String, ChannelEntry)>> {
-        if video_ids.is_empty() {
-            return Ok(Vec::new());
+    /// How the API describes a video's broadcast state.
+    fn classify(
+        broadcast: Option<&str>,
+        actual_start: Option<&str>,
+        actual_end: Option<&str>,
+    ) -> Liveness {
+        // `liveBroadcastContent` is authoritative when present.
+        match broadcast {
+            Some("live") => return Liveness::Live,
+            Some("upcoming") => return Liveness::Upcoming,
+            _ => {}
         }
+        // Corroborating fallback for responses that omit the snippet: a
+        // broadcast that started and has not ended is still running.
+        if actual_start.is_some() && actual_end.is_none() {
+            return Liveness::Live;
+        }
+        Liveness::Settled
+    }
+
+    /// Returns the currently-live entries, plus the ids that are settled —
+    /// finished broadcasts and ordinary uploads that will never become live.
+    /// Scheduled ("upcoming") streams are in neither list: they are not live
+    /// yet and must stay eligible for re-checking.
+    #[allow(clippy::type_complexity)]
+    async fn check_videos_live(
+        &self,
+        video_ids: &[String],
+    ) -> Result<(Vec<(String, ChannelEntry)>, Vec<String>)> {
+        if video_ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut settled: Vec<String> = Vec::new();
 
         let ids = video_ids.join(",");
         let url = format!("{YOUTUBE_API_URL}/videos?part=snippet,liveStreamingDetails&id={ids}");
@@ -380,15 +427,28 @@ impl YouTubePlatform {
             for item in items {
                 let video_id = item.id.clone().unwrap_or_default();
                 let details = item.live_streaming_details.as_ref();
-                // A video is live if it has liveStreamingDetails with an activeLiveChatId
-                // or has a start time but no end time
-                let is_live = details.is_some_and(|d| d.active_live_chat_id.is_some());
-
-                if !is_live {
-                    continue;
-                }
-
                 let snippet = item.snippet.as_ref();
+
+                // `liveBroadcastContent` is the authoritative signal. The old
+                // test — "has an activeLiveChatId" — silently missed every
+                // stream with live chat disabled; measured against three
+                // confirmed-live streams it caught one of three.
+                // "upcoming" is a scheduled stream that has not started. It
+                // is not live now, but it must NOT be written off: it becomes
+                // live later, and caching it as dead is what made scheduled
+                // streams permanently undetectable.
+                match Self::classify(
+                    snippet.and_then(|s| s.live_broadcast_content.as_deref()),
+                    details.and_then(|d| d.actual_start_time.as_deref()),
+                    details.and_then(|d| d.actual_end_time.as_deref()),
+                ) {
+                    Liveness::Live => {}
+                    Liveness::Upcoming => continue,
+                    Liveness::Settled => {
+                        settled.push(video_id);
+                        continue;
+                    }
+                }
                 let started_at = details
                     .and_then(|d| d.actual_start_time.as_deref())
                     .and_then(|s| {
@@ -433,7 +493,22 @@ impl YouTubePlatform {
             }
         }
 
-        Ok(live_channels)
+        // Ids the API did not return at all are deleted, private, or bogus.
+        // They will never go live, so they count as settled — without this the
+        // quota guard would re-check them forever.
+        let seen: std::collections::HashSet<&str> = live_channels
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .chain(settled.iter().map(|s| s.as_str()))
+            .collect();
+        let missing: Vec<String> = video_ids
+            .iter()
+            .filter(|id| !seen.contains(id.as_str()))
+            .cloned()
+            .collect();
+        settled.extend(missing);
+
+        Ok((live_channels, settled))
     }
 
     /// Enumerate uploads via the channel's auto-generated `UU…` playlist.
@@ -796,28 +871,27 @@ impl Platform for YouTubePlatform {
         }
 
         let mut all_live = Vec::new();
-        let mut live_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut settled_ids: Vec<String> = Vec::new();
         for chunk in candidates.chunks(50) {
             match self.check_videos_live(chunk).await {
-                Ok(pairs) => {
-                    for (vid, entry) in pairs {
-                        live_ids.insert(vid);
+                Ok((pairs, settled)) => {
+                    for (_vid, entry) in pairs {
                         all_live.push(entry);
                     }
+                    settled_ids.extend(settled);
                 }
                 Err(e) => tracing::warn!("youtube: videos.list live check failed: {e}"),
             }
         }
 
-        // Anything we checked that isn't live is an ended stream / VOD — cache
-        // it so we never spend quota re-checking it. (Live ids stay uncached so
-        // we keep re-checking them to detect when they end.)
+        // Cache only ids the API settled: finished broadcasts, plain uploads,
+        // and videos it no longer serves. Scheduled ("upcoming") streams are
+        // deliberately left out — caching those was what made a stream that
+        // was announced before it started permanently undetectable.
         {
             let mut dead = self.dead_videos.write().await;
-            for id in &candidates {
-                if !live_ids.contains(id) {
-                    dead.insert(id.clone());
-                }
+            for id in settled_ids {
+                dead.insert(id);
             }
             if dead.len() > 20_000 {
                 dead.clear(); // bound memory; warms back up via RSS
@@ -895,5 +969,72 @@ mod tests {
             .count();
         let uploads = vods.iter().filter(|v| v.kind == VodKind::Upload).count();
         assert_eq!(streams + uploads, vods.len());
+    }
+}
+
+#[cfg(test)]
+mod live_detection_tests {
+    use super::*;
+
+    /// Regression: the previous test was `activeLiveChatId.is_some()`, which
+    /// misses any live stream with chat disabled. These three cases are real
+    /// API responses captured from confirmed-live broadcasts — Lofi Girl had
+    /// a chat id, Sky News and NASA ISS did not, and all three were live.
+    #[test]
+    fn live_streams_are_detected_with_or_without_live_chat() {
+        // Lofi Girl: chat enabled.
+        assert_eq!(
+            YouTubePlatform::classify(Some("live"), Some("2026-08-19T00:00:00Z"), None),
+            Liveness::Live
+        );
+        // Sky News / NASA ISS: chat disabled, still unambiguously live.
+        assert_eq!(
+            YouTubePlatform::classify(Some("live"), None, None),
+            Liveness::Live
+        );
+    }
+
+    /// A scheduled stream must never be written off, or it stays invisible
+    /// once it actually starts.
+    #[test]
+    fn upcoming_streams_are_not_settled() {
+        assert_eq!(
+            YouTubePlatform::classify(Some("upcoming"), None, None),
+            Liveness::Upcoming
+        );
+    }
+
+    #[test]
+    fn finished_broadcasts_and_uploads_are_settled() {
+        // Ended broadcast: has both a start and an end time.
+        assert_eq!(
+            YouTubePlatform::classify(
+                Some("none"),
+                Some("2022-07-12T15:59:30Z"),
+                Some("2026-05-20T02:11:23Z")
+            ),
+            Liveness::Settled
+        );
+        // Ordinary upload: no streaming details at all.
+        assert_eq!(YouTubePlatform::classify(Some("none"), None, None), Liveness::Settled);
+    }
+
+    /// If the snippet is missing, fall back to the streaming details rather
+    /// than defaulting a running broadcast to "settled".
+    #[test]
+    fn missing_snippet_falls_back_to_start_and_end_times() {
+        assert_eq!(
+            YouTubePlatform::classify(None, Some("2026-08-19T00:00:00Z"), None),
+            Liveness::Live
+        );
+        assert_eq!(
+            YouTubePlatform::classify(
+                None,
+                Some("2026-08-19T00:00:00Z"),
+                Some("2026-08-19T02:00:00Z")
+            ),
+            Liveness::Settled
+        );
+        assert_eq!(YouTubePlatform::classify(None, None, None), Liveness::Settled);
     }
 }

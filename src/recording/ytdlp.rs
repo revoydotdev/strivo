@@ -325,11 +325,12 @@ impl YtDlpProcess {
 
         #[cfg(windows)]
         {
-            // Own console process group so `stop()` can target yt-dlp alone
-            // with CTRL_BREAK_EVENT, mirroring `ffmpeg.rs::build()`. See
-            // `stop()` below for why CTRL_BREAK is used here too.
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+            // Give `stop()` a way to reach yt-dlp with CTRL_BREAK_EVENT
+            // whether we're an interactive `strivo daemon` session or a
+            // headless service with no console — see
+            // `ffmpeg::win::creation_flags_for_spawn` (shared with
+            // `ffmpeg.rs`, which has the same requirement).
+            cmd.creation_flags(crate::recording::ffmpeg::win::creation_flags_for_spawn());
         }
 
         cmd.stdin(std::process::Stdio::null());
@@ -387,14 +388,14 @@ impl YtDlpProcess {
         })
     }
 
-    /// Gracefully stop the download. Same rationale and CTRL_BREAK_EVENT
-    /// choice on Windows as `FfmpegProcess::stop()` in `ffmpeg.rs` — see
-    /// that doc comment for the full writeup of the three options
-    /// considered. The short version specific to yt-dlp: writing `q` to
-    /// stdin is ffmpeg's interactive quit, not yt-dlp's — yt-dlp has no
-    /// equivalent stdin command, so that approach was never viable here,
-    /// which is one of the reasons CTRL_BREAK_EVENT (works for both) won
-    /// out over a per-program answer.
+    /// Gracefully stop the download. Unix: SIGINT, as in `ffmpeg.rs`.
+    /// Windows: `ffmpeg::win::send_ctrl_break` — yt-dlp has no interactive
+    /// stdin quit command (that's ffmpeg's `q`, not yt-dlp's), so
+    /// CTRL_BREAK_EVENT is the only graceful path here, and it has to
+    /// work from a console-less headless service, not just from a
+    /// `strivo daemon` terminal session. See `ffmpeg.rs::win` for why the
+    /// naive direct call doesn't and what makes it work anyway, and
+    /// `FfmpegProcess::stop()` for the sibling three-step escalation.
     pub async fn stop(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
@@ -413,26 +414,28 @@ impl YtDlpProcess {
         #[cfg(windows)]
         {
             if let Some(pid) = self.child.id() {
-                // SAFETY: see `FfmpegProcess::stop()` — same call, same
-                // invariants (valid live pid, own process group from
-                // `with_options()`'s CREATE_NEW_PROCESS_GROUP).
-                let ok = unsafe {
-                    windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent(
-                        windows_sys::Win32::System::Console::CTRL_BREAK_EVENT,
-                        pid,
-                    )
-                };
-                if ok == 0 {
-                    tracing::warn!(
-                        "GenerateConsoleCtrlEvent failed: {:?}",
-                        std::io::Error::last_os_error()
-                    );
-                } else if wait_for_graceful_exit(&mut self.child, Duration::from_secs(15)).await {
-                    return Ok(());
-                } else {
-                    tracing::warn!("yt-dlp didn't stop in 15s, killing");
+                match crate::recording::ffmpeg::win::send_ctrl_break(pid) {
+                    Ok(()) => {
+                        if wait_for_graceful_exit(&mut self.child, Duration::from_secs(15)).await {
+                            return Ok(());
+                        }
+                        tracing::error!(
+                            "yt-dlp did not exit after CTRL_BREAK; forcing kill — \
+                             the recording is left truncated/incomplete"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "CTRL_BREAK_EVENT delivery to yt-dlp failed ({e}); forcing kill — \
+                             the recording is left truncated/incomplete"
+                        );
+                    }
                 }
                 self.child.kill().await.ok();
+                anyhow::bail!(
+                    "yt-dlp did not shut down gracefully and was force-killed; \
+                     its recording is left truncated/incomplete"
+                );
             }
         }
 

@@ -10,10 +10,138 @@ use crate::config::ResolvedFormat;
 /// How many trailing stderr lines to keep for diagnostics.
 const STDERR_TAIL_LINES: usize = 40;
 
+/// Windows console-signal plumbing shared by this file and `ytdlp.rs`
+/// (`crate::recording::ffmpeg::win::…`). Isolated here because it is the
+/// one part of the Windows port with a real, documented sharp edge: see
+/// `send_ctrl_break`.
+#[cfg(windows)]
+pub(crate) mod win {
+    use std::sync::Mutex;
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, GetConsoleWindow, CTRL_BREAK_EVENT,
+    };
+
+    /// Serializes the "borrow a console" dance in `send_ctrl_break`.
+    /// Console attachment is per-*process* state, not per-child: if two
+    /// recordings are stopped at the same moment on a headless daemon,
+    /// unsynchronized `FreeConsole`/`AttachConsole` calls could race and
+    /// misdeliver CTRL_BREAK to the wrong child, or fail to attach at
+    /// all. Held only across the synchronous FFI calls below, never
+    /// across an `.await`.
+    static CONSOLE_ATTACH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// `CREATE_NEW_CONSOLE`: give the child its own console instead of
+    /// inheriting ours.
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    /// `CREATE_NEW_PROCESS_GROUP`: child becomes the root of its own
+    /// process group, so `GenerateConsoleCtrlEvent` can target it
+    /// without also hitting us. Windows ignores this flag when combined
+    /// with `CREATE_NEW_CONSOLE` (a new console already implies a new
+    /// group), so the two flags below are mutually exclusive by
+    /// documented behavior, not by choice.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    /// Whether the calling process currently has a console. A Windows
+    /// service (what `strivo enable` installs — see `daemon.rs`) starts
+    /// with none; `strivo daemon` run from an interactive terminal has
+    /// one for its whole lifetime. This is checked once at spawn time
+    /// (`creation_flags_for_spawn`) and again at stop time
+    /// (`send_ctrl_break`) — both checks observe the same whole-process,
+    /// unchanging fact for the life of the daemon, so it is safe to ask
+    /// twice instead of threading a flag through `FfmpegProcess`/
+    /// `YtDlpProcess`.
+    fn has_console() -> bool {
+        // SAFETY: no arguments, no output buffer — just reads the
+        // calling process's console handle.
+        !unsafe { GetConsoleWindow() }.is_null()
+    }
+
+    /// Creation flags to spawn ffmpeg/yt-dlp with, so `send_ctrl_break`
+    /// can reach them later:
+    ///   - We have a console (dev-mode, run from a terminal): let the
+    ///     child inherit it (`CREATE_NEW_PROCESS_GROUP` only) — we
+    ///     already share a console with it, so `GenerateConsoleCtrlEvent`
+    ///     can be called directly at stop time.
+    ///   - We have none (the real deployment target — a headless
+    ///     service): give the child its own console
+    ///     (`CREATE_NEW_CONSOLE`) so there is one to attach to. See
+    ///     `send_ctrl_break`.
+    pub(crate) fn creation_flags_for_spawn() -> u32 {
+        if has_console() {
+            CREATE_NEW_PROCESS_GROUP
+        } else {
+            CREATE_NEW_CONSOLE
+        }
+    }
+
+    /// Send CTRL_BREAK to the console process group rooted at `pid`
+    /// (`pid` doubles as the group id — see `creation_flags_for_spawn`).
+    ///
+    /// `GenerateConsoleCtrlEvent` only reaches processes that share the
+    /// *calling* process's console (Microsoft Learn,
+    /// "GenerateConsoleCtrlEvent function": "Only those processes in the
+    /// group that share the same console as the calling process receive
+    /// the signal"). A headless service has no console at all, so a
+    /// direct call fails outright with no way to retry your way out of
+    /// it — that was the gap in the first version of this fix: it looked
+    /// correct because it was tested from a `strivo daemon` terminal
+    /// session, where a console happens to already be shared.
+    ///
+    /// When we have no console of our own, we borrow the child's for the
+    /// duration of one call: `AttachConsole(pid)`, deliver the event,
+    /// `FreeConsole()` to give it back immediately after. We are the
+    /// child's *parent*, not a member of its process group (the group is
+    /// "all processes that are descendants of the root process"), so we
+    /// never receive the event ourselves by attaching to its console.
+    pub(crate) fn send_ctrl_break(pid: u32) -> std::io::Result<()> {
+        let ok = if has_console() {
+            // SAFETY: pid is a live child pid we hold via `Child`; no
+            // pointers or shared mutable state cross this call.
+            unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) }
+        } else {
+            let _guard = CONSOLE_ATTACH_LOCK.lock().unwrap();
+            // SAFETY: serialized by `CONSOLE_ATTACH_LOCK` above so only
+            // one thread in this process ever holds a borrowed console
+            // attachment at a time; `pid` is a live child pid.
+            unsafe {
+                FreeConsole();
+                let attached = AttachConsole(pid);
+                let sent = if attached != 0 {
+                    GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)
+                } else {
+                    0
+                };
+                // Always give the console back, even on a failed attach
+                // (a no-op FreeConsole is harmless) or failed send, so we
+                // never leave ourselves wrongly attached to a child's
+                // console.
+                FreeConsole();
+                if attached == 0 {
+                    0
+                } else {
+                    sent
+                }
+            }
+        };
+        if ok == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 pub struct FfmpegProcess {
     child: Child,
     pub output_path: PathBuf,
     stderr_tail: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// ffmpeg's stdin, piped so `stop()` can write `q` (its documented
+    /// interactive quit) on Windows — the one graceful-stop path that
+    /// needs no console at all. Unix uses SIGINT instead and keeps stdin
+    /// closed (`Stdio::null()`), unchanged from before this file grew a
+    /// Windows arm.
+    #[cfg(windows)]
+    stdin: Option<tokio::process::ChildStdin>,
 }
 
 pub struct FfmpegBuilder {
@@ -150,24 +278,29 @@ impl FfmpegBuilder {
 
         cmd.arg(&self.output_path);
 
-        // Don't inherit stdin so we can send signals
+        // Unix: stdin is unused (SIGINT does the job), so keep it closed
+        // exactly as before. Windows: piped, so `stop()` can write `q` —
+        // see the `stdin` field doc on `FfmpegProcess`.
+        #[cfg(not(windows))]
         cmd.stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::piped());
 
         #[cfg(windows)]
         {
-            // Spawn ffmpeg into its own console process group so `stop()` can
-            // target it alone with CTRL_BREAK_EVENT — without this flag the
-            // event would also reach our own process (and any other child
-            // sharing our console) since Windows console signals are
-            // group-wide, not per-process. See `stop()` below for why
-            // CTRL_BREAK is used instead of stdin `q` or TerminateProcess.
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+            // Give `stop()` a way to reach ffmpeg with CTRL_BREAK_EVENT
+            // regardless of whether we're an interactive `strivo daemon`
+            // session or a headless service with no console of our own —
+            // see `win::creation_flags_for_spawn`.
+            cmd.creation_flags(win::creation_flags_for_spawn());
         }
 
         let mut child = cmd.spawn()?;
+
+        #[cfg(windows)]
+        let stdin = child.stdin.take();
 
         // Drain stderr asynchronously: a piped+un-drained stderr fills
         // the kernel pipe buffer and stalls ffmpeg. Also keep the last
@@ -193,6 +326,8 @@ impl FfmpegBuilder {
             child,
             output_path: self.output_path,
             stderr_tail,
+            #[cfg(windows)]
+            stdin,
         })
     }
 }
@@ -206,24 +341,26 @@ impl FfmpegProcess {
     /// Unix: SIGINT, which ffmpeg's own signal handler treats identically to
     /// interactive `q`/Ctrl-C — clean stop.
     ///
-    /// Windows: `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`, targeted at the
-    /// process group `build()` placed ffmpeg into. Two other options were
-    /// considered and rejected:
-    ///   - Writing `q` to ffmpeg's stdin: this is ffmpeg's documented
-    ///     interactive quit and would work, but stdin is wired to
-    ///     `Stdio::null()` (see `build()` — the comment there already
-    ///     explains stdin is closed specifically so signals are used
-    ///     instead). It also doesn't generalize to yt-dlp, which has no
-    ///     interactive stdin quit command, and this file's escalation logic
-    ///     is intentionally kept identical in shape to `ytdlp.rs`'s so the
-    ///     two are easy to audit together.
-    ///   - `TerminateProcess` (`Child::kill()`): this is the bug being
-    ///     fixed — no trailer is written, every Windows recording would be
-    ///     truncated.
+    /// Windows, in order:
+    ///   1. Write `q` to ffmpeg's piped stdin — its documented interactive
+    ///      quit. Needs no console at all, so it works the same whether
+    ///      we're an interactive `strivo daemon` session or (the primary
+    ///      deployment) a headless Windows service with no console. Tried
+    ///      first for exactly that reason.
+    ///   2. `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)` as a fallback —
+    ///      see `win::send_ctrl_break` for how this is made to work from a
+    ///      console-less service too, which the first version of this fix
+    ///      got wrong (it only worked from a terminal session, where a
+    ///      console happens to already be shared with the child).
+    ///   3. `TerminateProcess` (`Child::kill()`) as the last resort. This
+    ///      is the bug being fixed — no trailer is written, the file is
+    ///      truncated — so reaching it is logged as an error, not a warning:
+    ///      an operator needs to know a recording came out damaged.
     ///
-    /// CTRL_BREAK_EVENT is what's left: it is delivered like a signal (no
-    /// stdin needed) and ffmpeg's console handler treats it as a shutdown
-    /// request, same as SIGINT on Unix.
+    /// `q` only covers ffmpeg — yt-dlp has no equivalent interactive stdin
+    /// command, hence step 2 still has to exist and still has to work
+    /// headless; `ytdlp.rs::stop()` uses it directly as its only graceful
+    /// path.
     pub async fn stop(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
@@ -243,30 +380,40 @@ impl FfmpegProcess {
         #[cfg(windows)]
         {
             if let Some(pid) = self.child.id() {
-                // SAFETY: FFI call into the Windows API with a valid,
-                // still-live process id (we hold `self.child`); no pointers
-                // or shared state are involved. `GenerateConsoleCtrlEvent`
-                // is documented to signal every process attached to the
-                // given console process group — `build()` puts ffmpeg in
-                // its own group via CREATE_NEW_PROCESS_GROUP so this
-                // doesn't also hit our own process.
-                let ok = unsafe {
-                    windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent(
-                        windows_sys::Win32::System::Console::CTRL_BREAK_EVENT,
-                        pid,
-                    )
-                };
-                if ok == 0 {
-                    tracing::warn!(
-                        "GenerateConsoleCtrlEvent failed: {:?}",
-                        std::io::Error::last_os_error()
-                    );
-                } else if wait_for_graceful_exit(&mut self.child, Duration::from_secs(10)).await {
+                let mut asked_via_stdin = false;
+                if let Some(stdin) = self.stdin.as_mut() {
+                    use tokio::io::AsyncWriteExt;
+                    asked_via_stdin =
+                        stdin.write_all(b"q\n").await.is_ok() && stdin.flush().await.is_ok();
+                }
+                if asked_via_stdin
+                    && wait_for_graceful_exit(&mut self.child, Duration::from_secs(6)).await
+                {
                     return Ok(());
-                } else {
-                    tracing::warn!("ffmpeg didn't stop in 10s, killing");
+                }
+
+                match win::send_ctrl_break(pid) {
+                    Ok(()) => {
+                        if wait_for_graceful_exit(&mut self.child, Duration::from_secs(4)).await {
+                            return Ok(());
+                        }
+                        tracing::error!(
+                            "ffmpeg did not exit after CTRL_BREAK; forcing kill — \
+                             output file is truncated (missing Matroska/MP4 trailer)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "CTRL_BREAK_EVENT delivery to ffmpeg failed ({e}); forcing kill — \
+                             output file is truncated (missing Matroska/MP4 trailer)"
+                        );
+                    }
                 }
                 self.child.kill().await.ok();
+                anyhow::bail!(
+                    "ffmpeg did not shut down gracefully and was force-killed; \
+                     its recording is truncated (no Matroska/MP4 trailer)"
+                );
             }
         }
 

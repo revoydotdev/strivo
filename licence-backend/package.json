@@ -6,12 +6,20 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "schema": "wrangler d1 execute strivo-licence --file schema.sql",
-    "typecheck": "tsc --noEmit"
+    "schema": "wrangler d1 execute strivo-licence --file migrations/0001_init.sql --remote",
+    "schema:local": "wrangler d1 execute strivo-licence --file migrations/0001_init.sql --local",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260722.1",
     "typescript": "^5.6.0",
+    "vitest": "^4.1.11",
     "wrangler": "^4.115.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260815.1": true
   }
 }

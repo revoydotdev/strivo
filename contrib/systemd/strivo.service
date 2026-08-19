@@ -1,13 +1,26 @@
+# Reference unit for a system-wide install. `strivo enable` generates the
+# equivalent as a *user* unit at ~/.config/systemd/user/strivo.service and is
+# the recommended path; this file is for packagers and manual setups.
+#
+# ExecStart runs strivo with no subcommand, which starts the daemon and serves
+# the web UI on 127.0.0.1:8181 in one process. For a split setup, use
+# `strivo daemon` here and run `strivo serve` from a second unit.
 [Unit]
-Description=StriVo Live Stream PVR Daemon
+Description=StriVo Live Stream PVR (daemon + web UI)
+Documentation=https://github.com/revoydotdev/strivo
 After=network-online.target
 Wants=network-online.target
+# Credentials may come from a keyring that is locked until desktop login, so a
+# boot-time start can fail for a while. Retry forever rather than letting
+# systemd give up on the service permanently.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/strivo daemon
-Restart=on-failure
+ExecStart=/usr/bin/strivo
+Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=default.target

@@ -234,8 +234,15 @@ per channel, browse and play recordings, and run plugins — all from the browse
 strivo daemon start     # start the background service
 strivo daemon stop      # stop it
 strivo daemon status    # report whether it is running
-strivo daemon install   # write a systemd user unit
+strivo enable           # write + start a systemd user unit
+strivo disable          # stop and remove it
 ```
+
+The generated unit runs `strivo` with no subcommand, so the daemon and the
+web UI come up together under `Restart=always`. Pass `--daemon-only` for a
+split setup, or `--envchain NAMESPACE` to have secrets handed to the service
+from the OS keyring via [envchain](https://github.com/sorah/envchain) instead
+of living in a plaintext environment file.
 
 When the daemon is running, `strivo` launches as a client that connects to
 the Unix socket. See [docs/DAEMON.md](./docs/DAEMON.md) for socket paths,

@@ -78,7 +78,10 @@ async fn handle_command(cmd: &Command, config_path: Option<&std::path::Path>) ->
             register_first_party_plugins(&mut host.registry);
             daemon::run_with_plugins_at(host, config_path).await
         }
-        Command::Enable => handle_enable(config_path).await,
+        Command::Enable {
+            daemon_only,
+            envchain,
+        } => handle_enable(config_path, *daemon_only, envchain.as_deref()).await,
         Command::Disable => handle_disable().await,
         Command::Status => handle_status(),
         Command::Config { action } => handle_config_command(action, config_path),
@@ -890,28 +893,109 @@ fn handle_status() -> Result<()> {
     }
 }
 
+/// Find an executable on PATH. systemd requires an absolute path for the
+/// first token of ExecStart, so a bare name will not do.
 #[cfg(unix)]
-async fn handle_enable(config_path: Option<&std::path::Path>) -> Result<()> {
+fn resolve_on_path(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+/// Render the systemd user unit.
+///
+/// Split out from [`handle_enable`] so the unit text can be asserted on
+/// without writing to the user's systemd directory or shelling out.
+///
+/// Two deliberate choices worth stating, because both differ from what this
+/// generator emitted before:
+///
+/// * `ExecStart` runs the binary with **no subcommand**, which starts the
+///   daemon and serves the web UI in one process — what plain `strivo` does,
+///   and what a user actually wants running. The old unit ran `daemon` alone,
+///   so an enabled service left nothing serving the SPA on 8181. `--daemon-only`
+///   restores the previous shape for split setups.
+/// * `Restart=always` with `StartLimitIntervalSec=0`, rather than
+///   `Restart=on-failure` with systemd's default start limit. A PVR that gives
+///   up permanently after five quick restarts is worse than one that keeps
+///   trying: credentials may live in a keyring that is not unlocked until
+///   desktop login, so early-boot starts legitimately fail for a while.
+#[cfg(unix)]
+fn render_systemd_unit(
+    exec_quoted: &str,
+    config_arg: &str,
+    daemon_only: bool,
+    envchain: Option<&str>,
+) -> Result<String> {
+    let description = if daemon_only {
+        "StriVo Live Stream PVR Daemon"
+    } else {
+        "StriVo Live Stream PVR (daemon + web UI)"
+    };
+    let subcommand = if daemon_only { " daemon" } else { "" };
+
+    let exec_start = match envchain {
+        Some(namespace) => {
+            anyhow::ensure!(
+                !namespace.trim().is_empty(),
+                "--envchain needs a namespace, e.g. --envchain mistral"
+            );
+            let bin = resolve_on_path("envchain").context(
+                "--envchain was requested but envchain is not on PATH; install it or drop the flag",
+            )?;
+            format!(
+                "{} {} {}{}{}",
+                systemd_quote(bin.as_os_str()),
+                namespace.trim(),
+                exec_quoted,
+                config_arg,
+                subcommand
+            )
+        }
+        None => format!("{exec_quoted}{config_arg}{subcommand}"),
+    };
+
+    Ok(format!(
+        "[Unit]\n\
+         Description={description}\n\
+         Documentation=https://github.com/revoydotdev/strivo\n\
+         After=network-online.target\n\
+         Wants=network-online.target\n\
+         # Credentials may come from a keyring that is locked until desktop\n\
+         # login, so a boot-time start can fail for a while. Retry forever\n\
+         # rather than letting systemd give up on the service permanently.\n\
+         StartLimitIntervalSec=0\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={exec_start}\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         TimeoutStopSec=30\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n"
+    ))
+}
+
+#[cfg(unix)]
+async fn handle_enable(
+    config_path: Option<&std::path::Path>,
+    daemon_only: bool,
+    envchain: Option<&str>,
+) -> Result<()> {
     let exe = std::env::current_exe()?;
     let config_arg = config_path
         .map(|path| format!(" --config {}", systemd_quote(path.as_os_str())))
         .unwrap_or_default();
-    let unit_content = format!(
-        "[Unit]\n\
-         Description=StriVo Live Stream PVR Daemon\n\
-         After=network-online.target\n\
-         \n\
-         [Service]\n\
-         Type=simple\n\
-         ExecStart={}{} daemon\n\
-         Restart=on-failure\n\
-         RestartSec=5\n\
-         \n\
-         [Install]\n\
-         WantedBy=default.target\n",
-        systemd_quote(exe.as_os_str()),
-        config_arg,
-    );
+    let unit_content = render_systemd_unit(
+        &systemd_quote(exe.as_os_str()),
+        &config_arg,
+        daemon_only,
+        envchain,
+    )?;
 
     let systemd_dir = dirs_home().join(".config/systemd/user");
     std::fs::create_dir_all(&systemd_dir)?;
@@ -996,7 +1080,11 @@ fn windows_task_run_command(
 }
 
 #[cfg(windows)]
-async fn handle_enable(config_path: Option<&std::path::Path>) -> Result<()> {
+async fn handle_enable(
+    config_path: Option<&std::path::Path>,
+    _daemon_only: bool,
+    _envchain: Option<&str>,
+) -> Result<()> {
     let exe = std::env::current_exe()?;
     let tr = windows_task_run_command(&exe, config_path);
 
@@ -1058,7 +1146,11 @@ async fn handle_disable() -> Result<()> {
 }
 
 #[cfg(not(any(unix, windows)))]
-async fn handle_enable(_config_path: Option<&std::path::Path>) -> Result<()> {
+async fn handle_enable(
+    _config_path: Option<&std::path::Path>,
+    _daemon_only: bool,
+    _envchain: Option<&str>,
+) -> Result<()> {
     anyhow::bail!("`strivo enable` has no service-manager integration on this platform; run `strivo daemon` directly")
 }
 
@@ -1578,6 +1670,70 @@ fn register_first_party_plugins(registry: &mut plugin::registry::PluginRegistry)
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// The generated unit must run the daemon AND the web UI. Emitting a
+    /// daemon-only unit was the earlier bug: `strivo enable` produced a
+    /// service that left nothing listening on 8181, so an "enabled" install
+    /// had no usable frontend.
+    #[test]
+    fn default_unit_serves_the_web_ui_too() {
+        let unit = render_systemd_unit("\"/usr/bin/strivo\"", "", false, None).unwrap();
+        assert!(unit.contains("ExecStart=\"/usr/bin/strivo\"\n"));
+        assert!(!unit.contains("strivo\" daemon"));
+        assert!(unit.contains("Description=StriVo Live Stream PVR (daemon + web UI)"));
+    }
+
+    /// Durability: give-up-forever is the wrong failure mode for a PVR.
+    #[test]
+    fn default_unit_restarts_forever() {
+        let unit = render_systemd_unit("\"/usr/bin/strivo\"", "", false, None).unwrap();
+        assert!(unit.contains("Restart=always"));
+        assert!(unit.contains("StartLimitIntervalSec=0"));
+        assert!(!unit.contains("Restart=on-failure"));
+        assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn daemon_only_restores_the_split_layout() {
+        let unit = render_systemd_unit("\"/usr/bin/strivo\"", "", true, None).unwrap();
+        assert!(unit.contains("ExecStart=\"/usr/bin/strivo\" daemon\n"));
+        assert!(unit.contains("Description=StriVo Live Stream PVR Daemon"));
+    }
+
+    #[test]
+    fn config_override_survives_into_exec_start() {
+        let unit = render_systemd_unit(
+            "\"/usr/bin/strivo\"",
+            " --config \"/etc/strivo.toml\"",
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(unit.contains("ExecStart=\"/usr/bin/strivo\" --config \"/etc/strivo.toml\"\n"));
+    }
+
+    #[test]
+    fn envchain_namespace_must_not_be_blank() {
+        assert!(render_systemd_unit("\"/usr/bin/strivo\"", "", false, Some("  ")).is_err());
+    }
+
+    /// Only meaningful where envchain is actually installed; elsewhere the
+    /// call is expected to fail with a clear message rather than emit a unit
+    /// whose ExecStart systemd cannot resolve.
+    #[test]
+    fn envchain_wraps_exec_start_with_an_absolute_path() {
+        let rendered = render_systemd_unit("\"/usr/bin/strivo\"", "", false, Some("mistral"));
+        match resolve_on_path("envchain") {
+            Some(bin) => {
+                let unit = rendered.expect("envchain present, so rendering must succeed");
+                let expected =
+                    format!("ExecStart={} mistral \"/usr/bin/strivo\"\n", systemd_quote(bin.as_os_str()));
+                assert!(unit.contains(&expected), "got:\n{unit}");
+                assert!(bin.is_absolute());
+            }
+            None => assert!(rendered.is_err()),
+        }
+    }
 
     #[test]
     fn systemd_quote_preserves_custom_config_paths() {

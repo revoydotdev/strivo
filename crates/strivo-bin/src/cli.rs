@@ -25,7 +25,17 @@ pub enum Command {
     Daemon,
     /// Install and start as a background service: a systemd user service on
     /// Linux/macOS, a Task Scheduler task (runs at sign-in) on Windows
-    Enable,
+    Enable {
+        /// Run only the daemon, without serving the web UI. The default unit
+        /// runs both in one process, matching what plain `strivo` does.
+        #[arg(long)]
+        daemon_only: bool,
+        /// Wrap ExecStart in `envchain NAMESPACE` so secrets stored in the OS
+        /// keyring are handed to the service and nothing else. Requires
+        /// envchain on PATH.
+        #[arg(long, value_name = "NAMESPACE")]
+        envchain: Option<String>,
+    },
     /// Stop and remove the background service installed by `enable`
     Disable,
     /// Check if daemon is running

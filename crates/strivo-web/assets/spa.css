@@ -5481,3 +5481,12 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   object-fit: cover;
   opacity: 0.55;
 }
+
+/* Mount point a PlayerController appends its media element into. The
+   controller owns that element across repaints; this box is disposable. */
+.ms-mount {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}

@@ -330,6 +330,30 @@ const server = createServer(async (req, res) => {
     if (p === "/auth/login") return json(res, 200, { status: "ok" });
     if (p === "/auth/logout") return json(res, 200, { status: "ok" });
     if (p === "/channels") return json(res, 200, { channels: CHANNELS });
+    // Live tiles for the multi-view wall. The SPA ignores the server's
+    // tile geometry and lays out from its own layout tree, so only the
+    // `streams` array matters here. Two live streams, one per platform,
+    // so tests can exercise both controller kinds.
+    if (p.startsWith("/multistream/tiles"))
+      return json(res, 200, {
+        streams: [
+          {
+            stream_id: "Twitch:twitch-live-1",
+            channel_name: "twitchlive",
+            platform: "Twitch",
+            viewer_count: 4321,
+            embed_url: "https://player.twitch.tv/?channel=twitchlive&parent=localhost",
+          },
+          {
+            stream_id: "YouTube:UClive0000000000000000aa",
+            channel_name: "Live Channel",
+            platform: "YouTube",
+            viewer_count: 1234,
+            embed_url: "https://www.youtube.com/embed/live_stream?channel=UClive0000000000000000aa",
+          },
+        ],
+        tiles: [],
+      });
     if (p === "/patreon")
       return json(res, 200, {
         creators: [

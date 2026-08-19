@@ -950,6 +950,9 @@ function findChannelById(id, platform) {
 // Centralised per-route teardown — all per-route timers + transient
 // UI flags get cleared on every render() call so no route bleed.
 function teardownAcrossRoutes() {
+  // Player controllers hold live vendor connections; dropping the DOM does
+  // not close them.
+  if (typeof destroyAllControllers === "function") destroyAllControllers();
   // Modals: kbd-help + body class + every app-modal still in the DOM.
   document.getElementById("kbd-help")?.classList.remove("open");
   // B3: route change always zeroes the modal-open ref count + the
@@ -6140,6 +6143,216 @@ function tileSrc(embedUrl, { muted, playing }) {
   return embedUrl + (embedUrl.includes("?") ? "&" : "?") + params.join("&");
 }
 
+// ── Player controllers ───────────────────────────────────────────────
+//
+// A tile's vendor player is owned by a controller keyed on CONTENT
+// (`s:<streamId>` / `r:<recordingId>`), held in `playerState.controllers`
+// for the whole watch session — deliberately NOT keyed on layout path and
+// NOT owned by the DOM.
+//
+// That distinction is the entire point. Stage HTML is rebuilt wholesale on
+// preset switches, composer edits, and Play-all; when the player lived in
+// that HTML, every rebuild tore it down and Twitch/YouTube restarted the
+// stream. Because the registry outlives any single paint, a rebuild now
+// just re-parents the existing element into its new mount point, and a
+// stream the user never touched keeps playing.
+//
+// Every controller is created through a swappable factory so e2e can inject
+// a fake and assert on lifecycle without loading a real vendor player.
+
+/// Stable identity for whatever a slot holds. Returns null for empty slots.
+function contentKeyOf(node) {
+  if (!node) return null;
+  if (node.streamId) return `s:${node.streamId}`;
+  if (node.recordingId) return `r:${node.recordingId}`;
+  return null;
+}
+
+/// Today's behaviour, wrapped: a plain cross-origin iframe whose only
+/// control surface is its `src`. Mute and playback still cost a reload
+/// here — that is inherent to a bare iframe, and is what the vendor-SDK
+/// controllers in later phases exist to avoid. This stays as the permanent
+/// fallback for when a vendor script is blocked or fails to load, so a
+/// missing SDK degrades to exactly the old experience rather than a blank
+/// tile.
+function makeIframeController(spec) {
+  const el = document.createElement("iframe");
+  el.className = "watch-tile-iframe ms-iframe";
+  el.setAttribute(
+    "allow",
+    "autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write",
+  );
+  el.setAttribute("allowfullscreen", "");
+  el.setAttribute("frameborder", "0");
+  let base = spec.embedUrl || "";
+  let muted = !!spec.muted;
+  const playing = spec.playing !== false;
+  el.setAttribute("data-embed-base", base);
+  const sync = () => {
+    if (!base) return;
+    const next = tileSrc(base, { muted, playing });
+    // Assigning src reloads the player, so only write on a real change.
+    if (el.getAttribute("src") !== next) el.setAttribute("src", next);
+  };
+  sync();
+  return {
+    kind: "iframe-fallback",
+    root: el,
+    mount(container) {
+      if (el.parentElement !== container) container.appendChild(el);
+    },
+    destroy() {
+      el.remove();
+    },
+    setMuted(next) {
+      if (next !== muted) {
+        muted = next;
+        sync();
+      }
+    },
+    setVolume() {
+      /* not addressable without a player API — see the Twitch controller */
+    },
+    setQuality() {
+      /* ditto */
+    },
+    repoint(next) {
+      const url = next && next.embedUrl;
+      if (url && url !== base) {
+        base = url;
+        el.setAttribute("data-embed-base", base);
+        sync();
+      }
+    },
+    isReady() {
+      return true;
+    },
+  };
+}
+
+/// Local recording playback. A `<video>` already has a real API, so this
+/// never needed the reload workaround — it is a controller purely so the
+/// reconciler can treat every tile the same way, and so a repaint stops
+/// dropping playback position on the floor.
+function makeRecordingController(spec) {
+  const el = document.createElement("video");
+  el.className = "watch-tile-iframe ms-video";
+  el.controls = true;
+  el.playsInline = true;
+  el.muted = !!spec.muted;
+  const playing = spec.playing !== false;
+  el.preload = playing ? "metadata" : "none";
+  if (playing) el.autoplay = true;
+  if (spec.src) el.src = spec.src;
+  return {
+    kind: "recording",
+    root: el,
+    mount(container) {
+      if (el.parentElement !== container) container.appendChild(el);
+    },
+    destroy() {
+      try {
+        el.pause();
+      } catch (_) {
+        /* already detached */
+      }
+      el.removeAttribute("src");
+      el.remove();
+    },
+    setMuted(next) {
+      if (el.muted !== next) el.muted = next;
+    },
+    setVolume(v) {
+      el.volume = Math.max(0, Math.min(1, v));
+    },
+    setQuality() {
+      /* the file is the file */
+    },
+    repoint(next) {
+      if (next && next.src && next.src !== el.getAttribute("src")) el.src = next.src;
+    },
+    isReady() {
+      return true;
+    },
+  };
+}
+
+function defaultPlayerControllerFactory(kind, spec) {
+  return kind === "recording" ? makeRecordingController(spec) : makeIframeController(spec);
+}
+
+let _playerControllerFactory = defaultPlayerControllerFactory;
+function setPlayerControllerFactory(fn) {
+  _playerControllerFactory = fn || defaultPlayerControllerFactory;
+}
+
+/// Diff the controller registry against the mount points in freshly-painted
+/// stage HTML. Called by BOTH the full repaint and the surgical patch path,
+/// so neither needs its own notion of player lifecycle.
+function reconcileControllers(stage) {
+  if (!stage) return;
+  const wanted = new Map();
+  stage.querySelectorAll(".ms-mount[data-content-key]").forEach((mount) => {
+    wanted.set(mount.dataset.contentKey, mount);
+  });
+
+  // Anything no longer on the wall is destroyed. Skipping this leaks a live
+  // vendor connection — bandwidth and CPU for a tile that is gone.
+  for (const [key, ctl] of playerState.controllers) {
+    if (!wanted.has(key)) {
+      try {
+        ctl.destroy();
+      } catch (_) {
+        /* a controller that fails to tear down must not block the rest */
+      }
+      playerState.controllers.delete(key);
+    }
+  }
+
+  for (const [key, mount] of wanted) {
+    const path = mount.dataset.path || "";
+    const muted = computeMuted(path);
+    let ctl = playerState.controllers.get(key);
+    if (!ctl) {
+      try {
+        ctl = _playerControllerFactory(mount.dataset.kind || "iframe-fallback", {
+          embedUrl: mount.dataset.embedBase || "",
+          src: mount.dataset.src || "",
+          muted,
+          playing: mount.dataset.playing !== "0",
+        });
+      } catch (e) {
+        // A factory that throws must not take the wall down with it.
+        tracingWarn("player controller failed to construct", e);
+        continue;
+      }
+      playerState.controllers.set(key, ctl);
+    } else if (mount.dataset.embedBase || mount.dataset.src) {
+      // Same content, different URL (host changed, for instance) — retarget
+      // rather than rebuild.
+      ctl.repoint({ embedUrl: mount.dataset.embedBase || "", src: mount.dataset.src || "" });
+    }
+    ctl.mount(mount);
+    ctl.setMuted(muted);
+  }
+}
+
+/// Drop every controller — used when leaving the watch route entirely.
+function destroyAllControllers() {
+  for (const [, ctl] of playerState.controllers) {
+    try {
+      ctl.destroy();
+    } catch (_) {
+      /* best effort */
+    }
+  }
+  playerState.controllers.clear();
+}
+
+function tracingWarn(msg, e) {
+  console.warn(`[strivo] ${msg}:`, e);
+}
+
 // Tiles start paused. A wall of live streams that all begin playing the
 // moment it opens burns bandwidth and CPU on streams the viewer has not
 // chosen to watch yet, so the default is a still, cheap grid you press
@@ -6153,14 +6366,23 @@ function savePlayerAutoplay() {
     localStorage.setItem(PLAYER_AUTOPLAY_KEY, playerState.autoplay ? "1" : "0");
   } catch (_) { /* private mode */ }
 }
-/// Is this specific tile playing? A tile the user pressed play on stays
-/// playing even while the wall default is paused.
-function tilePlaying(path) {
-  return playerState.autoplay || (playerState.playing || []).includes(path);
+/// Is this slot playing? A stream the viewer pressed play on stays playing
+/// while the wall default is paused.
+///
+/// Keyed on CONTENT, not layout path, for the same reason the controller
+/// registry is: a tile that moves is still the same stream. Keying on path
+/// meant switching preset — which relocates a stream from "" to "a.a" —
+/// silently paused it, because the new path had never been started.
+function tilePlaying(node) {
+  if (playerState.autoplay) return true;
+  const key = contentKeyOf(node);
+  return !!key && (playerState.playing || []).includes(key);
 }
-function setTilePlaying(path, on) {
+function setTilePlaying(node, on) {
+  const key = contentKeyOf(node);
+  if (!key) return;
   const set = new Set(playerState.playing || []);
-  if (on) set.add(path); else set.delete(path);
+  if (on) set.add(key); else set.delete(key);
   playerState.playing = [...set];
 }
 
@@ -6288,6 +6510,9 @@ const playerState = {
   lastPaintedLayout: null, // snapshot used by tryPatchPlayerStage to diff
   autoplay: loadPlayerAutoplay(), // wall-wide default; false = open paused
   playing: [],         // paths the viewer explicitly started while paused
+  // contentKey -> PlayerController. Outlives every repaint; see the
+  // "Player controllers" block for why ownership is not in the DOM.
+  controllers: new Map(),
 };
 
 // Path strings are dot-joined sequences of "a"/"b" descending the tree.
@@ -6843,26 +7068,13 @@ function wireTileHandlers(tile, stage, watch, streams) {
     e.preventDefault();
     e.stopPropagation();
     const path = e.currentTarget.dataset.path || "";
-    setTilePlaying(path, true);
-    const muted = computeMuted(path);
-    const poster = tile.querySelector(".ms-poster");
-    const base =
-      poster?.getAttribute("data-embed-base") ||
-      tile.querySelector(".ms-iframe")?.getAttribute("data-embed-base") ||
-      "";
-    if (poster && base) {
-      // Swap the still frame for a real player only now that it is wanted.
-      const frame = document.createElement("iframe");
-      frame.className = "watch-tile-iframe ms-iframe";
-      frame.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write");
-      frame.setAttribute("allowfullscreen", "");
-      frame.setAttribute("frameborder", "0");
-      frame.setAttribute("data-embed-base", base);
-      frame.setAttribute("src", tileSrc(base, { muted, playing: true }));
-      poster.replaceWith(frame);
-    }
-    const video = tile.querySelector(".ms-video");
-    if (video) { video.preload = "metadata"; video.play?.().catch(() => {}); }
+    setTilePlaying(getNodeAt(playerState.layout, path), true);
+    // Playing state is not part of the layout tree, so the shape-diffing
+    // patch path cannot see this change — force the full paint. That is
+    // cheap now: the repaint re-parents existing players instead of
+    // rebuilding them, so starting one tile does not disturb the others.
+    playerState.lastPaintedLayout = null;
+    paintPlayerStage(watch, streams);
   });
   tile.querySelector(".ms-remove")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -6905,23 +7117,9 @@ function tryPatchPlayerStage(watch, prev, curr, streams) {
       (prevNode.streamId || null) === (currNode.streamId || null) &&
       (prevNode.recordingId || null) === (currNode.recordingId || null);
     if (sameContent) {
-      // Same content. Mute state may have flipped — sync iframe/video.
+      // Same content. Mute may have flipped; the controller owns how that
+      // is applied, so this path no longer touches media elements at all.
       const muted = computeMuted(path);
-      const iframe = tile.querySelector(".ms-iframe");
-      const video = tile.querySelector(".ms-video");
-      if (iframe) {
-        // Rebuild from the stored base URL. The old code stripped params
-        // off the current src with a regex, which compounded every repaint.
-        const base = iframe.getAttribute("data-embed-base") || "";
-        if (base) {
-          const cur = iframe.getAttribute("src") || "";
-          const next = tileSrc(base, { muted, playing: tilePlaying(path) });
-          // Only touch src when it really changed: assigning it reloads the
-          // player and drops the viewer back to the live edge.
-          if (next !== cur) iframe.setAttribute("src", next);
-        }
-      }
-      if (video) video.muted = muted;
       // Swap solo/unsolo button label.
       const soloBtn = tile.querySelector(".ms-solo, .ms-unsolo");
       if (soloBtn) {
@@ -6949,6 +7147,11 @@ function tryPatchPlayerStage(watch, prev, curr, streams) {
     tile.replaceWith(newTile);
     wireTileHandlers(newTile, stage, watch, streams);
   }
+
+  // Apply mute / mount any tile this patch swapped in. The patch path
+  // edits tiles in place, so without this a solo change would update the
+  // button label and nothing else.
+  reconcileControllers(watch.querySelector(".ms-stage"));
 
   // Toolbar reflects layout-aware bits (preset label, leaf count,
   // mute-all pressed state). Tree shape didn't change, so the only
@@ -7022,18 +7225,9 @@ function paintPlayerStage(watch, streams) {
   // streams that were already playing — only newly-added slots
   // actually need fresh media elements. Keyed by stream/recording id
   // because layout paths shift across operations.
-  const reusableMedia = new Map();
-  watch.querySelectorAll(".ms-leaf").forEach((leaf) => {
-    const sid = leaf.dataset.streamId;
-    const rid = leaf.dataset.recordingId;
-    const media = leaf.querySelector(".ms-iframe, .ms-video");
-    if (!media) return;
-    const key = sid ? `s:${sid}` : rid ? `r:${rid}` : null;
-    if (!key) return;
-    reusableMedia.set(key, media);
-    media.remove(); // detach (live state survives) so innerHTML reset can't nuke it
-  });
-
+  // No detach/reattach dance any more: controllers are not owned by this
+  // DOM, so wiping it cannot destroy a player. Rebuild freely, then let
+  // reconcileControllers re-parent the survivors.
   const stage = document.createElement("div");
   stage.className = "ms-stage";
   stage.innerHTML = renderLayoutNode(layout, "", streams);
@@ -7042,32 +7236,7 @@ function paintPlayerStage(watch, streams) {
   watch.insertAdjacentHTML("beforeend", toolbar);
   watch.appendChild(stage);
 
-  // Re-attach the reused media into their new layout positions. When
-  // the new src is identical (the layout change didn't flip mute or
-  // swap source) the iframe survives without a reload. When it
-  // differs (solo flipped on/off → muted query param toggles) we sync
-  // src so the layout's intent wins; that path still reloads on
-  // Twitch's side but the non-solo'd tiles do not.
-  stage.querySelectorAll(".ms-leaf").forEach((leaf) => {
-    const sid = leaf.dataset.streamId;
-    const rid = leaf.dataset.recordingId;
-    const key = sid ? `s:${sid}` : rid ? `r:${rid}` : null;
-    if (!key) return;
-    const reused = reusableMedia.get(key);
-    if (!reused) return;
-    const placeholder = leaf.querySelector(".ms-iframe, .ms-video");
-    if (!placeholder) return;
-    if (reused.tagName === "IFRAME") {
-      const wantSrc = placeholder.getAttribute("src");
-      if (reused.getAttribute("src") !== wantSrc) reused.setAttribute("src", wantSrc);
-    } else if (reused.tagName === "VIDEO") {
-      // Recording playback: src usually unchanged across layout ops;
-      // only the muted attribute flips on solo / mute-all.
-      const wantMuted = placeholder.hasAttribute("muted");
-      if (wantMuted !== reused.muted) reused.muted = wantMuted;
-    }
-    placeholder.replaceWith(reused);
-  });
+  reconcileControllers(stage);
 
   // ── Preset menu ──
   watch.querySelectorAll(".ms-preset-opt").forEach((btn) => {
@@ -7538,7 +7707,7 @@ function tilePosterUrl(s) {
 
 function renderSlot(slot, path, streams) {
   const muted = computeMuted(path);
-  const playing = tilePlaying(path);
+  const playing = tilePlaying(slot);
   // ─ Recording playback path ─
   if (slot.recordingId) {
     const rec = recCache.find((r) => r.id === slot.recordingId);
@@ -7558,10 +7727,10 @@ function renderSlot(slot, path, streams) {
             <button class="watch-tile-btn ms-remove" title="Remove from layout" data-path="${htmlEscape(path)}">✕</button>
           </span>
         </div>
-        <video class="watch-tile-iframe ms-video" controls playsinline ${muted ? "muted" : ""}
-               ${playing ? "autoplay" : ""}
-               preload="${playing ? "metadata" : "none"}"
-               src="/api/v1/recordings/${encodeURIComponent(slot.recordingId)}/download"></video>
+        <div class="ms-mount" data-content-key="r:${htmlEscape(slot.recordingId)}"
+             data-kind="recording" data-path="${htmlEscape(path)}"
+             data-playing="${playing ? "1" : "0"}"
+             data-src="/api/v1/recordings/${encodeURIComponent(slot.recordingId)}/download"></div>
       </div>`;
   }
   // ─ Live stream path ─
@@ -7588,9 +7757,10 @@ function renderSlot(slot, path, streams) {
           </span>
         </div>
         ${playing
-          ? `<iframe class="watch-tile-iframe ms-iframe" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write"
-                data-embed-base="${htmlEscape(s.embed_url)}"
-                src="${htmlEscape(tileSrc(s.embed_url, { muted, playing }))}" allowfullscreen frameborder="0"></iframe>`
+          ? `<div class="ms-mount" data-content-key="s:${htmlEscape(s.stream_id)}"
+                  data-kind="${s.platform === "YouTube" ? "youtube" : "twitch"}"
+                  data-path="${htmlEscape(path)}" data-playing="1"
+                  data-embed-base="${htmlEscape(s.embed_url)}"></div>`
           : `<div class="ms-poster" data-embed-base="${htmlEscape(s.embed_url)}">
                ${tilePosterUrl(s) ? `<img class="ms-poster-img" loading="lazy" alt="" src="${htmlEscape(tilePosterUrl(s))}" onerror="this.remove()">` : ""}
                <button class="ms-play" data-path="${htmlEscape(path)}" title="Play ${htmlEscape(s.channel_name)}"
@@ -14509,6 +14679,8 @@ if (typeof window !== "undefined") {
         buildEmbedUrl,
         computeMuted,
         playerState,
+        setPlayerControllerFactory,
+        defaultPlayerControllerFactory,
       };
     }
   } catch (_) {

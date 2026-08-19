@@ -50,6 +50,8 @@ creator = [
     "dep:strivo-pitch",
     "dep:strivo-dataviz",
     "dep:strivo-research",
+    "dep:strivo-ab-render",
+    "dep:strivo-submix",
 ]
 
 [dependencies]
@@ -94,6 +96,8 @@ strivo-insert-fx = { path = "../insert-fx", optional = true }
 strivo-pitch = { path = "../pitch", optional = true }
 strivo-dataviz = { path = "../dataviz", optional = true }
 strivo-research = { path = "../research", optional = true }
+strivo-ab-render = { path = "../ab-render", optional = true }
+strivo-submix = { path = "../submix", optional = true }
 rusqlite = { version = "0.33", features = ["bundled"] }
 
 # HTTP

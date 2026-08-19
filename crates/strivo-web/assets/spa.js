@@ -350,6 +350,24 @@ const API = {
       method: "POST",
       body: { source_duration_sec: sourceSec, target_duration_sec: targetSec },
     }),
+  abRenderLoad: (recordingId) =>
+    API._fetch(`/plugins/ab-render/${encodeURIComponent(recordingId)}`),
+  abRenderSave: (recordingId, slot, variant) =>
+    API._fetch(
+      `/plugins/ab-render/${encodeURIComponent(recordingId)}/${encodeURIComponent(slot)}`,
+      { method: "POST", body: variant },
+    ),
+  abRenderCompare: (recordingId) =>
+    API._fetch(`/plugins/ab-render/${encodeURIComponent(recordingId)}/compare`, {
+      method: "POST",
+    }),
+  submixLoad: (recordingId) =>
+    API._fetch(`/plugins/submix/${encodeURIComponent(recordingId)}`),
+  submixSave: (recordingId, mix) =>
+    API._fetch(`/plugins/submix/${encodeURIComponent(recordingId)}`, {
+      method: "POST",
+      body: mix,
+    }),
   pluginStorageSize: (name) =>
     API._fetch(`/plugin-storage/${encodeURIComponent(name)}`),
   pluginStorageClear: (name) =>
@@ -7197,10 +7215,17 @@ async function renderProApp(paneKey) {
   const tabStrip = pane.tabs.map((t) => `
     <a class="pro-tab ${t.slug === activeTab.slug ? "is-active" : ""}" href="#/${paneKey}/${t.slug}">${htmlEscape(t.label)}</a>`).join("");
 
+  const inlinePane = paneKey === "studio" && (activeTab.slug === "ab" || activeTab.slug === "submix");
+
   const body = activeTab.route
     ? `<div class="pro-tab-body">
          <p class="pg-cap-hint">${htmlEscape(activeTab.description)}</p>
          <p><a class="btn-primary sm" href="${htmlEscape(activeTab.route)}">Open ${htmlEscape(activeTab.label)} →</a></p>
+       </div>`
+    : inlinePane
+    ? `<div class="pro-tab-body">
+         <p class="pg-cap-hint">${htmlEscape(activeTab.description)}</p>
+         <div id="pro-inline-host"></div>
        </div>`
     : `<div class="pro-tab-body">
          <p class="pg-cap-hint">${htmlEscape(activeTab.description)}</p>
@@ -7218,6 +7243,255 @@ async function renderProApp(paneKey) {
     <section class="cfg-card pro-pane-card">${body}</section>
   `);
   setupChromeHandlers();
+  if (inlinePane) {
+    const host = document.getElementById("pro-inline-host");
+    if (activeTab.slug === "ab") await mountAbRenderPane(host);
+    else await mountSubmixPane(host);
+  }
+}
+
+// ── A/B render compare pane (#/studio/ab) ─────────────────────────────
+//
+// Per-recording: stash a render-settings snapshot into slot A and slot
+// B, diff them, then run the real ffmpeg SSIM compare once both are
+// saved. Insert-fx chains stay editable from their own panel (Editor →
+// 🎛 Insert FX) — this pane only edits the settings ab-render actually
+// models directly (label, loudness target, duck depth, tempo).
+
+const abrState = { recordingId: "", data: null, comparing: false, compareResult: null, compareError: null };
+
+function abrVariantForm(slot, variant) {
+  const v = variant || {};
+  return `
+    <div class="cfg-card abr-slot" data-slot="${slot}">
+      <h3 class="cfg-title">Slot ${slot.toUpperCase()}</h3>
+      <label>Label
+        <input type="text" class="abr-f-label" value="${htmlEscape(v.label || "")}" placeholder="e.g. loud-master"/>
+      </label>
+      <label>Loudness target (LUFS, blank = leave alone)
+        <input type="number" step="0.1" class="abr-f-lufs" value="${v.loudness_target_lufs ?? ""}"/>
+      </label>
+      <label>Sidechain duck depth (dB, blank = no duck)
+        <input type="number" step="0.5" class="abr-f-duck" value="${v.duck_db ?? ""}"/>
+      </label>
+      <label>Tempo (× speed, 1.0 = identity)
+        <input type="number" step="0.01" min="0.25" max="4" class="abr-f-tempo" value="${v.pitch_time?.tempo ?? 1.0}"/>
+      </label>
+      <p class="pg-cap-hint">Insert-fx chain is edited from the Editor's 🎛 Insert FX panel and carries over automatically once wired to a recording's chain; this form covers the fields ab-render models directly.</p>
+      <button class="btn-primary sm abr-save" type="button">Save slot ${slot.toUpperCase()}</button>
+      ${v.label !== undefined ? `<pre class="abr-filter">${htmlEscape(v ? (v.audio_filter || "") : "")}</pre>` : ""}
+    </div>`;
+}
+
+function paintAbRenderPane(host) {
+  const d = abrState.data || {};
+  const diffRows = (d.diff || [])
+    .map((e) => `<tr><td>${htmlEscape(e.field)}</td><td>${htmlEscape(e.a)}</td><td>${htmlEscape(e.b)}</td></tr>`)
+    .join("");
+  const diffTable = d.a && d.b
+    ? `<table class="abr-diff"><thead><tr><th>field</th><th>A</th><th>B</th></tr></thead><tbody>${
+        diffRows || `<tr><td colspan="3" class="pg-cap-hint">No differences.</td></tr>`
+      }</tbody></table>`
+    : `<p class="empty sm">Save both slots to see a diff.</p>`;
+  const canCompare = !!(d.a && d.b);
+  let compareBlock = "";
+  if (abrState.comparing) {
+    compareBlock = `<div class="empty sm">Rendering A + B and running ffmpeg SSIM…</div>`;
+  } else if (abrState.compareError) {
+    compareBlock = `<div class="empty"><div class="glyph">⚠</div>${htmlEscape(abrState.compareError)}</div>`;
+  } else if (abrState.compareResult) {
+    const q = abrState.compareResult.quality || {};
+    compareBlock = `
+      <div class="abr-quality">
+        <span class="pg-stat"><strong>${q.vmaf_mean != null ? q.vmaf_mean.toFixed(2) : "—"}</strong> VMAF mean</span>
+        <span class="pg-stat"><strong>${q.ssim_all != null ? q.ssim_all.toFixed(4) : "—"}</strong> SSIM all</span>
+      </div>
+      <p class="pg-cap-hint">A: ${htmlEscape(abrState.compareResult.a_output_path || "")}<br/>B: ${htmlEscape(abrState.compareResult.b_output_path || "")}</p>`;
+  }
+  host.innerHTML = `
+    <div class="abr-picker">
+      <label>Recording
+        <select id="abr-rec"><option value="">— select a recording —</option>${abrState.recOptions || ""}</select>
+      </label>
+    </div>
+    ${abrState.recordingId ? `
+    <div class="abr-slots">
+      ${abrVariantForm("a", d.a ? { ...d.a, audio_filter: d.a_audio_filter } : null)}
+      ${abrVariantForm("b", d.b ? { ...d.b, audio_filter: d.b_audio_filter } : null)}
+    </div>
+    <div class="cfg-card abr-compare-card">
+      <h3 class="cfg-title">Diff</h3>
+      ${diffTable}
+      <button class="btn-primary sm" id="abr-compare" type="button" ${canCompare ? "" : "disabled"}>▶ Render + compare (VMAF/SSIM)</button>
+      ${compareBlock}
+    </div>` : `<p class="empty sm">Pick a recording to load or start an A/B compare.</p>`}
+  `;
+  host.querySelectorAll(".abr-save").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".abr-slot");
+      const slot = card.dataset.slot;
+      const num = (sel) => {
+        const raw = card.querySelector(sel).value.trim();
+        return raw === "" ? null : Number(raw);
+      };
+      const tempo = num(".abr-f-tempo");
+      const variant = {
+        label: card.querySelector(".abr-f-label").value.trim(),
+        insert_fx: null,
+        pitch_time: tempo != null && tempo !== 1.0 ? { tempo, pitch: 1.0, formant_preserve: true } : null,
+        loudness_target_lufs: num(".abr-f-lufs"),
+        duck_db: num(".abr-f-duck"),
+        stashed_at: new Date().toISOString(),
+      };
+      await withBusy(btn, "Saving…", async () => {
+        try {
+          abrState.data = await API.abRenderSave(abrState.recordingId, slot, variant);
+          abrState.compareResult = null;
+          abrState.compareError = null;
+          Toast.success(`Slot ${slot.toUpperCase()} saved.`);
+          paintAbRenderPane(host);
+        } catch (err) {
+          Toast.error(`Save failed: ${err.message}`);
+        }
+      });
+    });
+  });
+  host.querySelector("#abr-compare")?.addEventListener("click", async () => {
+    abrState.comparing = true;
+    abrState.compareError = null;
+    paintAbRenderPane(host);
+    try {
+      abrState.compareResult = await API.abRenderCompare(abrState.recordingId);
+    } catch (err) {
+      abrState.compareError = err.message;
+    } finally {
+      abrState.comparing = false;
+      paintAbRenderPane(host);
+    }
+  });
+}
+
+async function mountAbRenderPane(host) {
+  const recs = (await API.recordings().catch(() => ({ recordings: [] }))).recordings || [];
+  const finished = recs.filter((r) => r.state === "Finished");
+  abrState.recOptions = finished
+    .map((r) => `<option value="${htmlEscape(r.id)}" ${r.id === abrState.recordingId ? "selected" : ""}>${htmlEscape(niceTitle(r.stream_title) || r.channel_name || r.id.slice(0, 8))}</option>`)
+    .join("");
+  paintAbRenderPane(host);
+  host.querySelector("#abr-rec").addEventListener("change", async (e) => {
+    abrState.recordingId = e.target.value;
+    abrState.data = null;
+    abrState.compareResult = null;
+    abrState.compareError = null;
+    if (!abrState.recordingId) { paintAbRenderPane(host); return; }
+    try {
+      abrState.data = await API.abRenderLoad(abrState.recordingId);
+    } catch (err) {
+      Toast.error(`Load failed: ${err.message}`);
+    }
+    paintAbRenderPane(host);
+  });
+}
+
+// ── Sub-mix bus pane (#/studio/submix) ────────────────────────────────
+//
+// Per-recording bus routing: N input tracks (label + input index + gain)
+// summed into a master bus, composed into one ffmpeg filter_complex via
+// strivo-submix. Master/per-track insert-fx chains stay null here (same
+// reasoning as the A/B pane) — the composer already handles them when a
+// chain is attached via the Insert FX panel's stored state.
+
+const smxState = { recordingId: "", mix: { tracks: [], master_chain: null, master_gain_db: 0 }, filterComplex: "" };
+
+function paintSubmixPane(host) {
+  const trackRows = smxState.mix.tracks
+    .map((t, i) => `
+      <div class="cfg-card smx-track" data-idx="${i}">
+        <label>Label <input type="text" class="smx-t-label" value="${htmlEscape(t.label || "")}"/></label>
+        <label>Input index <input type="number" min="0" class="smx-t-input" value="${t.input_index ?? 0}"/></label>
+        <label>Gain (dB) <input type="number" step="0.5" class="smx-t-gain" value="${t.gain_db ?? 0}"/></label>
+        <button class="sm smx-t-remove" type="button">✕ Remove</button>
+      </div>`)
+    .join("");
+  host.innerHTML = `
+    <div class="abr-picker">
+      <label>Recording
+        <select id="smx-rec"><option value="">— select a recording —</option>${smxState.recOptions || ""}</select>
+      </label>
+    </div>
+    ${smxState.recordingId ? `
+    <div class="cfg-card smx-tracks-card">
+      <h3 class="cfg-title">Tracks</h3>
+      <div class="smx-tracks">${trackRows || '<div class="empty sm">No tracks yet.</div>'}</div>
+      <button class="sm" id="smx-add-track" type="button">+ Add track</button>
+    </div>
+    <div class="cfg-card">
+      <h3 class="cfg-title">Master</h3>
+      <label>Master gain (dB)
+        <input type="number" step="0.5" id="smx-master-gain" value="${smxState.mix.master_gain_db ?? 0}"/>
+      </label>
+      <button class="btn-primary sm" id="smx-save" type="button">Save sub-mix</button>
+    </div>
+    <div class="cfg-card">
+      <h3 class="cfg-title">Composed filter_complex</h3>
+      <pre class="abr-filter">${htmlEscape(smxState.filterComplex || "(empty — add at least one track)")}</pre>
+    </div>` : `<p class="empty sm">Pick a recording to load or build a sub-mix.</p>`}
+  `;
+  host.querySelector("#smx-add-track")?.addEventListener("click", () => {
+    smxState.mix.tracks.push({ label: `track${smxState.mix.tracks.length}`, input_index: smxState.mix.tracks.length, insert_fx: null, gain_db: 0 });
+    paintSubmixPane(host);
+  });
+  host.querySelectorAll(".smx-t-remove").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.closest(".smx-track").dataset.idx);
+      smxState.mix.tracks.splice(idx, 1);
+      paintSubmixPane(host);
+    });
+  });
+  host.querySelector("#smx-save")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    host.querySelectorAll(".smx-track").forEach((row) => {
+      const idx = Number(row.dataset.idx);
+      smxState.mix.tracks[idx].label = row.querySelector(".smx-t-label").value.trim();
+      smxState.mix.tracks[idx].input_index = Number(row.querySelector(".smx-t-input").value) || 0;
+      smxState.mix.tracks[idx].gain_db = Number(row.querySelector(".smx-t-gain").value) || 0;
+    });
+    smxState.mix.master_gain_db = Number(document.getElementById("smx-master-gain").value) || 0;
+    await withBusy(btn, "Saving…", async () => {
+      try {
+        const resp = await API.submixSave(smxState.recordingId, smxState.mix);
+        smxState.mix = resp.submix;
+        smxState.filterComplex = resp.filter_complex;
+        Toast.success("Sub-mix saved.");
+        paintSubmixPane(host);
+      } catch (err) {
+        Toast.error(`Save failed: ${err.message}`);
+      }
+    });
+  });
+}
+
+async function mountSubmixPane(host) {
+  const recs = (await API.recordings().catch(() => ({ recordings: [] }))).recordings || [];
+  const finished = recs.filter((r) => r.state === "Finished");
+  smxState.recOptions = finished
+    .map((r) => `<option value="${htmlEscape(r.id)}" ${r.id === smxState.recordingId ? "selected" : ""}>${htmlEscape(niceTitle(r.stream_title) || r.channel_name || r.id.slice(0, 8))}</option>`)
+    .join("");
+  paintSubmixPane(host);
+  host.querySelector("#smx-rec").addEventListener("change", async (e) => {
+    smxState.recordingId = e.target.value;
+    smxState.mix = { tracks: [], master_chain: null, master_gain_db: 0 };
+    smxState.filterComplex = "";
+    if (!smxState.recordingId) { paintSubmixPane(host); return; }
+    try {
+      const resp = await API.submixLoad(smxState.recordingId);
+      smxState.mix = resp.submix;
+      smxState.filterComplex = resp.filter_complex;
+    } catch (err) {
+      Toast.error(`Load failed: ${err.message}`);
+    }
+    paintSubmixPane(host);
+  });
 }
 
 // Map deprecated plugin sub-routes to their new home in the Pro app

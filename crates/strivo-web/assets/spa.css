@@ -4502,6 +4502,37 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
 .dz-exp.active { box-shadow: inset 0 0 0 1px var(--accent, #b07cff); color: var(--accent, #b07cff); }
 .dz-chart { overflow-x: auto; min-height: 200px; }
 .dz-chart svg { display: block; }
+/* A/B render compare + sub-mix panes (Studio pro pane) */
+.abr-picker { margin-bottom: 0.7rem; max-width: 360px; }
+.abr-picker label, .abr-picker select { display: flex; flex-direction: column; gap: 0.25rem; width: 100%; }
+.abr-picker select {
+  padding: 0.35rem 0.5rem; background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border-light); border-radius: 4px; color: inherit;
+}
+.abr-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin-bottom: 0.7rem; }
+@media (max-width: 900px) { .abr-slots { grid-template-columns: 1fr; } }
+.abr-slot label, .smx-track label, .smx-tracks-card > label {
+  display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85em; margin-bottom: 0.5rem;
+}
+.abr-slot input, .smx-track input {
+  padding: 0.35rem 0.5rem; background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border-light); border-radius: 4px; color: inherit;
+}
+.abr-filter {
+  margin-top: 0.5rem; padding: 0.5rem 0.6rem; background: rgba(0,0,0,0.35);
+  border: 1px solid var(--border-light); border-radius: 4px;
+  font-family: monospace; font-size: 0.78em; white-space: pre-wrap; word-break: break-word;
+}
+.abr-diff { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.85em; }
+.abr-diff th, .abr-diff td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border-light); }
+.abr-quality { display: flex; gap: 1.2rem; margin: 0.5rem 0; }
+.abr-compare-card { margin-top: 0.2rem; }
+.smx-tracks { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
+.smx-track {
+  display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 0.5rem; align-items: end;
+  padding: 0.5rem 0.6rem;
+}
+.smx-track label { margin-bottom: 0; }
 
 /* Archive route (CE-Fusion F4/F5) */
 .arc-toolbar { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }

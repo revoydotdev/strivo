@@ -151,6 +151,89 @@ const RESEARCH_RELATIONSHIPS = [
   { id: RESEARCH_REL_ID, project_id: RESEARCH_PROJECT_ID, from_kind: "coding", from_id: RESEARCH_CODING_ID, to_kind: "coding", to_id: RESEARCH_CODING_ID, relation: "supports", note: "", author: "Ada" },
 ];
 
+// ── A/B render compare + sub-mix state ─────────────────────────────
+// Mirrors the real strivo-web handlers' persisted-per-recording JSON
+// exactly (crates/strivo-web/src/routes/plugins.rs `ab_render_*` /
+// `submix_*`), including the composed-value math (strivo-ab-render's
+// `audio_filter`/`diff`, strivo-submix's `to_filter_complex`) so a
+// fixture drift here can't hide a real contract break.
+const abRenderStore = new Map(); // recording_id -> { a, b }
+const submixStore = new Map(); // recording_id -> SubMix
+
+function fmtF(v) {
+  if (Math.abs(v - Math.round(v)) < 1e-9) return v.toFixed(1);
+  return String(v.toFixed(6)).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function abAudioFilter(v) {
+  if (!v) return null;
+  const parts = [];
+  if (v.pitch_time) {
+    const { tempo = 1, pitch = 1, formant_preserve = true } = v.pitch_time;
+    const identity = Math.abs(tempo - 1) < 1e-9 && Math.abs(pitch - 1) < 1e-9;
+    if (!identity) {
+      const t = Math.min(Math.max(tempo, 0.25), 4);
+      const p = Math.min(Math.max(pitch, 0.25), 4);
+      parts.push(`rubberband=tempo=${fmtF(t)}:pitch=${fmtF(p)}:formants=${formant_preserve ? "preserved" : "shifted"}`);
+    }
+  }
+  if (v.loudness_target_lufs != null) {
+    parts.push(`loudnorm=I=${v.loudness_target_lufs}:LRA=7:TP=-1`);
+  }
+  return parts.join(",");
+}
+
+function abDiff(a, b) {
+  const out = [];
+  if (a.label !== b.label) out.push({ field: "label", a: a.label, b: b.label });
+  const an = a.insert_fx ? (a.insert_fx.effects || []).length : 0;
+  const bn = b.insert_fx ? (b.insert_fx.effects || []).length : 0;
+  if (an !== bn) out.push({ field: "insert_fx_stages", a: String(an), b: String(bn) });
+  const at = a.pitch_time?.tempo ?? 1.0;
+  const bt = b.pitch_time?.tempo ?? 1.0;
+  if (Math.abs(at - bt) > 1e-6) out.push({ field: "tempo", a: `${at.toFixed(3)}×`, b: `${bt.toFixed(3)}×` });
+  const alut = a.loudness_target_lufs ?? 0.0;
+  const blut = b.loudness_target_lufs ?? 0.0;
+  if (Math.abs(alut - blut) > 1e-6) out.push({ field: "loudness_lufs", a: alut.toFixed(1), b: blut.toFixed(1) });
+  const ad = a.duck_db ?? 0.0;
+  const bd = b.duck_db ?? 0.0;
+  if (Math.abs(ad - bd) > 1e-6) out.push({ field: "duck_db", a: ad.toFixed(1), b: bd.toFixed(1) });
+  return out;
+}
+
+function abRenderStateJson(recordingId, state) {
+  const diff = state.a && state.b ? abDiff(state.a, state.b) : [];
+  return {
+    recording_id: recordingId,
+    a: state.a ?? null,
+    b: state.b ?? null,
+    a_audio_filter: abAudioFilter(state.a),
+    b_audio_filter: abAudioFilter(state.b),
+    diff,
+  };
+}
+
+function submixFilterComplex(mix) {
+  if (!mix.tracks || mix.tracks.length === 0) return "";
+  const parts = [];
+  const busLabels = [];
+  mix.tracks.forEach((tr, i) => {
+    const chain = [];
+    if (Math.abs(tr.gain_db || 0) > 1e-6) chain.push(`volume=${tr.gain_db.toFixed(2)}dB`);
+    const bus = `bus${i}`;
+    if (chain.length === 0) parts.push(`[${tr.input_index}:a]anull[${bus}]`);
+    else parts.push(`[${tr.input_index}:a]${chain.join(",")}[${bus}]`);
+    busLabels.push(bus);
+  });
+  const inputs = busLabels.map((b) => `[${b}]`).join("");
+  parts.push(`${inputs}amix=inputs=${busLabels.length}:normalize=0[mix]`);
+  const master = [];
+  if (Math.abs(mix.master_gain_db || 0) > 1e-6) master.push(`volume=${mix.master_gain_db.toFixed(2)}dB`);
+  if (master.length === 0) parts.push("[mix]anull[out]");
+  else parts.push(`[mix]${master.join(",")}[out]`);
+  return parts.join(";");
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let raw = "";
@@ -462,6 +545,77 @@ const server = createServer(async (req, res) => {
           speakers: [{ speaker: "Alpha", seconds: 1200, segments: 80 }],
           sentiment: "positive",
         });
+    }
+
+    // ── A/B render compare ────────────────────────────────────────────
+    {
+      const m = p.match(/^\/plugins\/ab-render\/([^/]+)$/);
+      if (m && req.method === "GET") {
+        const id = decodeURIComponent(m[1]);
+        const state = abRenderStore.get(id) || { a: null, b: null };
+        return json(res, 200, abRenderStateJson(id, state));
+      }
+    }
+    {
+      const m = p.match(/^\/plugins\/ab-render\/([^/]+)\/(a|b)$/);
+      if (m && req.method === "POST") {
+        const id = decodeURIComponent(m[1]);
+        const slot = m[2];
+        const variant = await readBody(req);
+        const state = abRenderStore.get(id) || { a: null, b: null };
+        state[slot] = variant;
+        abRenderStore.set(id, state);
+        return json(res, 200, abRenderStateJson(id, state));
+      }
+    }
+    {
+      const m = p.match(/^\/plugins\/ab-render\/([^/]+)\/compare$/);
+      if (m && req.method === "POST") {
+        const id = decodeURIComponent(m[1]);
+        const state = abRenderStore.get(id) || { a: null, b: null };
+        if (!state.a || !state.b) {
+          return json(res, 400, {
+            type: "about:blank",
+            title: "Bad Request",
+            status: 400,
+            detail: "save both slot A and slot B before comparing",
+            instance: null,
+          });
+        }
+        return json(res, 200, {
+          recording_id: id,
+          quality: { vmaf_mean: 95.4218, ssim_all: 0.998234 },
+          a_output_path: `/var/lib/strivo/plugins/ab-render/${id}/a.mkv`,
+          b_output_path: `/var/lib/strivo/plugins/ab-render/${id}/b.mkv`,
+        });
+      }
+    }
+
+    // ── Sub-mix bus routing ───────────────────────────────────────────
+    {
+      const m = p.match(/^\/plugins\/submix\/([^/]+)$/);
+      if (m && req.method === "GET") {
+        const id = decodeURIComponent(m[1]);
+        const mix = submixStore.get(id) || { tracks: [], master_chain: null, master_gain_db: 0 };
+        return json(res, 200, {
+          recording_id: id,
+          submix: mix,
+          filter_complex: submixFilterComplex(mix),
+          output_pad: "out",
+        });
+      }
+      if (m && req.method === "POST") {
+        const id = decodeURIComponent(m[1]);
+        const mix = await readBody(req);
+        submixStore.set(id, mix);
+        return json(res, 200, {
+          recording_id: id,
+          ok: true,
+          submix: mix,
+          filter_complex: submixFilterComplex(mix),
+          output_pad: "out",
+        });
+      }
     }
 
     // ── Research kernel (Coding Studio surfaces: codebook/corpus/notebook) ──

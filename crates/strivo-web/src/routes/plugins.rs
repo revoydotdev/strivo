@@ -19,7 +19,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use rusqlite::{Connection, OpenFlags};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -2473,6 +2473,296 @@ async fn insert_fx_preset(
     .into_response()
 }
 
+// ── A/B render compare ───────────────────────────────────────────────
+//
+// Two render-settings snapshots (slot A / slot B) stashed per
+// recording, diffed client-side-visible, and — once both slots are
+// filled — actually rendered off the source recording and compared
+// with ffmpeg's SSIM filter so the numbers on screen are measured,
+// not guessed.
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct AbRenderState {
+    #[serde(default)]
+    a: Option<strivo_ab_render::RenderVariant>,
+    #[serde(default)]
+    b: Option<strivo_ab_render::RenderVariant>,
+}
+
+fn ab_render_state_path(recording_id: &str) -> std::path::PathBuf {
+    strivo_core::config::AppConfig::data_dir()
+        .join("plugins")
+        .join("ab-render")
+        .join(format!("{recording_id}.json"))
+}
+
+fn ab_render_dir(recording_id: &str) -> std::path::PathBuf {
+    strivo_core::config::AppConfig::data_dir()
+        .join("plugins")
+        .join("ab-render")
+        .join(recording_id)
+}
+
+fn ab_render_load_state(recording_id: &str) -> AbRenderState {
+    std::fs::read_to_string(ab_render_state_path(recording_id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn ab_render_state_json(recording_id: &str, state: &AbRenderState) -> Value {
+    let diff = match (&state.a, &state.b) {
+        (Some(a), Some(b)) => strivo_ab_render::diff(a, b),
+        _ => Vec::new(),
+    };
+    json!({
+        "recording_id": recording_id,
+        "a": state.a,
+        "b": state.b,
+        "a_audio_filter": state.a.as_ref().map(|v| v.audio_filter()),
+        "b_audio_filter": state.b.as_ref().map(|v| v.audio_filter()),
+        "diff": diff,
+    })
+}
+
+/// `GET /api/v1/plugins/ab-render/<id>` — load the saved A/B slots
+/// (either or both may be empty) plus the diff between them and each
+/// slot's composed ffmpeg `-af` value.
+async fn ab_render_load(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro("ab-render") {
+        return r;
+    }
+    let ab = ab_render_load_state(&recording_id);
+    Json(ab_render_state_json(&recording_id, &ab)).into_response()
+}
+
+/// `POST /api/v1/plugins/ab-render/<id>/<slot>` — stash a render
+/// variant into slot `a` or `b`. Returns the full state (both slots +
+/// diff) so the SPA can re-render without a follow-up GET.
+async fn ab_render_save(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path((recording_id, slot)): Path<(String, String)>,
+    Json(variant): Json<strivo_ab_render::RenderVariant>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro("ab-render") {
+        return r;
+    }
+    let mut ab = ab_render_load_state(&recording_id);
+    match slot.as_str() {
+        "a" => ab.a = Some(variant),
+        "b" => ab.b = Some(variant),
+        other => {
+            return Problem::bad_request(format!("unknown slot '{other}' (expected 'a' or 'b')"))
+                .into_response();
+        }
+    }
+    let path = ab_render_state_path(&recording_id);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Problem::internal(format!("mkdir: {e}")).into_response();
+        }
+    }
+    match serde_json::to_string_pretty(&ab) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                return Problem::internal(format!("write: {e}")).into_response();
+            }
+        }
+        Err(e) => return Problem::internal(format!("serialise: {e}")).into_response(),
+    }
+    Json(ab_render_state_json(&recording_id, &ab)).into_response()
+}
+
+/// Render one variant's audio filter against the source recording,
+/// video stream copied through untouched. Blocking (spawns and waits
+/// on a child ffmpeg process); callers run this inside
+/// `spawn_blocking`.
+fn ab_render_variant(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    variant: &strivo_ab_render::RenderVariant,
+) -> Result<(), String> {
+    let filter = variant.audio_filter();
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-hide_banner", "-i"]).arg(input);
+    if filter.is_empty() {
+        cmd.args(["-c", "copy"]);
+    } else {
+        cmd.args(["-af", &filter, "-c:v", "copy"]);
+    }
+    cmd.arg(output);
+    let out = cmd.output().map_err(|e| format!("spawn ffmpeg: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "ffmpeg render failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}
+
+/// `POST /api/v1/plugins/ab-render/<id>/compare` — render both stashed
+/// variants off the source recording and diff them with ffmpeg's SSIM
+/// filter. Both slots must be saved first. The renders + comparison
+/// are real ffmpeg work (two transcodes + one compare pass), so this
+/// runs off the Tokio worker thread.
+async fn ab_render_compare(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro("ab-render") {
+        return r;
+    }
+    let ab = ab_render_load_state(&recording_id);
+    let (a, b) = match (ab.a.clone(), ab.b.clone()) {
+        (Some(a), Some(b)) => (a, b),
+        _ => {
+            return Problem::bad_request("save both slot A and slot B before comparing")
+                .into_response();
+        }
+    };
+    let input = match resolve_recording_path(&recording_id).await {
+        Ok(p) => p,
+        Err(e) => return Problem::not_found(e).into_response(),
+    };
+    if !input.exists() {
+        return Problem::not_found("recording file missing").into_response();
+    }
+    let dir = ab_render_dir(&recording_id);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return Problem::internal(format!("mkdir: {e}")).into_response();
+    }
+    let out_a = dir.join("a.mkv");
+    let out_b = dir.join("b.mkv");
+    let (render_input, render_out_a, render_out_b) = (input.clone(), out_a.clone(), out_b.clone());
+    let outcome =
+        tokio::task::spawn_blocking(move || -> Result<strivo_ab_render::QualityReport, String> {
+            ab_render_variant(&render_input, &render_out_a, &a)?;
+            ab_render_variant(&render_input, &render_out_b, &b)?;
+            let ssim = std::process::Command::new("ffmpeg")
+                .args(["-hide_banner", "-i"])
+                .arg(&render_out_a)
+                .arg("-i")
+                .arg(&render_out_b)
+                .args(["-lavfi", "ssim", "-f", "null", "-"])
+                .output()
+                .map_err(|e| format!("spawn ffmpeg ssim: {e}"))?;
+            let stderr = String::from_utf8_lossy(&ssim.stderr);
+            Ok(strivo_ab_render::parse_quality_report(&stderr))
+        })
+        .await;
+    match outcome {
+        Ok(Ok(quality)) => Json(json!({
+            "recording_id": recording_id,
+            "quality": quality,
+            "a_output_path": out_a.to_string_lossy(),
+            "b_output_path": out_b.to_string_lossy(),
+        }))
+        .into_response(),
+        Ok(Err(msg)) => Problem::internal(msg).into_response(),
+        Err(error) => {
+            Problem::internal(format!("ab-render worker crashed: {error}")).into_response()
+        }
+    }
+}
+
+// ── Sub-mix bus routing ──────────────────────────────────────────────
+//
+// Per-track + master `InsertChain` composing into one ffmpeg
+// `filter_complex` graph. Pure-data: the host splices the composed
+// value into the render pipeline via the existing multitrack plugin,
+// so this endpoint only ever loads/saves the model and echoes back
+// the computed filtergraph.
+
+fn submix_path(recording_id: &str) -> std::path::PathBuf {
+    strivo_core::config::AppConfig::data_dir()
+        .join("plugins")
+        .join("submix")
+        .join(format!("{recording_id}.json"))
+}
+
+/// `GET /api/v1/plugins/submix/<id>` — load the saved sub-mix bus
+/// (empty default when absent) plus the composed `filter_complex`
+/// value the render path will splice in.
+async fn submix_load(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro("submix") {
+        return r;
+    }
+    let mix: strivo_submix::SubMix = std::fs::read_to_string(submix_path(&recording_id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    Json(json!({
+        "recording_id": recording_id,
+        "submix": mix,
+        "filter_complex": mix.to_filter_complex(),
+        "output_pad": strivo_submix::SubMix::output_pad(),
+    }))
+    .into_response()
+}
+
+/// `POST /api/v1/plugins/submix/<id>` — persist the full bus model
+/// (tracks + master chain, reorder/edit/delete all happen
+/// client-side). Echoes back the composed filtergraph so the SPA can
+/// re-render without a follow-up GET.
+async fn submix_save(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+    Json(mix): Json<strivo_submix::SubMix>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro("submix") {
+        return r;
+    }
+    let path = submix_path(&recording_id);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Problem::internal(format!("mkdir: {e}")).into_response();
+        }
+    }
+    match serde_json::to_string_pretty(&mix) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                return Problem::internal(format!("write: {e}")).into_response();
+            }
+        }
+        Err(e) => return Problem::internal(format!("serialise: {e}")).into_response(),
+    }
+    Json(json!({
+        "recording_id": recording_id,
+        "ok": true,
+        "submix": mix,
+        "filter_complex": mix.to_filter_complex(),
+        "output_pad": strivo_submix::SubMix::output_pad(),
+    }))
+    .into_response()
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct VadQuery {
     /// Window seconds to analyse from t=0 (0 = whole recording). Capped
@@ -4335,6 +4625,19 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/plugins/pitch/{id}/fit",
             axum::routing::post(pitch_fit),
+        )
+        .route("/api/v1/plugins/ab-render/{id}", get(ab_render_load))
+        .route(
+            "/api/v1/plugins/ab-render/{id}/{slot}",
+            axum::routing::post(ab_render_save),
+        )
+        .route(
+            "/api/v1/plugins/ab-render/{id}/compare",
+            axum::routing::post(ab_render_compare),
+        )
+        .route(
+            "/api/v1/plugins/submix/{id}",
+            get(submix_load).post(submix_save),
         )
         // Distinct namespace so we don't collide with existing
         // /plugins/<name>/<id> routes (sidechain, automation, etc.)

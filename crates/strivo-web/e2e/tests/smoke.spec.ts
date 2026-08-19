@@ -68,9 +68,25 @@ test("past-broadcasts pills have a download button that flips to Downloading on 
 test("patreon creators appear in the left rail (seeded from /patreon)", async ({ page }) => {
   await page.goto("/app#/library");
   // Seeded on boot from /patreon — no waiting on a poll-driven SSE event.
-  await expect(page.locator(".ch-section-title", { hasText: "Patreon" })).toBeVisible();
+  // Offline channels share ONE list rather than a header per platform, so
+  // the assertion is that the creator is present in it, not that a
+  // "Patreon" header exists.
+  await expect(page.locator(".ch-section-title", { hasText: "OFFLINE" })).toBeVisible();
   await expect(page.getByText("Cool Creator")).toBeVisible();
   await expect(page.locator(".ch-tier", { hasText: "Premium Tier" })).toBeVisible();
+});
+
+test("offline channels collapse into one sortable list", async ({ page }) => {
+  await page.goto("/app#/library");
+  // Exactly two sections: LIVE and OFFLINE.
+  await expect(page.locator(".ch-section-title")).toHaveCount(2);
+  const offline = page.locator('.ch-section-title[data-rail-section="offline"]');
+  await expect(offline).toHaveAttribute("aria-expanded", "true");
+  await offline.click();
+  await expect(offline).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator('[data-rail-body="offline"]')).toBeHidden();
+  // Sort control offers name plus both last-live directions.
+  await expect(page.locator("#rail-sort option")).toHaveCount(3);
 });
 
 test("no Activity surface anywhere", async ({ page }) => {

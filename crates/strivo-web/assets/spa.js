@@ -1288,6 +1288,93 @@ async function refreshHealthPill() {
 // Merges /channels (Twitch/YT) with Patreon creators (patreonState),
 // live first + bold, then offline. Clicking selects a channel and shows
 // its detail in the center (home route only).
+// Rail ordering + collapse state. Platform rank keeps Twitch → YouTube →
+// Patreon stable regardless of how the daemon happens to return channels.
+const RAIL_PLATFORM_ORDER = { Twitch: 0, YouTube: 1, Patreon: 2 };
+function byPlatformThenName(a, b) {
+  const rank =
+    (RAIL_PLATFORM_ORDER[a.platform] ?? 99) - (RAIL_PLATFORM_ORDER[b.platform] ?? 99);
+  if (rank !== 0) return rank;
+  return (a.display_name || a.name || "").localeCompare(
+    b.display_name || b.name || "",
+    undefined,
+    { sensitivity: "base" },
+  );
+}
+
+// Rail sort. Alphabetical-within-platform is the default because it makes a
+// channel findable by name; the last-live orders answer the other question
+// people actually ask of this rail ("who's been on recently / who's gone
+// quiet"). Channels StriVo has never seen live sort last in both directions
+// rather than pretending to be infinitely old or infinitely recent.
+const RAIL_SORT_KEY = "strivo:rail-sort";
+const RAIL_SORTS = {
+  name: { label: "Name (A–Z)", cmp: byPlatformThenName },
+  "live-desc": { label: "Last live (newest)", cmp: (a, b) => byLastLive(a, b, -1) },
+  "live-asc": { label: "Last live (oldest)", cmp: (a, b) => byLastLive(a, b, 1) },
+};
+function byLastLive(a, b, dir) {
+  const ta = a.is_live ? Infinity : Date.parse(a.last_live_at || "") || null;
+  const tb = b.is_live ? Infinity : Date.parse(b.last_live_at || "") || null;
+  if (ta === null && tb === null) return byPlatformThenName(a, b);
+  if (ta === null) return 1; // never-seen-live sinks, whichever direction
+  if (tb === null) return -1;
+  if (ta === tb) return byPlatformThenName(a, b);
+  return ta < tb ? dir : -dir;
+}
+function railSort() {
+  try {
+    const v = localStorage.getItem(RAIL_SORT_KEY);
+    return RAIL_SORTS[v] ? v : "name";
+  } catch (_) {
+    return "name";
+  }
+}
+function setRailSort(v) {
+  try {
+    localStorage.setItem(RAIL_SORT_KEY, RAIL_SORTS[v] ? v : "name");
+  } catch (_) {
+    /* private mode — sort just won't persist */
+  }
+}
+
+const RAIL_COLLAPSE_KEY = "strivo:rail-collapsed";
+function railCollapsedSet() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RAIL_COLLAPSE_KEY) || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+function railSectionOpen(id) {
+  return !railCollapsedSet().has(id);
+}
+function setRailSectionOpen(id, open) {
+  const set = railCollapsedSet();
+  if (open) set.delete(id);
+  else set.add(id);
+  try {
+    localStorage.setItem(RAIL_COLLAPSE_KEY, JSON.stringify([...set]));
+  } catch (_) {
+    /* private mode — collapse just won't persist */
+  }
+}
+
+function railSortControlHtml() {
+  const current = railSort();
+  const opts = Object.entries(RAIL_SORTS)
+    .map(
+      ([v, { label }]) =>
+        `<option value="${v}"${v === current ? " selected" : ""}>${label}</option>`,
+    )
+    .join("");
+  return `<div class="ch-sort">
+      <label class="ch-sort-label" for="rail-sort">Sort</label>
+      <select id="rail-sort" class="ch-sort-select" data-rail-sort>${opts}</select>
+    </div>`;
+}
+
 function paintChannelList() {
   const rail = document.getElementById("channel-list");
   if (!rail) return;
@@ -1302,12 +1389,13 @@ function paintChannelList() {
     return true;
   });
 
-  const live = channels.filter((c) => c.is_live);
-  const offline = channels
-    .filter((c) => !c.is_live)
-    .sort((a, b) =>
-      (a.display_name || a.name).localeCompare(b.display_name || b.name),
-    );
+  // One ordering for both rails: platform groups in a fixed order, then
+  // A-Z inside each. Offline used to be split into a header per platform,
+  // which cost three headers of vertical space and made a single alphabetical
+  // scan impossible. The per-row platform glyph already says which is which.
+  const cmp = (RAIL_SORTS[railSort()] || RAIL_SORTS.name).cmp;
+  const live = channels.filter((c) => c.is_live).sort(cmp);
+  const offline = channels.filter((c) => !c.is_live).sort(cmp);
   updateLiveCount(recCache.filter((r) => isInProgress(r.state)).length);
 
   const recordingChannelIds = new Set(
@@ -1356,15 +1444,20 @@ function paintChannelList() {
       </a>`;
   };
 
-  const section = (title, list) =>
+  // Section headers are buttons so they can be collapsed; the open/closed
+  // state persists per section so a rail collapsed to just LIVE stays that
+  // way across repaints and reloads.
+  const section = (id, title, list) =>
     list.length
-      ? `<div class="ch-section-title">${title} <span class="ch-count">${list.length}</span></div>${list.map(row).join("")}`
+      ? `<button type="button" class="ch-section-title" data-rail-section="${id}"
+                 aria-expanded="${railSectionOpen(id)}" aria-controls="rail-sec-${id}">
+           <span class="ch-caret" aria-hidden="true">▾</span>
+           <span class="ch-section-label">${title}</span>
+           <span class="ch-count">${list.length}</span>
+         </button>
+         <div class="ch-section-body" id="rail-sec-${id}" data-rail-body="${id}"
+              ${railSectionOpen(id) ? "" : "hidden"}>${list.map(row).join("")}</div>`
       : "";
-
-  // Offline channels grouped by platform (item 5). Twitch / YouTube /
-  // Patreon each get their own header; Patreon thus becomes a distinct,
-  // always-visible section (item 6).
-  const byPlat = (plat) => offline.filter((c) => c.platform === plat);
 
   // Preserve scroll position across repaints (the rail is rebuilt
   // wholesale, which would otherwise jump it to the top on every event).
@@ -1375,15 +1468,31 @@ function paintChannelList() {
            Connect Twitch / YouTube / Patreon and follow channels — they
            appear here automatically.<br>
            <a href="#/settings">Check Settings →</a></div>`
-      : section(`● LIVE`, live) +
-        section("Twitch", byPlat("Twitch")) +
-        section("YouTube", byPlat("YouTube")) +
-        section("Patreon", byPlat("Patreon"));
+      : railSortControlHtml() +
+        section("live", `● LIVE`, live) +
+        section("offline", "OFFLINE", offline);
 
   rail.querySelectorAll(".ch-row").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.preventDefault();
       selectChannel(el.dataset.channelKey);
+    });
+  });
+  const sortSel = rail.querySelector("[data-rail-sort]");
+  if (sortSel) {
+    sortSel.addEventListener("change", () => {
+      setRailSort(sortSel.value);
+      paintChannelList();
+    });
+  }
+  rail.querySelectorAll("[data-rail-section]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.railSection;
+      const open = !railSectionOpen(id);
+      setRailSectionOpen(id, open);
+      el.setAttribute("aria-expanded", String(open));
+      const body = rail.querySelector(`[data-rail-body="${id}"]`);
+      if (body) body.hidden = !open;
     });
   });
   rail.scrollTop = prevScroll;
@@ -1642,8 +1751,12 @@ function paintDashboard() {
 // /watch route focused on that stream.
 function recordingsDashboardHtml(compact) {
   const inProgress = dashRecordings.filter((r) => isInProgress(r.state));
+  // Sort before slicing. This previously took whatever order the daemon
+  // returned, so "Recent" was only accidentally chronological and the slice
+  // could drop newer rows in favour of older ones.
   const recent = dashRecordings
     .filter((r) => !isInProgress(r.state))
+    .sort((a, b) => recordingTime(b) - recordingTime(a))
     .slice(0, compact ? 12 : 24);
   const upcoming = [...dashSchedule]
     .filter((s) => s.next_fire)
@@ -1728,20 +1841,59 @@ function recordingPillHtml(j) {
   const playAttrs = playable
     ? ` data-action="play" data-job-id="${htmlEscape(j.id)}" role="button" tabindex="0"`
     : "";
+  // "Finished" is the state of nearly every row here, so rendering a pill
+  // for it spends a column of every card restating the default. Only states
+  // that actually need attention get a pill; the rest read as unremarkable,
+  // which is the point.
+  const state = recordingDisplayState(j);
+  const statePill = isNoteworthyState(state) ? renderStatePill(state) : "";
+  const title = htmlEscape(niceTitle(j.stream_title) || j.channel_name || "(recording)");
   return `
-    <div class="media-pill${j.file_exists === false ? " mp-broken" : ""}${playable ? " mp-clickable" : ""}"${playAttrs}>
+    <div class="media-pill mp-card${j.file_exists === false ? " mp-broken" : ""}${playable ? " mp-clickable" : ""}"${playAttrs}>
+      <div class="mp-title" title="${title}">${title} ${sourceBadge}</div>
       <div class="mp-thumb">${missingOverlay}<img class="mp-thumb-img" loading="lazy" alt=""
         src="/api/v1/recordings/${encodeURIComponent(j.id)}/thumb" onerror="this.remove()"></div>
-      <div class="mp-info">
-        <div class="mp-title">${htmlEscape(niceTitle(j.stream_title) || j.channel_name || "(recording)")} ${sourceBadge}</div>
-        <div class="mp-sub">${htmlEscape(j.channel_name || "")} · ${htmlEscape(when)}</div>
-      </div>
-      <div class="mp-meta">
-        ${renderStatePill(recordingDisplayState(j))}
+      <div class="mp-foot">
+        <span class="mp-channel">${htmlEscape(j.channel_name || "")}</span>
+        <span class="mp-when" title="${htmlEscape(when)}">${htmlEscape(shortWhen(j.started_at))}</span>
+        <span class="mp-spacer"></span>
+        ${statePill}
         <span class="mp-size">${formatBytes(j.bytes_written || 0)}</span>
         ${stop}
       </div>
     </div>`;
+}
+
+/// Timestamp a recording sorts by. started_at is the only time the API
+/// exposes for every row, so it is the sort key; guard against nulls so a
+/// malformed row sinks rather than poisoning the comparator with NaN.
+function recordingTime(r) {
+  const t = r && r.started_at ? Date.parse(r.started_at) : NaN;
+  return Number.isFinite(t) ? t : 0;
+}
+
+/// States worth spending pixels on. "Finished" is the expected outcome and
+/// is conveyed well enough by the row simply being playable, so it earns no
+/// pill. Everything else — failures, missing files, in-flight work — does.
+/// Note this takes the object recordingDisplayState() returns, not a string.
+function isNoteworthyState(state) {
+  return (state && state.className) !== "finished";
+}
+
+/// Compact timestamp for dense rows: a time for today, "Wed 14:05" within
+/// the week, "30 Jul" beyond it. The full locale string stays in the
+/// tooltip. Seconds are never useful here and cost ~4 characters a row.
+function shortWhen(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hhmm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return hhmm;
+  const days = (now - d) / 86400000;
+  if (days < 7) return `${d.toLocaleDateString([], { weekday: "short" })} ${hhmm}`;
+  return d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
 function wireDashboard() {
@@ -5931,6 +6083,49 @@ function withMuted(url, muted) {
   return url + (url.includes("?") ? "&" : "?") + param;
 }
 
+// Single source of truth for a live tile's iframe src.
+//
+// Autoplay has to be stated explicitly because the two providers disagree
+// out of the box: Twitch's player autoplays unless told not to, YouTube's
+// embed does the opposite. Leaving it implicit is why opening a 3x3 wall
+// used to start nine Twitch streams at once.
+//
+// The base URL is kept on the element in `data-embed-base` so repaints
+// rebuild from it rather than regex-stripping params off a previous src.
+function tileSrc(embedUrl, { muted, playing }) {
+  if (!embedUrl) return embedUrl;
+  const yt = embedUrl.includes("youtube.com");
+  const params = [
+    yt ? `mute=${muted ? 1 : 0}` : `muted=${muted}`,
+    yt ? `autoplay=${playing ? 1 : 0}` : `autoplay=${playing}`,
+  ];
+  return embedUrl + (embedUrl.includes("?") ? "&" : "?") + params.join("&");
+}
+
+// Tiles start paused. A wall of live streams that all begin playing the
+// moment it opens burns bandwidth and CPU on streams the viewer has not
+// chosen to watch yet, so the default is a still, cheap grid you press
+// play on. Persisted so the preference survives a reload.
+const PLAYER_AUTOPLAY_KEY = "strivo-player-autoplay";
+function loadPlayerAutoplay() {
+  try { return localStorage.getItem(PLAYER_AUTOPLAY_KEY) === "1"; } catch (_) { return false; }
+}
+function savePlayerAutoplay() {
+  try {
+    localStorage.setItem(PLAYER_AUTOPLAY_KEY, playerState.autoplay ? "1" : "0");
+  } catch (_) { /* private mode */ }
+}
+/// Is this specific tile playing? A tile the user pressed play on stays
+/// playing even while the wall default is paused.
+function tilePlaying(path) {
+  return playerState.autoplay || (playerState.playing || []).includes(path);
+}
+function setTilePlaying(path, on) {
+  const set = new Set(playerState.playing || []);
+  if (on) set.add(path); else set.delete(path);
+  playerState.playing = [...set];
+}
+
 // ── Player layout tree (multi-view collapsed into the player) ────────
 //
 // The viewing stage is a recursive layout tree. Two node kinds:
@@ -5956,6 +6151,10 @@ const PLAYER_PRESET_KEY = "strivo-player-preset";
 //                   route is DELETE-only)
 function _slot(streamId = null, recordingId = null) { return { kind: "slot", streamId, recordingId }; }
 function _split(dir, ratio, a, b) { return { kind: "split", dir, ratio, a, b }; }
+// Row builders for the grid presets — kept as helpers so the trees read as
+// rows rather than as nested split soup.
+function _row2() { return _split("h", 0.5, _slot(), _slot()); }
+function _row3() { return _split("h", 1 / 3, _slot(), _split("h", 0.5, _slot(), _slot())); }
 
 // Strict drag-payload parser. Validates the shape and ID grammar so a
 // stray browser URL drag (or a corrupted/old payload) can't slip into
@@ -5997,6 +6196,24 @@ const PLAYER_PRESETS = {
     _split("h", 0.5, _slot(), _slot()),
     _split("h", 0.5, _slot(), _slot()),
   ),
+  // Grids are built rows-first so a depth-first walk visits tiles in
+  // reading order — that walk is what "fill the next empty tile" uses, and
+  // a column-major tree makes clicked sources land in a scattered order.
+  // 2 columns x 3 rows.
+  "grid-6": () => _split("v", 1 / 3,
+    _row2(),
+    _split("v", 0.5, _row2(), _row2()),
+  ),
+  // 3x3 wall — 9 leaves, exactly the cap countLeaves enforces.
+  "grid-9": () => _split("v", 1 / 3,
+    _row3(),
+    _split("v", 0.5, _row3(), _row3()),
+  ),
+  // One large focus tile with a stacked sidebar of three.
+  "focus-3": () => _split("h", 0.68,
+    _slot(),
+    _split("v", 1 / 3, _slot(), _split("v", 0.5, _slot(), _slot())),
+  ),
   custom: () => _slot(),
 };
 
@@ -6005,6 +6222,9 @@ const PLAYER_PRESET_LABELS = {
   "split-screen": "Split-screen (2)",
   "split-quadrant": "Split / Quadrant (3)",
   quadrant: "Quadrant (4)",
+  "focus-3": "Focus + 3",
+  "grid-6": "Grid (6)",
+  "grid-9": "Wall (9)",
   custom: "Custom",
 };
 
@@ -6028,6 +6248,8 @@ const playerState = {
   chatRailLastStreams: [], // last streams[] cache for toggle re-reconciliation
   chatRailCompose: null,   // mountChatCompose controller for the rail
   lastPaintedLayout: null, // snapshot used by tryPatchPlayerStage to diff
+  autoplay: loadPlayerAutoplay(), // wall-wide default; false = open paused
+  playing: [],         // paths the viewer explicitly started while paused
 };
 
 // Path strings are dot-joined sequences of "a"/"b" descending the tree.
@@ -6577,6 +6799,33 @@ function wireTileHandlers(tile, stage, watch, streams) {
       Toast.error(`Fullscreen denied: ${err && err.message || err}`);
     }
   });
+  // Press-to-play on a paused tile. Starting one tile does not start the
+  // wall — that is the whole point of opening paused.
+  tile.querySelector(".ms-play")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const path = e.currentTarget.dataset.path || "";
+    setTilePlaying(path, true);
+    const muted = playerState.soloPath ? playerState.soloPath !== path : true;
+    const poster = tile.querySelector(".ms-poster");
+    const base =
+      poster?.getAttribute("data-embed-base") ||
+      tile.querySelector(".ms-iframe")?.getAttribute("data-embed-base") ||
+      "";
+    if (poster && base) {
+      // Swap the still frame for a real player only now that it is wanted.
+      const frame = document.createElement("iframe");
+      frame.className = "watch-tile-iframe ms-iframe";
+      frame.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write");
+      frame.setAttribute("allowfullscreen", "");
+      frame.setAttribute("frameborder", "0");
+      frame.setAttribute("data-embed-base", base);
+      frame.setAttribute("src", tileSrc(base, { muted, playing: true }));
+      poster.replaceWith(frame);
+    }
+    const video = tile.querySelector(".ms-video");
+    if (video) { video.preload = "metadata"; video.play?.().catch(() => {}); }
+  });
   tile.querySelector(".ms-remove")?.addEventListener("click", (e) => {
     e.stopPropagation();
     playerState.layout = setNodeAt(playerState.layout, tile.dataset.path || "", _slot());
@@ -6623,12 +6872,14 @@ function tryPatchPlayerStage(watch, prev, curr, streams) {
       const iframe = tile.querySelector(".ms-iframe");
       const video = tile.querySelector(".ms-video");
       if (iframe) {
-        const cur = iframe.getAttribute("src") || "";
-        const base = cur.replace(/[?&](muted|mute)=[^&]*/g, "").replace(/[?&]$/, "");
+        // Rebuild from the stored base URL. The old code stripped params
+        // off the current src with a regex, which compounded every repaint.
+        const base = iframe.getAttribute("data-embed-base") || "";
         if (base) {
-          const sep = base.includes("?") ? "&" : "?";
-          const param = base.includes("youtube.com") ? `mute=${muted ? 1 : 0}` : `muted=${muted}`;
-          const next = base + sep + param;
+          const cur = iframe.getAttribute("src") || "";
+          const next = tileSrc(base, { muted, playing: tilePlaying(path) });
+          // Only touch src when it really changed: assigning it reloads the
+          // player and drops the viewer back to the live edge.
           if (next !== cur) iframe.setAttribute("src", next);
         }
       }
@@ -6720,6 +6971,10 @@ function paintPlayerStage(watch, streams) {
       </details>
       ${customTools}
       <span class="watch-tb-sep" aria-hidden="true">·</span>
+      <button class="sm ms-compose-open" id="ms-compose-open" type="button"
+              title="Open the multi-view composer — drag streams onto the plane">⊞ Compose</button>
+      <button class="sm watch-playall ${playerState.autoplay ? "active" : ""}" id="watch-playall"
+              type="button" title="${playerState.autoplay ? "Pause every tile" : "Start every tile"}">${playerState.autoplay ? "⏸ Pause all" : "▶ Play all"}</button>
       <button class="sm watch-mute-all ${muteAllPressed}" id="watch-mute-all" title="Mute every tile">🔇 Mute all</button>
     </div>`;
 
@@ -6867,6 +7122,21 @@ function paintPlayerStage(watch, streams) {
     paintPlayerStage(watch, streams);
   });
 
+  watch.querySelector("#watch-playall")?.addEventListener("click", () => {
+    playerState.autoplay = !playerState.autoplay;
+    // Pausing the wall also clears per-tile plays, so "Pause all" means it.
+    if (!playerState.autoplay) playerState.playing = [];
+    savePlayerAutoplay();
+    // Full repaint: every tile's src changes, so the patch fast-path has
+    // nothing to conserve here.
+    playerState.lastPaintedLayout = null;
+    paintPlayerStage(watch, streams);
+  });
+
+  watch.querySelector("#ms-compose-open")?.addEventListener("click", () => {
+    openComposer(watch, streams);
+  });
+
   // Channel-list rail rows are draggable as a stream source. <a> tags
   // are draggable by default (the browser drags the href); our custom
   // dragstart MUST run AND set effectAllowed first so the browser's
@@ -6944,8 +7214,293 @@ function renderLayoutNode(node, path, streams) {
     </div>`;
 }
 
+// ── Multi-view composer ──────────────────────────────────────────────
+//
+// A modal for building the wall: pick a tiling, then fill it by dragging
+// sources onto cells or by clicking a cell and then a source. Everything
+// applies to the live stage immediately — there is no OK/Cancel, because
+// the stage behind the modal *is* the preview.
+//
+// The mini-map renders the same layout tree the stage uses, so cell paths
+// and drop semantics are shared with the real tiles rather than reimplemented.
+let composerSelectedPath = null;
+
+function composerSourceChips(streams) {
+  const live = (streams || []).map((s) => `
+    <button type="button" class="msc-src" draggable="true"
+            data-src-kind="stream" data-src-id="${htmlEscape(s.stream_id)}"
+            title="${htmlEscape(s.channel_name)} · ${htmlEscape(s.platform)}">
+      <span class="msc-src-dot ${htmlEscape(String(s.platform || "").toLowerCase())}"></span>
+      <span class="msc-src-name">${htmlEscape(s.channel_name)}</span>
+      <span class="msc-src-meta">${s.viewer_count != null ? formatCount(s.viewer_count) : "live"}</span>
+    </button>`).join("");
+  const recs = (recCache || [])
+    .filter((r) => r.state === "Finished" && r.file_exists !== false)
+    .sort((a, b) => recordingTime(b) - recordingTime(a))
+    .slice(0, 12)
+    .map((r) => `
+    <button type="button" class="msc-src msc-src-rec" draggable="true"
+            data-src-kind="rec" data-src-id="${htmlEscape(r.id)}"
+            title="${htmlEscape(niceTitle(r.stream_title) || r.channel_name || r.id)}">
+      <span class="msc-src-dot rec"></span>
+      <span class="msc-src-name">${htmlEscape(niceTitle(r.stream_title) || r.channel_name || r.id.slice(0, 8))}</span>
+      <span class="msc-src-meta">${htmlEscape(shortWhen(r.started_at))}</span>
+    </button>`).join("");
+  return `
+    <div class="msc-src-group">
+      <div class="msc-src-head">Live now <span class="ch-count">${(streams || []).length}</span></div>
+      <div class="msc-src-list">${live || '<div class="empty sm">No live channels</div>'}</div>
+    </div>
+    <div class="msc-src-group">
+      <div class="msc-src-head">Recent recordings</div>
+      <div class="msc-src-list">${recs || '<div class="empty sm">No recordings</div>'}</div>
+    </div>`;
+}
+
+/// Recursively render the layout tree as a proportional mini-map. Mirrors
+/// the stage's own geometry so what you arrange is what you get.
+function composerMapHtml(node, path, streams) {
+  if (!node) return "";
+  if (node.kind === "split") {
+    const dir = node.dir === "h" ? "row" : "column";
+    const ratio = Math.max(0.1, Math.min(0.9, node.ratio ?? 0.5));
+    return `
+      <div class="msc-split" style="flex-direction:${dir}">
+        <div class="msc-branch" style="flex:${ratio}">${composerMapHtml(node.a, path ? path + ".a" : "a", streams)}</div>
+        <div class="msc-branch" style="flex:${1 - ratio}">${composerMapHtml(node.b, path ? path + ".b" : "b", streams)}</div>
+      </div>`;
+  }
+  const sel = composerSelectedPath === path ? " is-selected" : "";
+  if (node.streamId) {
+    const s = (streams || []).find((x) => x.stream_id === node.streamId);
+    const name = s ? s.channel_name : node.streamId;
+    const stale = s ? "" : " is-stale";
+    return `
+      <div class="msc-cell is-filled${sel}${stale}" data-path="${htmlEscape(path)}" draggable="true" tabindex="0">
+        <span class="msc-cell-name">${htmlEscape(name)}</span>
+        ${s ? "" : '<span class="msc-cell-warn">offline</span>'}
+        <button type="button" class="msc-cell-clear" data-clear="${htmlEscape(path)}" title="Clear this tile" aria-label="Clear tile">✕</button>
+      </div>`;
+  }
+  if (node.recordingId) {
+    const r = (recCache || []).find((x) => x.id === node.recordingId);
+    const name = r ? (niceTitle(r.stream_title) || r.channel_name || r.id.slice(0, 8)) : node.recordingId.slice(0, 8);
+    return `
+      <div class="msc-cell is-filled is-rec${sel}" data-path="${htmlEscape(path)}" draggable="true" tabindex="0">
+        <span class="msc-cell-name">${htmlEscape(name)}</span>
+        <button type="button" class="msc-cell-clear" data-clear="${htmlEscape(path)}" title="Clear this tile" aria-label="Clear tile">✕</button>
+      </div>`;
+  }
+  return `
+    <div class="msc-cell${sel}" data-path="${htmlEscape(path)}" tabindex="0">
+      <span class="msc-cell-empty">+</span>
+    </div>`;
+}
+
+function firstEmptyPath(layout) {
+  let found = null;
+  walkLayout(layout, (node, path) => {
+    if (found === null && node.kind === "slot" && !node.streamId && !node.recordingId) found = path;
+  });
+  return found;
+}
+
+function openComposer(watch, streams) {
+  const existing = document.getElementById("ms-composer");
+  if (existing) existing.remove();
+  composerSelectedPath = null;
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.id = "ms-composer";
+  document.body.appendChild(overlay);
+
+  const repaintStage = () => {
+    savePlayerLayout();
+    playerState.lastPaintedLayout = null;
+    paintPlayerStage(watch, streams);
+  };
+
+  const draw = () => {
+    const presets = Object.entries(PLAYER_PRESET_LABELS)
+      .filter(([k]) => k !== "custom")
+      .map(([k, v]) => `<button type="button" class="sm msc-preset${k === playerState.preset ? " active" : ""}" data-preset="${k}">${htmlEscape(v)}</button>`)
+      .join("");
+    overlay.innerHTML = `
+      <div class="modal-card msc-card" role="dialog" aria-modal="true" aria-label="Multi-view composer">
+        <div class="modal-head">
+          <h2 class="msc-title">Multi-view composer</h2>
+          <button class="modal-close" data-action="modal-close" aria-label="Close">✕</button>
+        </div>
+        <div class="msc-body">
+          <aside class="msc-sources">${composerSourceChips(streams)}</aside>
+          <section class="msc-plane">
+            <div class="msc-presets">${presets}</div>
+            <div class="msc-map" id="msc-map">${composerMapHtml(playerState.layout, "", streams)}</div>
+            <div class="msc-hint pg-cap-hint">
+              Drag a source onto a tile, or click a tile then a source. Drag tile-to-tile to swap.
+            </div>
+          </section>
+        </div>
+        <div class="msc-foot">
+          <label class="msc-toggle">
+            <input type="checkbox" id="msc-paused" ${playerState.autoplay ? "" : "checked"}>
+            <span>Open paused</span>
+          </label>
+          <span class="pg-cap-hint">${countLeaves(playerState.layout)}/${PLAYER_LEAF_CAP} tiles</span>
+          <span class="msc-foot-spacer"></span>
+          <button type="button" class="sm" id="msc-clear-all">Clear all</button>
+          <button type="button" class="sm primary" id="msc-playall">${playerState.autoplay ? "⏸ Pause all" : "▶ Play all"}</button>
+        </div>
+      </div>`;
+    wire();
+  };
+
+  const assign = (path, kind, id) => {
+    // The root tile's path is "", which is falsy — never test these paths
+    // for truthiness or a single-tile layout looks like "no tile at all".
+    if (path === null || path === undefined) return;
+    playerState.layout = setNodeAt(
+      playerState.layout,
+      path,
+      kind === "rec" ? _slot(null, id) : _slot(id, null),
+    );
+    repaintStage();
+    draw();
+  };
+
+  const wire = () => {
+    overlay.querySelector('[data-action="modal-close"]')?.addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) overlay.remove(); });
+
+    overlay.querySelectorAll(".msc-preset").forEach((b) => {
+      b.addEventListener("click", () => {
+        const k = b.dataset.preset;
+        if (!PLAYER_PRESETS[k]) return;
+        playerState.preset = k;
+        playerState.layout = PLAYER_PRESETS[k]();
+        playerState.playing = [];
+        composerSelectedPath = null;
+        repaintStage();
+        draw();
+      });
+    });
+
+    // Sources: draggable, and click-to-assign into the selected (or first
+    // empty) cell so the whole flow works without a drag if you prefer.
+    overlay.querySelectorAll(".msc-src").forEach((chip) => {
+      chip.addEventListener("dragstart", (e) => {
+        const kind = chip.dataset.srcKind === "rec" ? "strivo-rec:" : "strivo-stream:";
+        e.dataTransfer.setData("text/plain", kind + chip.dataset.srcId);
+        e.dataTransfer.effectAllowed = "copy";
+      });
+      chip.addEventListener("click", () => {
+        const target =
+          composerSelectedPath !== null ? composerSelectedPath : firstEmptyPath(playerState.layout);
+        if (target === null || target === undefined) {
+          Toast.error("No empty tile — pick a bigger layout or clear one.");
+          return;
+        }
+        assign(target, chip.dataset.srcKind, chip.dataset.srcId);
+      });
+    });
+
+    overlay.querySelectorAll(".msc-cell").forEach((cell) => {
+      const path = cell.dataset.path || "";
+      cell.addEventListener("click", (e) => {
+        if (e.target.closest(".msc-cell-clear")) return;
+        composerSelectedPath = composerSelectedPath === path ? null : path;
+        draw();
+      });
+      cell.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        cell.classList.add("is-drop-target");
+      });
+      cell.addEventListener("dragleave", () => cell.classList.remove("is-drop-target"));
+      cell.addEventListener("drop", (e) => {
+        e.preventDefault();
+        cell.classList.remove("is-drop-target");
+        const raw = e.dataTransfer.getData("text/plain") || "";
+        if (raw.startsWith("strivo-rec:")) return assign(path, "rec", raw.slice("strivo-rec:".length));
+        const parsed = parsePlayerDragPayload(raw);
+        if (!parsed) return;
+        if (parsed.type === "stream") return assign(path, "stream", parsed.id);
+        if (parsed.type === "tile" && parsed.path !== path) {
+          const from = getNodeAt(playerState.layout, parsed.path);
+          const to = getNodeAt(playerState.layout, path);
+          let next = setNodeAt(playerState.layout, parsed.path, _slot(to.streamId || null, to.recordingId || null));
+          next = setNodeAt(next, path, _slot(from.streamId || null, from.recordingId || null));
+          playerState.layout = next;
+          repaintStage();
+          draw();
+        }
+      });
+      if (cell.classList.contains("is-filled")) {
+        cell.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", `strivo-tile:${path}`);
+          e.dataTransfer.effectAllowed = "move";
+        });
+      }
+    });
+
+    overlay.querySelectorAll(".msc-cell-clear").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        playerState.layout = setNodeAt(playerState.layout, btn.dataset.clear || "", _slot());
+        repaintStage();
+        draw();
+      });
+    });
+
+    overlay.querySelector("#msc-clear-all")?.addEventListener("click", () => {
+      walkLayout(playerState.layout, (node, path) => {
+        if (node.kind === "slot") {
+          playerState.layout = setNodeAt(playerState.layout, path, _slot());
+        }
+      });
+      repaintStage();
+      draw();
+    });
+
+    overlay.querySelector("#msc-paused")?.addEventListener("change", (e) => {
+      playerState.autoplay = !e.currentTarget.checked;
+      if (!playerState.autoplay) playerState.playing = [];
+      savePlayerAutoplay();
+      repaintStage();
+      draw();
+    });
+
+    overlay.querySelector("#msc-playall")?.addEventListener("click", () => {
+      playerState.autoplay = !playerState.autoplay;
+      if (!playerState.autoplay) playerState.playing = [];
+      savePlayerAutoplay();
+      repaintStage();
+      draw();
+    });
+  };
+
+  draw();
+  const onEsc = (e) => {
+    if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onEsc); }
+  };
+  document.addEventListener("keydown", onEsc);
+}
+
+/// Poster frame for a paused live tile.
+///
+/// A paused tile deliberately renders NO iframe: a Twitch/YouTube embed
+/// downloads and boots an entire player application even when it is not
+/// going to play, which on a 9-tile wall is nine player apps for a grid
+/// nobody has pressed play on yet. A still frame costs one image.
+function tilePosterUrl(s) {
+  if (!s) return null;
+  const c = (channelCache || []).find((x) => `${x.platform}:${x.id}` === s.stream_id);
+  return c ? liveThumbUrl(c) : null;
+}
+
 function renderSlot(slot, path, streams) {
   const muted = playerState.soloPath ? playerState.soloPath !== path : true;
+  const playing = tilePlaying(path);
   // ─ Recording playback path ─
   if (slot.recordingId) {
     const rec = recCache.find((r) => r.id === slot.recordingId);
@@ -6966,7 +7521,8 @@ function renderSlot(slot, path, streams) {
           </span>
         </div>
         <video class="watch-tile-iframe ms-video" controls playsinline ${muted ? "muted" : ""}
-               preload="metadata"
+               ${playing ? "autoplay" : ""}
+               preload="${playing ? "metadata" : "none"}"
                src="/api/v1/recordings/${encodeURIComponent(slot.recordingId)}/download"></video>
       </div>`;
   }
@@ -6993,8 +7549,15 @@ function renderSlot(slot, path, streams) {
             <button class="watch-tile-btn ms-remove" title="Remove from layout" data-path="${htmlEscape(path)}">✕</button>
           </span>
         </div>
-        <iframe class="watch-tile-iframe ms-iframe" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write"
-                src="${htmlEscape(withMuted(s.embed_url, muted))}" allowfullscreen frameborder="0"></iframe>
+        ${playing
+          ? `<iframe class="watch-tile-iframe ms-iframe" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write"
+                data-embed-base="${htmlEscape(s.embed_url)}"
+                src="${htmlEscape(tileSrc(s.embed_url, { muted, playing }))}" allowfullscreen frameborder="0"></iframe>`
+          : `<div class="ms-poster" data-embed-base="${htmlEscape(s.embed_url)}">
+               ${tilePosterUrl(s) ? `<img class="ms-poster-img" loading="lazy" alt="" src="${htmlEscape(tilePosterUrl(s))}" onerror="this.remove()">` : ""}
+               <button class="ms-play" data-path="${htmlEscape(path)}" title="Play ${htmlEscape(s.channel_name)}"
+                       aria-label="Play ${htmlEscape(s.channel_name)}">▶</button>
+             </div>`}
       </div>`;
   }
   // ─ Empty slot — pickable from live channels + recent recordings ─

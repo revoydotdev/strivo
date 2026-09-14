@@ -147,6 +147,7 @@ function showPlaylistModal(opts) {
   modal.innerHTML = `
     <div class="card">
       <h2>Bulk download — ${htmlEscape(opts.name)}</h2>
+      <p class="pg-cap-hint">Choose a scope, then explicitly start the download.</p>
       <div class="pl-list">${rows}</div>
     </div>`;
   modal.classList.add("open");
@@ -155,6 +156,7 @@ function showPlaylistModal(opts) {
       const ch = pendingPlaylistChannel;
       if (!ch) return;
       const playlist_id = row.dataset.pl || null;
+      if (!confirm(`Download ${row.textContent.trim()} now?`)) return;
       try {
         await API.bulkDownload(ch.id, {
           channel_name: ch.name,
@@ -177,7 +179,8 @@ function showPlaylistModal(opts) {
 function bulkButton(c) {
   const st = bulkStatus[c.id];
   if (st && st.active) {
-    const label = st.total > 0 ? `⇩ ${st.done}/${st.total} — Stop` : "⇩ … — Stop";
+    const pct = st.percent != null ? ` ${Math.round(st.percent)}%` : "";
+    const label = st.total > 0 ? `⇩ ${st.done}/${st.total}${pct} — Stop` : `⇩ …${pct} — Stop`;
     return `<button data-action="bulk" data-bulk-active="true"
               data-channel-id="${c.id}"
               data-channel-name="${htmlEscape(c.display_name || c.name)}"
@@ -219,4 +222,3 @@ async function toggleAutoRecord(d) {
     Toast.error(`Auto-record toggle failed: ${e.message}`);
   }
 }
-

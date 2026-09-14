@@ -1293,7 +1293,7 @@ events.on((event) => {
   if (event.BulkProgress) {
     const p = event.BulkProgress;
     if (p.active) {
-      bulkStatus[p.channel_id] = { done: p.done, total: p.total, active: true };
+      bulkStatus[p.channel_id] = { done: p.done, total: p.total, percent: p.percent, active: true };
     } else {
       delete bulkStatus[p.channel_id];
     }

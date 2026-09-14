@@ -953,6 +953,19 @@ pub async fn run_with_plugins_at(
     let mut journal_paths: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
     if let Some(ref db) = persist_db {
+        // A journal entry is useful only while its media exists. Prune
+        // confirmed deletions before rebuilding the UI snapshot; retain a
+        // durable, human-readable audit trail in the rolling daemon log.
+        match db.prune_missing_recordings().await {
+            Ok(removed) => {
+                for (id, path) in removed {
+                    let thumb = crate::config::AppConfig::data_dir().join("thumbs").join(format!("{id}.jpg"));
+                    let _ = std::fs::remove_file(&thumb);
+                    tracing::info!(recording_id = %id, path = %path.display(), "Removed recording entry because its media file was deleted");
+                }
+            }
+            Err(e) => tracing::warn!("Could not reconcile deleted recording files: {e}"),
+        }
         match db.load_recording_jobs().await {
             Ok(jobs) => {
                 let n = jobs.len();
@@ -1055,6 +1068,29 @@ pub async fn run_with_plugins_at(
     // spawn unbounded tasks (roadmap item 9). Excess connections are dropped
     // immediately; a TUI/webui reconnects on its own.
     let client_sem = Arc::new(tokio::sync::Semaphore::new(MAX_CLIENT_TASKS));
+
+    // Reconcile deletions while the daemon is running, so stale rows do not
+    // wait for a restart to disappear from connected clients.
+    if let Some(db) = persist_db.clone() {
+        let tx = event_tx.clone();
+        let shared = shared_recordings.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let Ok(removed) = db.prune_missing_recordings().await else { continue };
+                if removed.is_empty() { continue; }
+                let mut ids = Vec::with_capacity(removed.len());
+                for (id, path) in removed {
+                    let _ = std::fs::remove_file(crate::config::AppConfig::data_dir().join("thumbs").join(format!("{id}.jpg")));
+                    tracing::info!(recording_id = %id, path = %path.display(), "Removed recording entry because its media file was deleted");
+                    ids.push(id);
+                }
+                { let mut snapshot = shared.write().await; for id in &ids { snapshot.remove(id); } }
+                let _ = tx.send(crate::events::DaemonEvent::RecordingsPruned { job_ids: ids });
+            }
+        });
+    }
 
     // Main loop
     loop {

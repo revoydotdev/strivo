@@ -545,7 +545,7 @@ th[data-sort]:hover {
    over them. */
 .leftrail {
   grid-area: leftrail;
-  margin: 24px 16px;
+  margin: 24px 16px 24px 16px;
   background: rgba(30, 40, 54, 0.55);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -556,6 +556,9 @@ th[data-sort]:hover {
   overflow-y: auto;
   overflow-x: hidden;
 }
+.ch-name { font-size: calc(1em + 3pt); }
+.ch-plat { width: 1.55rem; height: 1.55rem; min-width: 1.55rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.ch-unwatched { margin-left: auto; min-width: 1.45rem; height: 1.45rem; padding: 0 .25rem; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; font-size: .72rem; font-weight: 700; }
 /* Rail sort control. Sits above the sections so it reads as governing the
    whole rail rather than belonging to either list. */
 .ch-sort {
@@ -584,6 +587,8 @@ th[data-sort]:hover {
   cursor: pointer;
 }
 .ch-sort-select:hover { border-color: var(--accent); }
+.ch-clear-notifications { white-space: nowrap; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: var(--radius-sm, 8px); padding: .2rem .4rem; font: inherit; font-size: .7rem; cursor: pointer; }
+.ch-clear-notifications:hover { color: var(--fg); border-color: var(--accent); }
 .ch-sort-select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -859,6 +864,7 @@ th[data-sort]:hover {
   gap: 0.6rem;
   align-items: start;
 }
+.content { padding-left: 16px; padding-right: 16px; }
 .live-now-row .dash-scroll {
   grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr));
 }
@@ -2105,4 +2111,3 @@ a.media-pill:hover,
 /* ── Plugins (hub + per-plugin views) ───────────────────────────────── */
 /* Neutral badge fallback so status pills without ok/warn/err read clearly. */
 .cfg-badge { background: var(--overlay); color: var(--muted); }
-

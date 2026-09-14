@@ -301,6 +301,7 @@ const RAIL_SORTS = {
   name: { label: "Name (A–Z)", cmp: byPlatformThenName },
   "live-desc": { label: "Last live (newest)", cmp: (a, b) => byLastLive(a, b, -1) },
   "live-asc": { label: "Last live (oldest)", cmp: (a, b) => byLastLive(a, b, 1) },
+  viewers: { label: "Viewers (highest)", cmp: (a, b) => (b.viewer_count || 0) - (a.viewer_count || 0) || byPlatformThenName(a, b) },
 };
 function byLastLive(a, b, dir) {
   const ta = a.is_live ? Infinity : Date.parse(a.last_live_at || "") || null;
@@ -361,6 +362,7 @@ function railSortControlHtml() {
   return `<div class="ch-sort">
       <label class="ch-sort-label micro" for="rail-sort">Sort</label>
       <select id="rail-sort" class="ch-sort-select" data-rail-sort>${opts}</select>
+      <button type="button" class="ch-clear-notifications" data-clear-all-notifications title="Clear all channel notification overrides">Clear notifications</button>
     </div>`;
 }
 
@@ -385,11 +387,16 @@ function paintChannelList() {
   const cmp = (RAIL_SORTS[railSort()] || RAIL_SORTS.name).cmp;
   const live = channels.filter((c) => c.is_live).sort(cmp);
   const offline = channels.filter((c) => !c.is_live).sort(cmp);
+  const monitored = channels.filter((c) => c.auto_record).sort(cmp);
   updateLiveCount();
 
   const recordingChannelIds = new Set(
     recCache.filter((r) => isInProgress(r.state)).map((r) => r.channel_id),
   );
+  const unwatched = (c) => {
+    const n = recCache.filter((r) => r.channel_id === c.id && r.watched === false && !isInProgress(r.state)).length;
+    return n > 9 ? "9+" : n ? String(n) : "";
+  };
   // Route commits call this to make the rail available, but recreating an
   // already-correct rail discards focus and an open section.  Repaint only
   // when its visible model actually changed.
@@ -408,6 +415,7 @@ function paintChannelList() {
     const rec = recordingChannelIds.has(c.id)
       ? '<span class="ch-rec" title="recording">●</span>'
       : "";
+    const unseen = unwatched(c);
     // Live → viewer count; offline Twitch/YT → "last live: N ago" in the same
     // slot (when StriVo has observed it live at least once).
     let viewers = "";
@@ -438,7 +446,7 @@ function paintChannelList() {
          data-platform="${c.platform}" data-live-stream-id="${htmlEscape(liveStreamId)}" href="${href}">
         <span class="ch-plat micro ${c.platform.toLowerCase()}" aria-hidden="true">${platformGlyph(c.platform)}</span>
         <span class="ch-name">${htmlEscape(c.display_name || c.name)}</span>
-        ${tier}${viewers}${rec}
+        ${tier}${viewers}${rec}${unseen ? `<span class="ch-unwatched" title="Unwatched uploads">${unseen}</span>` : ""}
       </a>`;
   };
 
@@ -467,6 +475,7 @@ function paintChannelList() {
            appear here automatically.<br>
            <a href="#/settings">Check Settings →</a></div>`
       : railSortControlHtml() +
+        section("monitored", "MONITORED", monitored) +
         section("live", `● LIVE`, live) +
         section("offline", "OFFLINE", offline);
   rail.dataset.modelSignature = railSignature;
@@ -484,6 +493,11 @@ function paintChannelList() {
       paintChannelList();
     });
   }
+  rail.querySelector("[data-clear-all-notifications]")?.addEventListener("click", async () => {
+    if (!(await confirmDialog("Clear notification settings for every channel?", { ok: "Clear", danger: true }))) return;
+    await Promise.all(channels.map((c) => API.setChannelAlerts(`${c.platform}:${c.id}`, { on_live: null, on_upload: null })));
+    paintChannelList();
+  });
   rail.querySelectorAll("[data-rail-section]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.railSection;
@@ -542,4 +556,3 @@ function selectChannel(key, ev) {
     render();
   }
 }
-

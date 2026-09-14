@@ -149,6 +149,29 @@ pub struct PersistDb {
 }
 
 impl PersistDb {
+    /// Remove journal rows whose output has disappeared. This is deliberately
+    /// separate from recovery so the cleanup is visible and auditable.
+    pub async fn prune_missing_recordings(&self) -> Result<Vec<(uuid::Uuid, PathBuf)>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT id, episode_dir, payload FROM jobs WHERE kind='Recording'")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
+            })?;
+            let mut removed = Vec::new();
+            for row in rows {
+                let (id, dir, payload) = row?;
+                let path = serde_json::from_str::<crate::recording::job::RecordingJob>(&payload)
+                    .ok().map(|j| j.output_path).or_else(|| dir.map(PathBuf::from));
+                let Some(path) = path else { continue };
+                if path.exists() { continue; }
+                if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+                    conn.execute("DELETE FROM jobs WHERE kind='Recording' AND id=?1", params![id])?;
+                    removed.push((uuid, path));
+                }
+            }
+            Ok(removed)
+        }).await
+    }
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)

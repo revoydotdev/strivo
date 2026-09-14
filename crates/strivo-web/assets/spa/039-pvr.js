@@ -3,9 +3,9 @@
 // idempotently bound, mirrors the "⋯" row-menu dismiss convention in
 // 012-pvr.js (`closeAllRecRowMenus` / `recMenuBound`).
 //
-// Sections: per-channel Alerts (new — API.setChannelAlerts), Auto-record
-// live streams (existing API.toggleAutoRecord, unchanged), and — Creator
-// edition only — Auto-download uploads (existing API.setArchiverTandem).
+// Sections: per-channel Alerts, automatic live capture, and — Creator
+// edition only — automatic upload downloads. The two download controls are
+// binary toggles; there is no ambiguous "latest upload" one-shot action.
 // The Creator section is gated behind `typeof buildCreatorPluginActionsPanel
 // === "function"` (the same edition-detection idiom 028-pvr.js already
 // uses), so it never throws and never renders in a PVR-only bundle.
@@ -119,16 +119,23 @@ async function openChannelCtxMenu(ctx, clientX, clientY) {
        <div class="ch-ctx-menu-label micro">Alerts</div>
        ${ctxMenuItemHtml("alert-live", onLive !== false, "Alert on live")}
        ${ctxMenuItemHtml("alert-upload", onUpload !== false, "Alert on new upload")}
+       <button class="ch-ctx-menu-item" type="button" data-ctx-action="clear-notifications">
+         <span class="ch-ctx-check" aria-hidden="true">×</span>Clear notifications
+       </button>
      </div>`,
     `<div class="ch-ctx-menu-section">
-       ${ctxMenuItemHtml("auto-record", autoRecord, "Auto-record live streams")}
-     </div>`,
+       <div class="ch-ctx-menu-label micro">Automatic downloads</div>
+       ${ctxMenuItemHtml("auto-record", autoRecord, "Download livestreams")}
+    </div>`,
     isCreator
       ? `<div class="ch-ctx-menu-section">
-           <div class="ch-ctx-menu-label micro">Auto-download</div>
-           ${ctxMenuItemHtml("auto-download", tandemOn, "Auto-download uploads")}
+           ${ctxMenuItemHtml("auto-download", tandemOn, "Download uploads")}
          </div>`
-      : "",
+      : `<div class="ch-ctx-menu-section">
+           <button class="ch-ctx-menu-item" type="button" disabled aria-disabled="true" title="Upload automation requires StriVo Creator">
+             <span class="ch-ctx-check" aria-hidden="true">—</span>Download uploads (Creator)
+           </button>
+         </div>`,
   ].join("");
 
   const menu = document.createElement("div");
@@ -148,6 +155,10 @@ async function openChannelCtxMenu(ctx, clientX, clientY) {
       await API.setChannelAlerts(ctx.channelKey, { on_live: next, on_upload: onUpload });
       btn.setAttribute("aria-checked", next ? "true" : "false");
       btn.querySelector(".ch-ctx-check").textContent = next ? "✓" : "";
+    } else if (action === "clear-notifications") {
+      if (!(await confirmDialog(`Clear notifications for ${ctx.title || ctx.channelKey}?`, { ok: "Clear", danger: true }))) return;
+      await API.setChannelAlerts(ctx.channelKey, { on_live: null, on_upload: null });
+      closeChannelCtxMenu();
     } else if (action === "alert-upload") {
       const next = !(onUpload !== false);
       onUpload = next;

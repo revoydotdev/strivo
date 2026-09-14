@@ -61,3 +61,23 @@
   width: 1em;
   text-align: center;
 }
+
+/* Remediation B — the bulk/download contract is shared by channel and
+   playlist surfaces. Keep the scope choice visually separate from actions. */
+.playlist-picker-card,.playlist-viewer-card{width:min(48rem,calc(100vw - 2rem));max-height:min(82vh,52rem);overflow:auto}
+.playlist-viewer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:1rem}
+.playlist-viewer-head h2{margin:.1rem 0 .35rem}
+.bulk-scope-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dimTextColor);margin:1rem 0 .35rem}
+.bulk-scope-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;width:100%;text-align:left;padding:.8rem 1rem;margin:.35rem 0;border:var(--defaultBorder);border-radius:var(--smallRadius);background:var(--darkerGradientPointAlpha);color:inherit;cursor:pointer}
+.bulk-scope-row:hover,.bulk-scope-row:focus{border-color:var(--highlightOutlineColor);background:var(--lighterGradientPointAlpha)}
+.bulk-scope-row span{font-size:.8em;color:var(--dimTextColor)}
+.playlist-item-list{display:grid;gap:.45rem}
+.playlist-item-row{display:grid;grid-template-columns:auto 7rem 1fr auto;align-items:center;gap:.65rem;padding:.45rem;border:var(--defaultBorder);border-radius:var(--smallerRadius);background:var(--darkerGradientPointAlpha);cursor:pointer}
+.playlist-item-row:hover{background:var(--lighterGradientPointAlpha)}
+.playlist-item-row img,.playlist-item-thumb{display:block;width:7rem;aspect-ratio:16/9;object-fit:cover;border-radius:var(--smallerRadius);background:var(--selectorBackgroundColor)}
+.playlist-item-copy{display:grid;gap:.25rem;min-width:0}
+.playlist-item-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.playlist-item-copy small{color:var(--dimTextColor)}
+.playlist-item-row a{color:var(--textColor);font-size:1.15em}
+.playlist-viewer-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1rem;position:sticky;bottom:0;padding-top:.75rem;background:var(--headerColor)}
+@media (max-width:40rem){.playlist-item-row{grid-template-columns:auto 5rem 1fr auto}.playlist-item-row img,.playlist-item-thumb{width:5rem}.playlist-viewer-actions{flex-wrap:wrap}.playlist-viewer-actions button{flex:1}}

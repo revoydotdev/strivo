@@ -316,7 +316,7 @@ async fn run_channel_pull(
             return;
         }
     };
-    let vods = if let Some(ids) = vod_ids {
+    let vods = if let Some(ids) = vod_ids.filter(|ids| !ids.is_empty()) {
         vods.into_iter()
             .filter(|vod| ids.iter().any(|id| id == &vod.id))
             .collect::<Vec<_>>()

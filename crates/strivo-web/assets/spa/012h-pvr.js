@@ -60,6 +60,7 @@ async function remediationBulkStart(channelId, channelName, platform, scope, pla
       bulkStatus[channelId] = { done: 0, total: vodIds.length, percent: 0, active: true, scope, operation_id: reply && reply.operation_id };
       Toast.success(`Started ${vodIds.length} selected download${vodIds.length === 1 ? "" : "s"} — ${channelName}`);
       paintChannelList();
+      if (currentRoute() === "library" && typeof render === "function") render().catch(() => {});
       return true;
     } catch (e) {
       Toast.error(`Selected download failed: ${e.message}`);
@@ -85,6 +86,7 @@ async function remediationBulkStart(channelId, channelName, platform, scope, pla
     };
     Toast.success(`Started ${label} download — ${channelName}`);
     paintChannelList();
+    if (currentRoute() === "library" && typeof render === "function") render().catch(() => {});
     return true;
   } catch (e) {
     Toast.error(`Download failed: ${e.message}`);
@@ -106,6 +108,7 @@ toggleBulk = async function remediationToggleBulk(ds) {
       delete bulkStatus[ds.channelId];
       Toast.success(`Cancelled channel download — ${ds.channelName}`);
       paintChannelList();
+      if (currentRoute() === "library" && typeof render === "function") render().catch(() => {});
     } catch (e) {
       Toast.error(`Cancel failed: ${e.message}`);
     }

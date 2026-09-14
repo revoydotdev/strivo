@@ -43,26 +43,23 @@ async function remediationBulkStart(channelId, channelName, platform, scope, pla
   const count = Array.isArray(items) ? items.length : 0;
   const detail = count ? ` (${count} item${count === 1 ? "" : "s"})` : "";
   if (!(await confirmDialog(`Start download for ${label}${detail} from ${channelName}?`, { ok: "Start download" }))) return false;
-  // The daemon's bulk contract intentionally has channel/playlist scopes only.
-  // A manual selection is therefore dispatched as independent VOD jobs; each
-  // job gets its normal RecordingProgress stream and can be stopped from the
-  // Recordings surface without accidentally widening the requested scope.
   if (scope === "selected") {
-    const jobs = items
-      .map((item) => ({
-        url: playlistItemUrl(item),
-        channel_name: channelName,
-        platform,
-        post_title: item.title || item.name || null,
-      }))
-      .filter((job) => job.url);
-    if (!jobs.length) {
-      Toast.error("The selected playlist items have no downloadable URLs");
+    const vodIds = items.map((item) => item.id || item.video_id).filter(Boolean);
+    if (!vodIds.length) {
+      Toast.error("The selected playlist items have no platform IDs");
       return false;
     }
     try {
-      await Promise.all(jobs.map((job) => API.vodDownload(job)));
-      Toast.success(`Started ${jobs.length} selected download${jobs.length === 1 ? "" : "s"} — ${channelName}`);
+      const reply = await API.bulkDownload(channelId, {
+        channel_name: channelName,
+        platform,
+        action: "start",
+        playlist_id: playlistId || null,
+        vod_ids: vodIds,
+      });
+      bulkStatus[channelId] = { done: 0, total: vodIds.length, percent: 0, active: true, scope, operation_id: reply && reply.operation_id };
+      Toast.success(`Started ${vodIds.length} selected download${vodIds.length === 1 ? "" : "s"} — ${channelName}`);
+      paintChannelList();
       return true;
     } catch (e) {
       Toast.error(`Selected download failed: ${e.message}`);

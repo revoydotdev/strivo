@@ -1177,6 +1177,22 @@ pub fn build_output_path(
 
     // Sanitize stream title for filesystem safety
     let title = stream_title.unwrap_or("stream");
+    // Titles supplied by upstream APIs occasionally already include the
+    // source container (e.g. `episode.mkv`). Strip it before applying the
+    // filename template so the generated name does not advertise one
+    // container in the title and another at the final extension.
+    let title = [".mkv", ".mp4", ".webm", ".mov"]
+        .iter()
+        .find_map(|ext| {
+            if title.len() >= ext.len()
+                && title[title.len() - ext.len()..].eq_ignore_ascii_case(ext)
+            {
+                Some(&title[..title.len() - ext.len()])
+            } else {
+                None
+            }
+        })
+        .unwrap_or(title);
     let safe_title: String = title
         .chars()
         .map(|c| {
@@ -1228,7 +1244,20 @@ pub fn episode_dir(
         PlatformKind::Patreon => "patreon",
     };
     let date_str = date.format("%Y-%m-%d").to_string();
-    let leaf = format!("{date_str}_{}", sanitize_path_component(title));
+    let clean_title = title.trim_end_matches(|c: char| c == ' ' || c == '.');
+    let clean_title = [".mkv", ".mp4", ".webm", ".mov"]
+        .iter()
+        .find_map(|ext| {
+            if clean_title.len() >= ext.len()
+                && clean_title[clean_title.len() - ext.len()..].eq_ignore_ascii_case(ext)
+            {
+                Some(&clean_title[..clean_title.len() - ext.len()])
+            } else {
+                None
+            }
+        })
+        .unwrap_or(clean_title);
+    let leaf = format!("{date_str}_{}", sanitize_path_component(clean_title));
     root.join(platform_str)
         .join(sanitize_path_component(channel))
         .join(leaf)

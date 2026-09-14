@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::config::{AppConfig, RecordingFormat};
 use crate::events::DaemonEvent;
@@ -21,20 +22,32 @@ use crate::recording::persist::PersistDb;
 #[derive(Debug, Clone)]
 pub enum BulkCommand {
     Start {
+        operation_id: Uuid,
         channel_id: String,
         channel_name: String,
         platform: PlatformKind,
         /// Optional YouTube playlist scope (task #73). When set, only that
         /// playlist's items are pulled instead of the whole channel.
         playlist_id: Option<String>,
+        /// Optional explicit VOD selection. None means all items in scope.
+        vod_ids: Option<Vec<String>>,
     },
     Stop {
         channel_id: String,
+        /// If supplied, only this operation may be cancelled.  `None` keeps
+        /// compatibility with older IPC clients that only knew channel ids.
+        operation_id: Option<Uuid>,
     },
     /// Fetch a YouTube channel's playlists and emit them as
     /// DaemonEvent::PlaylistList for the scope picker (task #73).
     ListPlaylists {
         channel_id: String,
+    },
+    /// Fetch playlist items for display.  This command is deliberately
+    /// read-only and never invokes the catalog downloader.
+    ListPlaylistItems {
+        channel_id: String,
+        playlist_id: String,
     },
     /// Fetch a channel's recent VODs (live + uploads) and emit them as
     /// DaemonEvent::ChannelVods for the webui channel-detail pane.
@@ -69,21 +82,23 @@ pub fn spawn(
     let internal_tx = tx.clone();
     tokio::spawn(async move {
         // channel_id -> cancellation handle for the in-flight pull.
-        let mut active: HashMap<String, CancellationToken> = HashMap::new();
+        let mut active: HashMap<String, (Uuid, CancellationToken)> = HashMap::new();
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 BulkCommand::Start {
+                    operation_id,
                     channel_id,
                     channel_name,
                     platform,
                     playlist_id,
+                    vod_ids,
                 } => {
                     if active.contains_key(&channel_id) {
                         tracing::info!(channel = %channel_name, "bulk-dl already running");
                         continue;
                     }
                     let cancel = CancellationToken::new();
-                    active.insert(channel_id.clone(), cancel.clone());
+                    active.insert(channel_id.clone(), (operation_id, cancel.clone()));
                     let cfg = config.clone();
                     let etx = event_tx.clone();
                     let done_tx = internal_tx.clone();
@@ -95,6 +110,8 @@ pub fn spawn(
                             &channel_name,
                             platform,
                             playlist_id.as_deref(),
+                            vod_ids.as_deref(),
+                            operation_id,
                             cancel,
                             &etx,
                             &markers,
@@ -103,12 +120,18 @@ pub fn spawn(
                         // Self-deregister so a later Start can re-run.
                         let _ = done_tx.send(BulkCommand::Stop {
                             channel_id: channel_id.clone(),
+                            operation_id: Some(operation_id),
                         });
                     });
                 }
-                BulkCommand::Stop { channel_id } => {
-                    if let Some(cancel) = active.remove(&channel_id) {
-                        cancel.cancel();
+                BulkCommand::Stop { channel_id, operation_id } => {
+                    if let Some((running_id, cancel)) = active.get(&channel_id) {
+                        if operation_id.is_none() || operation_id == Some(*running_id) {
+                            cancel.cancel();
+                            active.remove(&channel_id);
+                        } else {
+                            tracing::warn!(channel = %channel_id, requested = ?operation_id, running = %running_id, "bulk-dl cancellation id did not match active operation");
+                        }
                     }
                 }
                 BulkCommand::ListPlaylists { channel_id } => {
@@ -125,6 +148,23 @@ pub fn spawn(
                         let _ = etx.send(DaemonEvent::PlaylistList {
                             channel_id,
                             playlists,
+                        });
+                    });
+                }
+                BulkCommand::ListPlaylistItems { channel_id, playlist_id } => {
+                    let cfg = config.clone();
+                    let etx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let items = fetch_playlist_items(&cfg, &channel_id, &playlist_id)
+                            .await
+                            .unwrap_or_else(|e| {
+                                tracing::warn!("bulk-dl: fetch_playlist_items failed: {e:#}");
+                                Vec::new()
+                            });
+                        let _ = etx.send(DaemonEvent::PlaylistItems {
+                            channel_id,
+                            playlist_id,
+                            items,
                         });
                     });
                 }
@@ -248,29 +288,40 @@ async fn run_channel_pull(
     channel_name: &str,
     platform: PlatformKind,
     playlist_id: Option<&str>,
+    vod_ids: Option<&[String]>,
+    operation_id: Uuid,
     cancel: CancellationToken,
     event_tx: &mpsc::UnboundedSender<DaemonEvent>,
     post_pull_markers: &[(String, String)],
 ) {
-    let emit = |done: usize, total: usize, active: bool| {
+    let emit = |done: usize, total: usize, percent: Option<f32>, active: bool| {
         let _ = event_tx.send(DaemonEvent::BulkProgress {
+            operation_id,
             channel_id: channel_id.to_string(),
             done,
             total,
+            percent,
             active,
         });
     };
 
-    emit(0, 0, true);
+    emit(0, 0, None, true);
 
     let vods = match resolve_vods(config, channel_id, platform, playlist_id).await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(channel = %channel_name, "bulk-dl resolve failed: {e:#}");
             let _ = event_tx.send(DaemonEvent::Error(format!("Bulk DL {channel_name}: {e}")));
-            emit(0, 0, false);
+            emit(0, 0, None, false);
             return;
         }
+    };
+    let vods = if let Some(ids) = vod_ids {
+        vods.into_iter()
+            .filter(|vod| ids.iter().any(|id| id == &vod.id))
+            .collect::<Vec<_>>()
+    } else {
+        vods
     };
     let total = vods.len();
     if total == 0 {
@@ -278,7 +329,7 @@ async fn run_channel_pull(
             title: format!("Bulk DL: {channel_name}"),
             body: "No new catalog items".to_string(),
         });
-        emit(0, 0, false);
+        emit(0, 0, None, false);
         return;
     }
 
@@ -295,11 +346,16 @@ async fn run_channel_pull(
                 | CatalogProgress::Failed { .. } => {
                     done += 1;
                     let _ = etx2.send(DaemonEvent::BulkProgress {
+                        operation_id,
                         channel_id: cid.clone(),
                         done,
                         total,
+                        percent: None,
                         active: true,
                     });
+                }
+                CatalogProgress::Progress { pct } => {
+                    let _ = etx2.send(DaemonEvent::BulkProgress { operation_id, channel_id: cid.clone(), done, total, percent: Some(pct), active: true });
                 }
                 _ => {}
             }
@@ -336,7 +392,7 @@ async fn run_channel_pull(
         Ok(db) => db,
         Err(e) => {
             let _ = event_tx.send(DaemonEvent::Error(format!("Bulk DL db: {e}")));
-            emit(0, total, false);
+            emit(0, total, None, false);
             return;
         }
     };
@@ -357,7 +413,7 @@ async fn run_channel_pull(
             let _ = event_tx.send(DaemonEvent::Error(format!("Bulk DL {channel_name}: {e}")));
         }
     }
-    emit(total, total, false);
+    emit(total, total, Some(100.0), false);
 }
 
 /// Fetch a YouTube channel's playlists for the scope picker (task #73).
@@ -377,6 +433,28 @@ async fn fetch_playlists(
     );
     yt.load_stored_tokens().await.context("youtube auth")?;
     yt.fetch_playlists(channel_id).await
+}
+
+/// Fetch one playlist's items for a read-only viewer.  Keeping this separate
+/// from `resolve_vods` makes it impossible for a viewer request to enqueue a
+/// download as a side effect.
+async fn fetch_playlist_items(
+    config: &AppConfig,
+    channel_id: &str,
+    playlist_id: &str,
+) -> anyhow::Result<Vec<VodEntry>> {
+    use anyhow::Context;
+    let cfg = config
+        .youtube
+        .clone()
+        .context("youtube section missing in config")?;
+    let yt = crate::platform::youtube::YouTubePlatform::new(
+        cfg.client_id,
+        cfg.client_secret,
+        cfg.cookies_path.clone(),
+    );
+    yt.load_stored_tokens().await.context("youtube auth")?;
+    yt.fetch_playlist_items(playlist_id, channel_id, None, None).await
 }
 
 /// Resolve a channel's back-catalog VODs. Mirrors the `pull` CLI path.

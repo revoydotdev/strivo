@@ -70,6 +70,10 @@ pub enum ClientMessage {
     },
     /// Start or stop a per-channel bulk back-catalog download (task #71).
     BulkDownload {
+        /// Stable operation id returned by the HTTP request.  Older clients
+        /// may omit it; the daemon assigns one in that case.
+        #[serde(default)]
+        operation_id: Option<Uuid>,
         channel_id: String,
         channel_name: String,
         platform: PlatformKind,
@@ -77,12 +81,22 @@ pub enum ClientMessage {
         /// Optional YouTube playlist scope (task #73). None = whole channel.
         #[serde(default)]
         playlist_id: Option<String>,
+        /// Optional explicit selection from a read-only VOD/playlist viewer.
+        /// Empty/None means the entire requested scope.
+        #[serde(default)]
+        vod_ids: Option<Vec<String>>,
     },
     /// Request the playlists for a YouTube channel, to populate the
     /// bulk-download scope picker (task #73). Answered asynchronously
     /// with DaemonEvent::PlaylistList.
     ListPlaylists {
         channel_id: String,
+    },
+    /// Request read-only items for one YouTube playlist.  The response is a
+    /// `DaemonEvent::PlaylistItems`; this command has no download side effect.
+    ListPlaylistItems {
+        channel_id: String,
+        playlist_id: String,
     },
     /// Pull a single Patreon video post on demand (task #75 — webui
     /// equivalent of the TUI's PullPatreonPost). The daemon builds the

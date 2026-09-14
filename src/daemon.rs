@@ -1713,6 +1713,14 @@ async fn handle_client(
                         tx.send(crate::recording::bulk::BulkCommand::ListPlaylists { channel_id });
                 }
             }
+            ClientMessage::ListPlaylistItems { channel_id, playlist_id } => {
+                if let Some(ref tx) = bulk_tx {
+                    let _ = tx.send(crate::recording::bulk::BulkCommand::ListPlaylistItems {
+                        channel_id,
+                        playlist_id,
+                    });
+                }
+            }
             ClientMessage::FetchChannelVods {
                 channel_id,
                 platform,
@@ -1733,21 +1741,25 @@ async fn handle_client(
                 }
             }
             ClientMessage::BulkDownload {
+                operation_id,
                 channel_id,
                 channel_name,
                 platform,
                 action,
                 playlist_id,
+                vod_ids,
             } => {
                 let cmd = match action {
                     crate::ipc::BulkAction::Start => crate::recording::bulk::BulkCommand::Start {
+                        operation_id: operation_id.unwrap_or_else(uuid::Uuid::new_v4),
                         channel_id,
                         channel_name,
                         platform,
                         playlist_id,
+                        vod_ids,
                     },
                     crate::ipc::BulkAction::Stop => {
-                        crate::recording::bulk::BulkCommand::Stop { channel_id }
+                        crate::recording::bulk::BulkCommand::Stop { channel_id, operation_id }
                     }
                 };
                 if let Some(ref tx) = bulk_tx {

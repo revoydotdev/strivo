@@ -316,6 +316,27 @@ impl YtDlpProcess {
         let default_format = if live_from_start { "bv*+ba/b" } else { "best" };
         let format_str = format.map(|f| f.format.as_str()).unwrap_or(default_format);
         cmd.args(["-f", format_str]);
+        if let Some(container) = format
+            .map(|f| match f.container.to_ascii_lowercase().as_str() {
+                "mp4" => "mp4",
+                "webm" => "webm",
+                "mkv" => "mkv",
+                _ => "mkv",
+            })
+        {
+            // Force yt-dlp to publish one merged file in the configured
+            // container; otherwise DASH selection can leave separate video
+            // and audio outputs beside the advertised target.
+            cmd.args([
+                "--merge-output-format",
+                container,
+                "--remux-video",
+                container,
+                // Do not leave the video-only/audio-only intermediates beside
+                // the final output.  A logical VOD must result in one file.
+                "--no-keep-video",
+            ]);
+        }
 
         // Bitrate hint for format selection sort.
         if let Some(kbps) = format.and_then(|f| f.bitrate_kbps) {

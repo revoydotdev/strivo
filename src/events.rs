@@ -100,9 +100,16 @@ pub enum DaemonEvent {
     /// Progress of a per-channel bulk back-catalog download (task #71).
     /// `active` is true while running, false on completion/cancel/error.
     BulkProgress {
+        /// Stable identifier for the bulk operation.  Clients use this to
+        /// correlate progress and cancellation when more than one channel is
+        /// visible at once.
+        #[serde(default)]
+        operation_id: Uuid,
         channel_id: String,
         done: usize,
         total: usize,
+        #[serde(default)]
+        percent: Option<f32>,
         active: bool,
     },
     /// Playlists for a YouTube channel, answering ClientMessage::ListPlaylists
@@ -110,6 +117,13 @@ pub enum DaemonEvent {
     PlaylistList {
         channel_id: String,
         playlists: Vec<crate::platform::PlaylistInfo>,
+    },
+    /// Read-only items in a YouTube playlist.  Fetching this event never
+    /// starts a download; callers must explicitly submit a BulkDownload.
+    PlaylistItems {
+        channel_id: String,
+        playlist_id: String,
+        items: Vec<crate::platform::VodEntry>,
     },
     /// A channel's recent VODs (live broadcasts + uploads), answering
     /// ClientMessage::FetchChannelVods for the webui channel-detail pane.

@@ -56,6 +56,7 @@ pub type ProgressTx = mpsc::UnboundedSender<CatalogProgress>;
 
 #[derive(Debug, Clone)]
 pub enum CatalogProgress {
+    Progress { pct: f32 },
     Discovered(usize),
     Skipped {
         vod_id: String,
@@ -162,7 +163,7 @@ pub async fn run_pull(
             })
         });
 
-        match download_one(&vod, &video_path, opts).await {
+        match download_one(&vod, &video_path, opts, progress.as_ref()).await {
             Ok(bytes) => {
                 let meta = EpisodeMetadata {
                     platform: vod.platform.to_string(),
@@ -223,14 +224,19 @@ pub async fn run_pull(
 /// Pick a sensible video filename inside the episode dir. The container honors
 /// `format.container` so callers transcoding to mp4 land at `video.mp4`.
 fn video_filename(_platform: PlatformKind, format: &ResolvedFormat) -> String {
-    let ext = match format.container.as_str() {
-        "" => "mkv",
-        s => s,
+    let ext = match format.container.to_ascii_lowercase().as_str() {
+        "mp4" => "mp4",
+        "webm" => "webm",
+        // ffmpeg/yt-dlp support a wider set, but an unknown value should not
+        // leak into a misleading filename.  MKV is the crash-resilient
+        // default and the only fallback accepted by the output contract.
+        "mkv" => "mkv",
+        _ => "mkv",
     };
     format!("video.{ext}")
 }
 
-async fn download_one(vod: &VodEntry, target: &Path, opts: &CatalogPullOptions) -> Result<u64> {
+async fn download_one(vod: &VodEntry, target: &Path, opts: &CatalogPullOptions, progress: Option<&ProgressTx>) -> Result<u64> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -246,6 +252,8 @@ async fn download_one(vod: &VodEntry, target: &Path, opts: &CatalogPullOptions) 
 
     // Poll until exit. yt-dlp downloads are typically minutes, so 1s polling is fine.
     loop {
+        let p = proc.progress();
+        if let Some(pct) = p.pct { let _ = progress.as_ref().map(|tx| tx.send(CatalogProgress::Progress { pct })); }
         match proc.try_wait()? {
             Some(status) => {
                 if !status.success() {

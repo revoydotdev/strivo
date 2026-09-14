@@ -15,9 +15,7 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-#[cfg(feature = "creator")]
-use axum::routing::get;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -30,6 +28,8 @@ use strivo_core::platform::PlatformKind;
 #[cfg(feature = "creator")]
 use crate::problem::Problem;
 #[cfg(feature = "creator")]
+use uuid::Uuid;
+#[cfg(not(feature = "creator"))]
 use uuid::Uuid;
 
 use crate::routes::settings::check_key;
@@ -86,12 +86,16 @@ async fn plugin_rpc(
 
 #[derive(Debug, Deserialize)]
 struct BulkDownloadPayload {
+    #[serde(default)]
+    operation_id: Option<Uuid>,
     channel_name: String,
     platform: PlatformKind,
     /// "start" | "stop"
     action: String,
     #[serde(default)]
     playlist_id: Option<String>,
+    #[serde(default)]
+    vod_ids: Option<Vec<String>>,
 }
 
 /// `POST /api/v1/channels/{id}/bulk` — start or stop a per-channel bulk
@@ -115,15 +119,27 @@ async fn bulk_download(
                 .into_response()
         }
     };
+    let operation_id = match action {
+        BulkAction::Start => Some(body.operation_id.unwrap_or_else(Uuid::new_v4)),
+        // Preserve the channel-scoped cancellation semantics for older
+        // callers that do not yet know an operation id.
+        BulkAction::Stop => body.operation_id,
+    };
     let cmd = ClientMessage::BulkDownload {
+        operation_id,
         channel_id,
         channel_name: body.channel_name,
         platform: body.platform,
         action,
         playlist_id: body.playlist_id,
+        vod_ids: body.vod_ids,
     };
     match state.ipc.send_command(cmd).await {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"status": "queued"}))).into_response(),
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"status": "queued", "operation_id": operation_id})),
+        )
+            .into_response(),
         Err(e) => crate::problem::Problem::unavailable(e.to_string()).into_response(),
     }
 }
@@ -149,6 +165,37 @@ async fn request_playlists(
             Json(
                 json!({"status": "requested", "note": "result arrives via /events playlist-list"}),
             ),
+        )
+            .into_response(),
+        Err(e) => crate::problem::Problem::unavailable(e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/channels/{id}/playlists/{playlist_id}` — fetch playlist
+/// items for a read-only thumbnail viewer. This request has no download side
+/// effect; clients must explicitly submit a bulk operation for downloading.
+async fn request_playlist_items(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path((channel_id, playlist_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return crate::problem::Problem::unauthorized().into_response();
+    }
+    match state
+        .ipc
+        .send_command(ClientMessage::ListPlaylistItems {
+            channel_id,
+            playlist_id,
+        })
+        .await
+    {
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "status": "requested",
+                "note": "result arrives via /events playlist-items"
+            })),
         )
             .into_response(),
         Err(e) => crate::problem::Problem::unavailable(e.to_string()).into_response(),
@@ -691,6 +738,10 @@ pub fn router() -> Router<AppState> {
             post(request_playlists),
         )
         .route(
+            "/api/v1/channels/{channel_id}/playlists/{playlist_id}",
+            get(request_playlist_items),
+        )
+        .route(
             "/api/v1/channels/{channel_id}/vods",
             post(request_channel_vods),
         )
@@ -768,5 +819,19 @@ mod tests {
         assert!(!is_youtube_channel_alias_url(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=live"
         ));
+    }
+
+    #[test]
+    fn vod_download_contract_accepts_uploaded_video_envelope() {
+        let payload: VodDownloadPayload = serde_json::from_value(serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=abc123",
+            "channel_name": "Example creator",
+            "platform": "YouTube",
+            "post_title": "Uploaded video"
+        }))
+        .expect("uploaded-video request must match the documented contract");
+        assert_eq!(payload.channel_name, "Example creator");
+        assert_eq!(payload.platform, PlatformKind::YouTube);
+        assert_eq!(payload.post_title.as_deref(), Some("Uploaded video"));
     }
 }

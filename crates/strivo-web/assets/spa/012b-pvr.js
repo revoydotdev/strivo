@@ -113,6 +113,7 @@ async function renderHome(context = captureRouteContext()) {
   }
   if (recRes.status === "fulfilled") {
     recCache = recRes.value.recordings || [];
+    if (typeof seedVodDownloadStateFromRecCache === "function") seedVodDownloadStateFromRecCache();
     dashRecordings = recCache;
     hydrationLoaded.recordings = true;
     seedVodDownloadStateFromRecCache();
@@ -399,4 +400,3 @@ function wireDashboard() {
     });
   });
 }
-

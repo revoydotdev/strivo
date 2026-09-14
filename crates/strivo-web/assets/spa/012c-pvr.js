@@ -512,7 +512,8 @@ function fmtEta(secs) {
 function updateVodProgressDom(job) {
   if (!job || !job.source_url) return;
   if (vodDownloadState[job.source_url] !== "downloading") return;
-  const sel = `[data-action=vod-download][data-url="${CSS.htmlEscape(job.source_url)}"]`;
+  const esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(job.source_url) : job.source_url.replace(/([\\"'])/g, "\\$1");
+  const sel = `[data-action=vod-download][data-url="${esc}"]`;
   document.querySelectorAll(sel).forEach((btn) => {
     btn.innerHTML = vodProgressHtml(
       job.download_pct,
@@ -561,7 +562,13 @@ function vodSectionHtml(title, vods, ctx) {
       const dur = fmtDur(v.duration);
       const live = v.kind === "Live" || v.kind === "live";
       const meta = [date, dur].filter(Boolean).map(htmlEscape).join(" · ");
-      const downloadable = !!(v.url && channelName && platform);
+      // A VOD carries authoritative provenance (`channel_id` + `platform`).
+      // The channel rail cache can be cold after a reconnect/navigation, so
+      // requiring the optional display context used to hide Download for
+      // uploaded videos even though the backend had everything it needed.
+      const downloadChannel = channelName || v.channel_id || "";
+      const downloadPlatform = platform || v.platform || "";
+      const downloadable = !!(v.url && downloadChannel && downloadPlatform);
       // Past Broadcasts are already-recorded livestreams, not arbitrary
       // uploads — once downloaded, the pill should play the local
       // recording, never send the click out to YouTube. A match is a
@@ -598,8 +605,8 @@ function vodSectionHtml(title, vods, ctx) {
       const btn = downloadable
         ? `<button class="vod-dl vod-dl-${state}" data-action="vod-download"
               data-url="${htmlEscape(v.url)}"
-              data-channel="${htmlEscape(channelName)}"
-              data-platform="${htmlEscape(platform)}"
+              data-channel="${htmlEscape(downloadChannel)}"
+              data-platform="${htmlEscape(downloadPlatform)}"
               data-title="${htmlEscape(v.title || "")}"
               ${state !== "idle" ? "disabled" : ""}>${inner}</button>`
         : "";
@@ -717,4 +724,3 @@ async function openPlaylistPicker(ds) {
     Toast.error(`Couldn't load playlists: ${e.message}`);
   }
 }
-

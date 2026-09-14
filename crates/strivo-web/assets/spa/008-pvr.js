@@ -456,6 +456,7 @@ async function ensureRouteHydration(route, context = captureRouteContext()) {
       .then((r) => {
         if (!isRouteCurrent(context)) return;
         recCache = r.recordings || [];
+        if (typeof seedVodDownloadStateFromRecCache === "function") seedVodDownloadStateFromRecCache();
         dashRecordings = recCache;
         hydrationLoaded.recordings = true;
         if (isRouteCurrent(context)) paintChannelList();

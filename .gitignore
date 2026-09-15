@@ -86,3 +86,6 @@ desktop.ini
 
 # Local cargo config (per-contributor [patch] overrides etc).
 .cargo/
+
+# Stale duplicate marketing-site build output (source lives at repo root)
+/website/

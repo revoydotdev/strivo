@@ -55,7 +55,7 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 rust-stemmers = "1.2"
 unicode-segmentation = "1.12"
 base64 = "0.22"
-which = "7"
+which = "8"
 toml = "0.8"
 dirs = "5"
 

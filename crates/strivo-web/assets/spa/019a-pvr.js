@@ -283,6 +283,7 @@ function mountPlayerBar(leaf, ctl, { path }) {
       <span class="pb-title">${htmlEscape(title)}</span>
       <span class="pb-platform pg-cap-hint">${htmlEscape(platform)}</span>
       ${leaf.dataset.streamId ? `<span class="pb-viewers pg-cap-hint" data-watch-meta="viewers"></span>` : ""}
+      <span class="pb-status" aria-live="polite" aria-label="Playback status"></span>
     </span>`;
 
   const centerParts = [];
@@ -431,6 +432,14 @@ function mountPlayerBar(leaf, ctl, { path }) {
         seek.value = String(Math.round((s.currentTime / s.duration) * 1000));
       }
       if (timeEl) timeEl.textContent = `${fmtClock(s.currentTime || 0)} / ${fmtClock(s.duration || 0)}`;
+      const status = bar.querySelector(".pb-status");
+      if (status) {
+        const label = s.error ? "Playback error" : s.buffering ? "Buffering…" : (s.ready ? "" : (s.playing ? "Loading…" : ""));
+        status.textContent = label;
+        status.classList.toggle("is-visible", !!label);
+        status.classList.toggle("is-error", !!s.error);
+        status.classList.toggle("is-buffering", !!s.buffering && !s.error);
+      }
     });
     _playerBarUnsub.set(leaf, unsub);
   }

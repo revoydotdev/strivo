@@ -44,9 +44,9 @@ test("right-click a channel rail row opens the context menu", async ({ page }) =
   await expect(menu).toHaveAttribute("data-channel-key", LIVE_CHANNEL_KEY);
   await expect(menu.getByText("Alert on live")).toBeVisible();
   await expect(menu.getByText("Alert on new upload")).toBeVisible();
-  await expect(menu.getByText("Auto-record live streams")).toBeVisible();
+  await expect(menu.getByText("Download livestreams")).toBeVisible();
   // Mock lane serves full (Creator-included) source — see file header.
-  await expect(menu.getByText("Auto-download uploads")).toBeVisible();
+  await expect(menu.getByText("Download uploads")).toBeVisible();
 });
 
 test("context menu dismisses on outside click and Escape", async ({ page }) => {

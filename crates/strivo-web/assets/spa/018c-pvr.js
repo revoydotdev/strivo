@@ -268,8 +268,24 @@ function setPlayerControllerFactory(fn) {
 function reconcileControllers(stage) {
   if (!stage) return;
   const wanted = new Map();
-  stage.querySelectorAll(".ms-mount[data-content-key]").forEach((mount) => {
-    wanted.set(mount.dataset.contentKey, mount);
+  const mounts = [...stage.querySelectorAll(".ms-mount[data-content-key]")];
+  const counts = new Map();
+  mounts.forEach((mount) => counts.set(
+    mount.dataset.contentKey,
+    (counts.get(mount.dataset.contentKey) || 0) + 1,
+  ));
+  mounts.forEach((mount) => {
+    // A source may intentionally be shown in more than one tile (for
+    // example, two quality/volume views of the same channel).  The source
+    // key remains useful for persisted volume state, but it is not a player
+    // identity: using it directly made the second mount overwrite the first
+    // in this registry.  Give duplicate mounts deterministic per-paint
+    // identities while retaining the source key as the prefix.
+    const sourceKey = mount.dataset.contentKey;
+    const key = counts.get(sourceKey) > 1
+      ? `${sourceKey}#${mount.dataset.path || "root"}`
+      : sourceKey;
+    wanted.set(key, mount);
   });
 
   // Anything no longer on the wall is destroyed. Skipping this leaks a live
@@ -286,6 +302,7 @@ function reconcileControllers(stage) {
   }
 
   for (const [key, mount] of wanted) {
+    const sourceKey = key.split("#", 1)[0];
     const path = mount.dataset.path || "";
     const muted = computeMuted(path);
     let ctl = playerState.controllers.get(key);
@@ -298,7 +315,7 @@ function reconcileControllers(stage) {
           // airing broadcast's id during live detection.
           videoId: mount.dataset.videoId || "",
           muted,
-          volume: tileVolumeForKey(key),
+          volume: tileVolumeForKey(sourceKey),
           playing: mount.dataset.playing !== "0",
         });
       } catch (e) {
@@ -317,7 +334,7 @@ function reconcileControllers(stage) {
       });
     }
     ctl.mount(mount);
-    const vol = tileVolumeForKey(key);
+    const vol = tileVolumeForKey(sourceKey);
     ctl.setMuted(vol === 0);
     ctl.setVolume(vol);
     ctl.setQuality(qualityPolicyFor(mount.dataset.kind || "", path));
@@ -374,4 +391,3 @@ function setTilePlaying(node, on) {
   if (on) set.add(key); else set.delete(key);
   playerState.playing = [...set];
 }
-

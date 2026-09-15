@@ -384,6 +384,28 @@ test("a preset change preserves a playing tile", async ({ page }) => {
   await expect(page.locator(".fake-player")).toHaveCount(1);
 });
 
+// The same source can intentionally occupy two tiles (for example, to keep
+// one view muted while another is audible).  A source id is not a sufficient
+// player identity: both mounts must receive their own controller instance.
+test("duplicate source tiles have independent controller identities", async ({ page }) => {
+  await installFakePlayers(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("strivo-player-autoplay", "1");
+    localStorage.setItem("strivo-player-layout", JSON.stringify({
+      kind: "split", dir: "h", ratio: 0.5,
+      a: { kind: "slot", streamId: "Twitch:twitch-live-1", recordingId: null },
+      b: { kind: "slot", streamId: "Twitch:twitch-live-1", recordingId: null },
+    }));
+  });
+  await page.goto("/app#/watch");
+  await waitForFakePlayers(page);
+  await expect(page.locator(".fake-player")).toHaveCount(2);
+
+  const log = await page.evaluate(() => (window as any).__fakeLog);
+  expect(new Set(log.created).size).toBe(2);
+  expect(await page.evaluate(() => (window as any).__strivoTestHooks.playerState.controllers.size)).toBe(2);
+});
+
 // Play-all deliberately forces a full repaint (every tile's playing state
 // changes at once). The tile already running must ride through it.
 test("play-all starts the rest without rebuilding what is already playing", async ({ page }) => {

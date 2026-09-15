@@ -999,3 +999,29 @@
   z-index: 4;
 }
 .ms-media-error strong { font-size: 0.82rem; }
+
+/* Playback state stays inside the rounded tile instead of looking like a
+ * page-wide spinner. It is text-first for accessibility and only appears
+ * while a requested controller is loading/buffering or has failed. */
+.pb-status {
+  display: none;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.35rem;
+  color: var(--muted, #a7a7b4);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.pb-status.is-visible { display: inline-flex; }
+.pb-status.is-buffering::before,
+.pb-status:not(.is-error)::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 1px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: strivo-spin 0.8s linear infinite;
+}
+.pb-status.is-error { color: #ff9a9a; }
+@keyframes strivo-spin { to { transform: rotate(360deg); } }

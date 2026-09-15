@@ -1244,7 +1244,7 @@ pub fn episode_dir(
         PlatformKind::Patreon => "patreon",
     };
     let date_str = date.format("%Y-%m-%d").to_string();
-    let clean_title = title.trim_end_matches(|c: char| c == ' ' || c == '.');
+    let clean_title = title.trim_end_matches([' ', '.']);
     let clean_title = [".mkv", ".mp4", ".webm", ".mov"]
         .iter()
         .find_map(|ext| {

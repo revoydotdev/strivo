@@ -1,4 +1,5 @@
 pub mod resolver;
+pub mod session;
 pub mod twitch_rewind;
 
 #[allow(dead_code)]

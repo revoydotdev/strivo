@@ -140,6 +140,8 @@ impl DaemonState {
                                 && i.source == crate::platform::AuthSource::Cookies)
                         });
                     }
+                } else {
+                    tracing::warn!(job_id = %job_id, "RecordingProgress for unknown job_id — state desync");
                 }
             }
             DaemonEvent::RecordingFinished {
@@ -158,6 +160,8 @@ impl DaemonState {
                     if let Some(p) = new_path {
                         job.output_path = p.clone();
                     }
+                } else {
+                    tracing::warn!(job_id = %job_id, "RecordingFinished for unknown job_id — state desync, journal will not be updated");
                 }
                 self.evict_old_terminal();
             }
@@ -956,10 +960,15 @@ pub async fn run_with_plugins_at(
         // A journal entry is useful only while its media exists. Prune
         // confirmed deletions before rebuilding the UI snapshot; retain a
         // durable, human-readable audit trail in the rolling daemon log.
-        match db.prune_missing_recordings().await {
+        match db
+            .prune_missing_recordings(&std::collections::HashSet::new())
+            .await
+        {
             Ok(removed) => {
                 for (id, path) in removed {
-                    let thumb = crate::config::AppConfig::data_dir().join("thumbs").join(format!("{id}.jpg"));
+                    let thumb = crate::config::AppConfig::data_dir()
+                        .join("thumbs")
+                        .join(format!("{id}.jpg"));
                     let _ = std::fs::remove_file(&thumb);
                     tracing::info!(recording_id = %id, path = %path.display(), "Removed recording entry because its media file was deleted");
                 }
@@ -1078,15 +1087,43 @@ pub async fn run_with_plugins_at(
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 tick.tick().await;
-                let Ok(removed) = db.prune_missing_recordings().await else { continue };
-                if removed.is_empty() { continue; }
+                let keep: std::collections::HashSet<Uuid> = {
+                    let snapshot = shared.read().await;
+                    snapshot
+                        .values()
+                        .filter(|job| {
+                            matches!(
+                                job.state,
+                                crate::recording::job::RecordingState::ResolvingUrl
+                                    | crate::recording::job::RecordingState::Recording
+                                    | crate::recording::job::RecordingState::Stopping
+                            )
+                        })
+                        .map(|job| job.id)
+                        .collect()
+                };
+                let Ok(removed) = db.prune_missing_recordings(&keep).await else {
+                    continue;
+                };
+                if removed.is_empty() {
+                    continue;
+                }
                 let mut ids = Vec::with_capacity(removed.len());
                 for (id, path) in removed {
-                    let _ = std::fs::remove_file(crate::config::AppConfig::data_dir().join("thumbs").join(format!("{id}.jpg")));
+                    let _ = std::fs::remove_file(
+                        crate::config::AppConfig::data_dir()
+                            .join("thumbs")
+                            .join(format!("{id}.jpg")),
+                    );
                     tracing::info!(recording_id = %id, path = %path.display(), "Removed recording entry because its media file was deleted");
                     ids.push(id);
                 }
-                { let mut snapshot = shared.write().await; for id in &ids { snapshot.remove(id); } }
+                {
+                    let mut snapshot = shared.write().await;
+                    for id in &ids {
+                        snapshot.remove(id);
+                    }
+                }
                 let _ = tx.send(crate::events::DaemonEvent::RecordingsPruned { job_ids: ids });
             }
         });
@@ -2034,6 +2071,7 @@ async fn persist_event(
             new_path: _,
         } => {
             let Some(pj) = snapshot(job_id, *final_state, error.clone()) else {
+                tracing::warn!(job_id = %job_id, "persist_event: RecordingFinished for job_id not in in-memory recordings — journal not updated");
                 return;
             };
             db.upsert_job(&pj).await

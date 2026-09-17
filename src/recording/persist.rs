@@ -151,23 +151,44 @@ pub struct PersistDb {
 impl PersistDb {
     /// Remove journal rows whose output has disappeared. This is deliberately
     /// separate from recovery so the cleanup is visible and auditable.
-    pub async fn prune_missing_recordings(&self) -> Result<Vec<(uuid::Uuid, PathBuf)>> {
-        self.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, episode_dir, payload FROM jobs WHERE kind='Recording'")?;
+    ///
+    /// Only considers rows in the `finished` state. In-flight states
+    /// ('running', 'queued', 'recording', 'resolving'/'resolvingurl',
+    /// 'stopping') have no final file yet — yt-dlp VOD/Patreon pulls write to
+    /// intermediate `.part`/`.fNNN` files and only create the output path on
+    /// merge, so a download older than one reconcile tick would otherwise be
+    /// pruned mid-flight (see the `RecordingsPruned`/`RecordingFinished` race
+    /// this fixed). 'failed'/'interrupted' rows legitimately may have no
+    /// file — those are removed explicitly by the user's clear-errored
+    /// action, not silently within a tick, or failure records would be lost.
+    ///
+    /// `keep` is a defense-in-depth exclusion set: ids the caller knows are
+    /// currently active in memory are never pruned here even if the journal
+    /// briefly disagrees. Startup has no such set yet, so it passes an empty
+    /// one.
+    pub async fn prune_missing_recordings(
+        &self,
+        keep: &std::collections::HashSet<uuid::Uuid>,
+    ) -> Result<Vec<(uuid::Uuid, PathBuf)>> {
+        let keep = keep.clone();
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, episode_dir, payload FROM jobs WHERE kind='Recording' AND state='finished'",
+            )?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
             })?;
             let mut removed = Vec::new();
             for row in rows {
                 let (id, dir, payload) = row?;
+                let Ok(uuid) = uuid::Uuid::parse_str(&id) else { continue };
+                if keep.contains(&uuid) { continue; }
                 let path = serde_json::from_str::<crate::recording::job::RecordingJob>(&payload)
                     .ok().map(|j| j.output_path).or_else(|| dir.map(PathBuf::from));
                 let Some(path) = path else { continue };
                 if path.exists() { continue; }
-                if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
-                    conn.execute("DELETE FROM jobs WHERE kind='Recording' AND id=?1", params![id])?;
-                    removed.push((uuid, path));
-                }
+                conn.execute("DELETE FROM jobs WHERE kind='Recording' AND id=?1", params![id])?;
+                removed.push((uuid, path));
             }
             Ok(removed)
         }).await
@@ -890,6 +911,129 @@ mod tests {
         let loaded = db.load_jobs_in_states(&["running"]).await.unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].attempts, 1);
+    }
+
+    /// Build a `PersistedJob` in the given journal `state` whose payload is a
+    /// real serialized `RecordingJob` pointing at `output_path`. Mirrors the
+    /// `RecordingJob::new` + `serde_json::to_string` pattern used by
+    /// `count_finished_recordings_sql_count` above.
+    fn job_row(state: &str, output_path: &std::path::Path) -> (uuid::Uuid, PersistedJob) {
+        use crate::recording::job::RecordingJob;
+        let job = RecordingJob::new(
+            "chan".into(),
+            "Chan".into(),
+            PlatformKind::Twitch,
+            output_path.to_path_buf(),
+            false,
+            None,
+        );
+        let id = job.id;
+        let payload = serde_json::to_string(&job).unwrap();
+        (
+            id,
+            PersistedJob {
+                id: id.to_string(),
+                kind: "Recording".into(),
+                payload,
+                state: state.into(),
+                attempts: 0,
+                last_error: None,
+                episode_dir: None,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn prune_skips_in_flight_rows_with_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = PersistDb::open(&dir.path().join("jobs.db")).unwrap();
+        let missing = dir.path().join("no-such-file.mkv");
+
+        let (id, job) = job_row("running", &missing);
+        db.upsert_job(&job).await.unwrap();
+
+        let removed = db
+            .prune_missing_recordings(&std::collections::HashSet::new())
+            .await
+            .unwrap();
+        assert!(removed.is_empty());
+        let loaded = db.load_jobs_in_states(&["running"]).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, id.to_string());
+    }
+
+    #[tokio::test]
+    async fn prune_skips_failed_rows_with_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = PersistDb::open(&dir.path().join("jobs.db")).unwrap();
+        let missing = dir.path().join("no-such-file.mkv");
+
+        let (_id, job) = job_row("failed", &missing);
+        db.upsert_job(&job).await.unwrap();
+
+        let removed = db
+            .prune_missing_recordings(&std::collections::HashSet::new())
+            .await
+            .unwrap();
+        assert!(removed.is_empty());
+        let loaded = db.load_jobs_in_states(&["failed"]).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prune_removes_finished_rows_with_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = PersistDb::open(&dir.path().join("jobs.db")).unwrap();
+        let missing = dir.path().join("no-such-file.mkv");
+
+        let (id, job) = job_row("finished", &missing);
+        db.upsert_job(&job).await.unwrap();
+
+        let removed = db
+            .prune_missing_recordings(&std::collections::HashSet::new())
+            .await
+            .unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, id);
+        assert_eq!(removed[0].1, missing);
+        let loaded = db.load_jobs_in_states(&["finished"]).await.unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_skips_finished_rows_whose_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = PersistDb::open(&dir.path().join("jobs.db")).unwrap();
+        let present = dir.path().join("present.mkv");
+        std::fs::write(&present, b"data").unwrap();
+
+        let (_id, job) = job_row("finished", &present);
+        db.upsert_job(&job).await.unwrap();
+
+        let removed = db
+            .prune_missing_recordings(&std::collections::HashSet::new())
+            .await
+            .unwrap();
+        assert!(removed.is_empty());
+        let loaded = db.load_jobs_in_states(&["finished"]).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prune_skips_finished_rows_in_keep_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = PersistDb::open(&dir.path().join("jobs.db")).unwrap();
+        let missing = dir.path().join("no-such-file.mkv");
+
+        let (id, job) = job_row("finished", &missing);
+        db.upsert_job(&job).await.unwrap();
+
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(id);
+        let removed = db.prune_missing_recordings(&keep).await.unwrap();
+        assert!(removed.is_empty());
+        let loaded = db.load_jobs_in_states(&["finished"]).await.unwrap();
+        assert_eq!(loaded.len(), 1);
     }
 
     /// A panic inside a pooled closure poisons that connection's `StdMutex`.

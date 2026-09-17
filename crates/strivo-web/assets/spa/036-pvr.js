@@ -1259,13 +1259,12 @@ events.on((event) => {
           paintDashboard();
           paintChannelList();
         }
-        // If a channel detail is open, refresh its VOD pills so any
-        // newly-Finished source_url flips the button to Downloaded
-        // (and any newly-Started one to Downloading).
-        if (selectedChannelKey) {
-          const [platform, id] = selectedChannelKey.split(":");
-          if (id) paintChannelVods(id, platform);
-        }
+        // Refresh any open channel detail's VOD pills so any newly-Finished
+        // source_url flips the button to Downloaded, a newly-Started one to
+        // Downloading, and a failed/vanished job falls back to Download —
+        // covers both an ordinary channel detail and an open Patreon
+        // creator's posts.
+        if (typeof repaintOpenChannelDownloads === "function") repaintOpenChannelDownloads();
       })
       .catch(() => {});
   }
@@ -1280,6 +1279,12 @@ events.on((event) => {
       API.invalidate("/history");
       recCache = recCache.filter((r) => !ids.has(r.id));
       dashRecordings = recCache;
+      // A pruned job may be the one a "downloading" pill is tracking — a
+      // stale/monotonic state map would leave that pill stuck forever, so
+      // reseed from the (now-pruned) recCache and repaint any open channel
+      // detail before anything else touches vodDownloadState.
+      if (typeof seedVodDownloadStateFromRecCache === "function") seedVodDownloadStateFromRecCache();
+      if (typeof repaintOpenChannelDownloads === "function") repaintOpenChannelDownloads();
       updateLiveCount();
       if (currentRoute() === "recordings") {
         paintRecStateChips();

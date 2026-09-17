@@ -138,12 +138,27 @@ let selectedChannelKey = null;
 const channelVods = {};
 // Per-VOD download state for the Past Broadcasts / Recent uploads pills.
 // Keys: VOD URL. Values: "downloading" | "downloaded". Absence = idle.
-// Seeded from recCache on every recordings refresh via
-// `seedVodDownloadStateFromRecCache()` — correlation is by exact source_url
-// match (RecordingJob.source_url, stamped on DownloadVod), so a page reload
-// or a previously-finished download both surface correctly without a FIFO
-// guess.
+// This is DERIVED state: `seedVodDownloadStateFromRecCache()` REBUILDS it
+// from scratch on every recordings refresh (RecordingStarted/Finished,
+// RecordingsPruned, page load) by correlating recCache rows to a url via
+// exact source_url match (RecordingJob.source_url, stamped on DownloadVod).
+// Nothing else assigns into this map — a job that fails, is pruned, or is
+// deleted simply stops contributing a state on the next rebuild, instead of
+// leaving a stale "downloading"/"downloaded" entry stuck forever the way a
+// monotonic upgrade-only map would.
 const vodDownloadState = {};
+// Optimistic pending-click overlay, consulted only by
+// seedVodDownloadStateFromRecCache() to fill the gap between a successful
+// POST and the RecordingStarted SSE (+ recCache refresh) that follows it.
+// Keys: VOD URL. Values: { at: Date.now(), knownIds: Set<jobId> } — knownIds
+// is every job id already in recCache for that source_url at click time, so
+// the seed function can tell "the job this click just started" (an id NOT
+// in knownIds) apart from a stale prior job sharing the same source_url,
+// and consume (delete) the pending entry once that new job appears. Entries
+// older than the timeout below with no matching new job are dropped so a
+// lost request can't wedge a pill in "downloading" forever.
+const vodDownloadPending = {};
+const VOD_DOWNLOAD_PENDING_TIMEOUT_MS = 90000;
 let dashRecordings = [];
 let dashSchedule = [];
 // Cached max-concurrent-recordings limit from /settings; updated by

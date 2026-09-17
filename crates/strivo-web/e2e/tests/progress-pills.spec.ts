@@ -166,3 +166,213 @@ test("vod-dl-label never shows a literal 0% when download_pct is null", async ({
   await expect(label).not.toHaveText("0%");
   await expect(label).not.toContainText("0%");
 });
+
+// Regression coverage for the VOD download pill: a monotonic
+// "downloading"/"downloaded" state map that nothing ever cleared left the
+// pill stuck forever once its job disappeared (pruned, failed, deleted),
+// and a long "NN% · Xh Ym left · R MB/s" label squeezed the progress bar
+// to zero width. seedVodDownloadStateFromRecCache() (012c-pvr.js) now
+// REBUILDS vodDownloadState from recCache on every call instead of only
+// ever upgrading it, and the CSS stacks bar-above-label instead of
+// sharing a row. This VOD ("Yesterday's livestream" / stream1, under Live
+// Channel's Past Broadcasts) is the same one used by the 0%-label test
+// above; each test here installs its own job via `**/api/v1/recordings*`
+// so the scenarios stay self-contained per mock-server.mjs's own
+// documented convention (see file header comment).
+//
+// The mock server is one process shared by every parallel worker/test, and
+// `/__test__/broadcast` (used below) fans an event out to EVERY open SSE
+// connection, not just the page that requested it — so a hardcoded job id
+// shared across tests would let one test's RecordingsPruned prune another
+// concurrently-running test's job out from under it. Each test gets its
+// own random id instead.
+const VOD_URL = "https://youtu.be/stream1";
+
+function vodJobFixture(jobId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: jobId,
+    channel_name: "Live Channel",
+    stream_title: "Yesterday's livestream",
+    state: "Recording",
+    source_url: VOD_URL,
+    started_at: new Date().toISOString(),
+    bytes_written: 0,
+    download_pct: null,
+    ...overrides,
+  };
+}
+
+async function installVodJob(
+  page: import("@playwright/test").Page,
+  job: Record<string, unknown>,
+) {
+  await page.route("**/api/v1/recordings*", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    body.recordings = [...body.recordings, job];
+    if (typeof body.total === "number") body.total += 1;
+    await route.fulfill({ response, json: body });
+  });
+}
+
+function vodPillButton(page: import("@playwright/test").Page) {
+  return page
+    .locator(".media-pill", { hasText: "Yesterday's livestream" })
+    .locator(".vod-dl");
+}
+
+test("downloading pill shows a non-collapsed bar even with a long ETA/rate label", async ({ page }) => {
+  await installVodJob(
+    page,
+    vodJobFixture(crypto.randomUUID(), {
+      download_pct: 57,
+      download_eta_secs: 3725, // 1h 2m
+      download_rate_bps: 12_300_000, // 12.3 MB/s
+    }),
+  );
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("Yesterday's livestream")).toBeVisible();
+
+  const dlBtn = vodPillButton(page);
+  await expect(dlBtn).toHaveClass(/vod-dl-downloading/);
+  const label = dlBtn.locator(".vod-dl-label");
+  await expect(label).toContainText("57%");
+  await expect(label).toContainText("1h 2m left");
+  await expect(label).toContainText("12.3 MB/s");
+  // The full, untruncated label lives in the button's title attribute so
+  // it stays readable even when the visible text is CSS-ellipsized.
+  await expect(dlBtn).toHaveAttribute("title", "57% · 1h 2m left · 12.3 MB/s");
+
+  // Read both rects in one atomic DOM query per poll — two sequential
+  // locator.boundingBox() calls can straddle a live repaint (the mock's
+  // ChannelVods SSE answer, or a later recordings refresh) and observe a
+  // stale/detached element mid-swap. expect.poll rides out that kind of
+  // transient (or a slow layout pass under a loaded test runner) while
+  // still failing for real on a genuine collapse-to-zero regression,
+  // which — unlike a mid-swap glitch — persists for the whole window.
+  const readRects = () =>
+    dlBtn.evaluate((btn) => {
+      const bar = btn.querySelector(".vod-dl-bar");
+      const fill = btn.querySelector(".vod-dl-fill");
+      return {
+        bar: bar ? bar.getBoundingClientRect().width : 0,
+        fill: fill ? fill.getBoundingClientRect().width : 0,
+      };
+    });
+  // The regression: a long label used to squeeze the bar to ~0 width. Poll
+  // on both values from the SAME read together — polling them separately
+  // can straddle a repaint and see one before, one after.
+  await expect
+    .poll(async () => {
+      const r = await readRects();
+      // The bar must render at a real width, and the fill (57%) must
+      // occupy a visible share of it.
+      return r.bar > 40 && r.fill > r.bar * 0.3;
+    })
+    .toBe(true);
+});
+
+test("downloading pill self-heals to Download when its job is pruned", async ({ page }) => {
+  const jobId = crypto.randomUUID();
+  await installVodJob(page, vodJobFixture(jobId));
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("Yesterday's livestream")).toBeVisible();
+
+  const dlBtn = vodPillButton(page);
+  // Confirm the pill actually reached "downloading" (seeded from the job
+  // already in recCache) before pruning it — otherwise this wouldn't be
+  // testing self-healing at all.
+  await expect(dlBtn).toHaveClass(/vod-dl-downloading/);
+
+  // Real daemon prune, delivered over the real SSE connection (not a
+  // replacement of the whole /events route, which would also cut off the
+  // ChannelVods answer the pill above depends on).
+  await page.request.post("/__test__/broadcast", {
+    data: { RecordingsPruned: { job_ids: [jobId] } },
+  });
+
+  // The derived state must settle on idle "Download" — never stuck on
+  // the empty "Downloading…" fallback the old monotonic map left behind
+  // once its job vanished from recCache.
+  await expect(dlBtn).toHaveClass(/vod-dl-idle/);
+  await expect(dlBtn).toHaveText("Download");
+});
+
+test("a Failed job leaves the pill idle, not stuck downloading", async ({ page }) => {
+  await installVodJob(page, vodJobFixture(crypto.randomUUID(), { state: "Failed" }));
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("Yesterday's livestream")).toBeVisible();
+
+  const dlBtn = vodPillButton(page);
+  await expect(dlBtn).toHaveClass(/vod-dl-idle/);
+  await expect(dlBtn).toHaveText("Download");
+});
+
+test("a Finished job shows Downloaded", async ({ page }) => {
+  await installVodJob(page, vodJobFixture(crypto.randomUUID(), { state: "Finished", file_exists: true }));
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("Yesterday's livestream")).toBeVisible();
+
+  const dlBtn = vodPillButton(page);
+  await expect(dlBtn).toHaveClass(/vod-dl-downloaded/);
+  await expect(dlBtn).toHaveText("Downloaded");
+});
+
+// ── Recent uploads never link out (mirrors the Past Broadcasts rule) ──
+// mock-server.mjs's ChannelVods answer for every channel includes an
+// "upload1" Upload-kind entry (url https://youtu.be/upload1, title "How I
+// edit my videos") that renders under the "Recent uploads" section —
+// vodSectionHtml (012c-pvr.js) used to only apply the never-link-out rule
+// to "Past Broadcasts"; it now applies everywhere.
+
+const UPLOAD_URL = "https://youtu.be/upload1";
+
+function uploadJobFixture(jobId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: jobId,
+    channel_name: "Live Channel",
+    stream_title: "How I edit my videos",
+    source_url: UPLOAD_URL,
+    started_at: new Date().toISOString(),
+    bytes_written: 0,
+    download_pct: null,
+    ...overrides,
+  };
+}
+
+function uploadRow(page: import("@playwright/test").Page) {
+  return page.locator(".media-pill", { hasText: "How I edit my videos" }).locator(".mp-link");
+}
+
+test("Recent uploads row has no external link, and is inert while downloading", async ({ page }) => {
+  await installVodJob(page, uploadJobFixture(crypto.randomUUID(), { state: "Recording" }));
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("How I edit my videos")).toBeVisible();
+
+  const row = uploadRow(page);
+  await expect(row).toHaveCount(1);
+  await expect(page.locator(".media-pill", { hasText: "How I edit my videos" }).locator("a")).toHaveCount(0);
+  await expect(row).toHaveClass(/mp-link-inert/);
+});
+
+test("a Finished upload's row opens the in-app player, never the source platform", async ({ page }) => {
+  const jobId = crypto.randomUUID();
+  await installVodJob(page, uploadJobFixture(jobId, { state: "Finished", file_exists: true }));
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("How I edit my videos")).toBeVisible();
+
+  const row = uploadRow(page);
+  await expect(row).not.toHaveClass(/mp-link-inert/);
+  await expect(row).toHaveAttribute("data-job-id", jobId);
+
+  await row.click();
+  await page.waitForFunction(() => /#\/play\?recording=/.test(window.location.hash));
+  expect(page.url()).toContain(`#/play?recording=${jobId}`);
+});

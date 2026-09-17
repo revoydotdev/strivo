@@ -116,7 +116,6 @@ async function renderHome(context = captureRouteContext()) {
     if (typeof seedVodDownloadStateFromRecCache === "function") seedVodDownloadStateFromRecCache();
     dashRecordings = recCache;
     hydrationLoaded.recordings = true;
-    seedVodDownloadStateFromRecCache();
   } else if (recRes.reason && recRes.reason.message && recRes.reason.message.includes("unauthorized")) {
     return;
   }

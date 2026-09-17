@@ -427,6 +427,22 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { status: "ok" });
   }
 
+  // Test-only control endpoint: push an arbitrary event onto the REAL,
+  // already-open /events SSE connection (the same `broadcast()` the
+  // ChannelVods/PlaylistList/etc. handlers above use). Specs that need to
+  // fire a specific lifecycle event (e.g. RecordingsPruned) at a precise
+  // moment can't just replace the whole /events route with a canned
+  // page.route body — that would also cut off every OTHER event (like the
+  // ChannelVods answer a channel-detail visit depends on) the real
+  // connection would otherwise deliver. This stays a thin, stateless
+  // pass-through so it can't leak state across tests/specs the way
+  // mutating RECORDINGS directly would.
+  if (path === "/__test__/broadcast" && req.method === "POST") {
+    const body = await readBody(req);
+    broadcast(body);
+    return json(res, 200, { status: "ok" });
+  }
+
   // API surface.
   if (path.startsWith("/api/v1/")) {
     const p = path.slice("/api/v1".length);

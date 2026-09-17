@@ -390,6 +390,13 @@ function wireVodDownloadButtons() {
       if (!url || vodDownloadState[url] === "downloading" || vodDownloadState[url] === "downloaded") {
         return;
       }
+      // Record which jobs already exist for this url so the seed function
+      // can recognize the job THIS click starts (an id not in this set)
+      // once it lands in recCache, rather than guessing FIFO-order.
+      const knownIds = new Set(
+        recCache.filter((r) => r.source_url === url).map((r) => r.id),
+      );
+      vodDownloadPending[url] = { at: Date.now(), knownIds };
       vodDownloadState[url] = "downloading";
       setVodButtonState(btn, "downloading");
       try {
@@ -415,6 +422,7 @@ function wireVodDownloadButtons() {
         // source_url match — no FIFO guess.
       } catch (err) {
         // Roll back to idle so the user can retry.
+        delete vodDownloadPending[url];
         delete vodDownloadState[url];
         setVodButtonState(btn, "idle");
         Toast.error(`Download failed: ${err.message}`);
@@ -438,47 +446,92 @@ function wireVodDownloadButtons() {
   });
 }
 
-// Walk recCache and reflect each recording whose source_url points at a VOD
-// into vodDownloadState. Called whenever recCache is refreshed so the
-// channel-detail view (and a fresh page reload) shows correct button state
-// without any FIFO guess.
+// Rebuild vodDownloadState from scratch. This is DERIVED state, not a
+// monotonic upgrade-only cache — called whenever recCache is refreshed
+// (RecordingStarted/Finished, RecordingsPruned, page load) so the
+// channel-detail view self-heals from any job disappearing (pruned,
+// deleted, or simply never matched) instead of leaving a pill stuck.
+// Priority per url: an in-progress job wins; else a Finished job with
+// file_exists !== false; else a still-live pending click; else idle
+// (absent from the map).
 function seedVodDownloadStateFromRecCache() {
+  for (const key of Object.keys(vodDownloadState)) delete vodDownloadState[key];
+
   for (const r of recCache) {
     if (!r.source_url) continue;
-    if (r.state === "Finished") {
+    if (r.state === "Finished" && r.file_exists !== false) {
       vodDownloadState[r.source_url] = "downloaded";
-    } else if (isInProgress(r.state)) {
-      // Don't downgrade a "downloaded" entry if a stale in-progress row
-      // sneaks in (rare, but be safe).
-      if (vodDownloadState[r.source_url] !== "downloaded") {
-        vodDownloadState[r.source_url] = "downloading";
-      }
     }
   }
+  // In-progress jobs are the freshest truth and always win, including over
+  // a "downloaded" entry from an older Finished job on the same url (a
+  // re-download in flight).
+  for (const r of recCache) {
+    if (!r.source_url) continue;
+    if (isInProgress(r.state)) {
+      vodDownloadState[r.source_url] = "downloading";
+    }
+  }
+
+  // Fill in "downloading" for urls recCache hasn't caught up to yet from a
+  // pending click, and consume/expire pending entries.
+  const now = Date.now();
+  for (const url of Object.keys(vodDownloadPending)) {
+    const pending = vodDownloadPending[url];
+    const freshJob = recCache.find(
+      (r) => r.source_url === url && !pending.knownIds.has(r.id),
+    );
+    if (freshJob || now - pending.at > VOD_DOWNLOAD_PENDING_TIMEOUT_MS) {
+      delete vodDownloadPending[url];
+      continue;
+    }
+    if (!vodDownloadState[url]) vodDownloadState[url] = "downloading";
+  }
+}
+
+// Pick the job in recCache that should drive a url's progress display:
+// an in-progress job if one exists (so a re-download doesn't show numbers
+// from an old Failed/Finished job with the same source_url), else the most
+// recently seen match at all.
+function activeVodJob(url) {
+  const matches = recCache.filter((r) => r.source_url === url);
+  return matches.find((r) => isInProgress(r.state)) || matches[0] || null;
+}
+
+// Markup + title for a VOD download button given its derived state. Shared
+// by every renderer that draws a .vod-dl button so the state→markup
+// mapping lives in exactly one place. `title` carries the untruncated
+// progress label (empty otherwise) — the label itself is CSS-ellipsized,
+// so callers should put this on the button's title attribute.
+function vodDownloadButtonInner(url, state) {
+  if (state === "downloading") {
+    const job = activeVodJob(url);
+    const pct = job && job.download_pct;
+    const etaSecs = job && job.download_eta_secs;
+    const rateBps = job && job.download_rate_bps;
+    return {
+      html: vodProgressHtml(pct, etaSecs, rateBps),
+      title: vodProgressLabel(pct, etaSecs, rateBps),
+    };
+  }
+  return { html: state === "downloaded" ? "Downloaded" : "Download", title: "" };
 }
 
 function setVodButtonState(btn, state) {
   btn.classList.remove("vod-dl-idle", "vod-dl-downloading", "vod-dl-downloaded");
   btn.classList.add(`vod-dl-${state}`);
   btn.disabled = state !== "idle";
-  if (state === "downloading") {
-    // Try to seed initial bar from any cached progress on the matching job.
-    const url = btn.dataset.url;
-    const job = recCache.find((r) => r.source_url === url);
-    btn.innerHTML = vodProgressHtml(
-      job && job.download_pct,
-      job && job.download_eta_secs,
-      job && job.download_rate_bps,
-    );
-  } else {
-    btn.textContent = state === "downloaded" ? "Downloaded" : "Download";
-  }
+  const { html, title } = vodDownloadButtonInner(btn.dataset.url, state);
+  btn.innerHTML = html;
+  if (title) btn.title = title;
+  else btn.removeAttribute("title");
 }
 
-// Inner HTML for the in-flight download widget: gradient-filled bar +
-// "NN% · Xm Ys left · R MB/s" label. Bar gradient runs amber → green so the
-// rightmost fill colour shifts greener as the pull completes.
-function vodProgressHtml(pct, etaSecs, rateBps) {
+// Plain-text label for the in-flight download widget — "NN% · Xm Ys left ·
+// R MB/s". Shared by vodProgressHtml (renders it, truncated with ellipsis
+// via CSS) and vodDownloadButtonInner (puts the untruncated form in the
+// button's title attribute so a squeezed label stays readable on hover).
+function vodProgressLabel(pct, etaSecs, rateBps) {
   // Mirrors renderStatePill's convention (below, ~3149): an unknown
   // percent is omitted from the label rather than shown as a literal
   // "0%" — the bar fill can still default to empty, but the text must
@@ -488,10 +541,20 @@ function vodProgressHtml(pct, etaSecs, rateBps) {
   const eta = etaSecs == null ? "" : fmtEta(etaSecs);
   const rate = rateBps == null ? "" : `${formatBytes(rateBps)}/s`;
   const meta = [eta && `${eta} left`, rate].filter(Boolean).join(" · ");
-  const label = hasPct ? `${p}%${meta ? " · " + meta : ""}` : (meta || "Downloading…");
+  return hasPct ? `${p}%${meta ? " · " + meta : ""}` : (meta || "Downloading…");
+}
+
+// Inner HTML for the in-flight download widget: gradient-filled bar +
+// label, stacked (see 000-pvr.css .vod-dl-downloading) so a long label
+// can never squeeze the bar to zero width. Bar gradient runs amber → green
+// so the rightmost fill colour shifts greener as the pull completes.
+function vodProgressHtml(pct, etaSecs, rateBps) {
+  const hasPct = pct != null && Number.isFinite(pct);
+  const p = hasPct ? Math.max(0, Math.min(100, Math.round(pct))) : 0;
+  const label = vodProgressLabel(pct, etaSecs, rateBps);
   return `
     <span class="vod-dl-bar"><span class="vod-dl-fill" style="width:${p}%"></span></span>
-    <span class="vod-dl-label">${label}</span>
+    <span class="vod-dl-label">${htmlEscape(label)}</span>
   `;
 }
 
@@ -569,45 +632,31 @@ function vodSectionHtml(title, vods, ctx) {
       const downloadChannel = channelName || v.channel_id || "";
       const downloadPlatform = platform || v.platform || "";
       const downloadable = !!(v.url && downloadChannel && downloadPlatform);
-      // Past Broadcasts are already-recorded livestreams, not arbitrary
-      // uploads — once downloaded, the pill should play the local
-      // recording, never send the click out to YouTube. A match is a
-      // finished recording whose source_url is this exact VOD's URL.
-      const matchingJob = isPast
-        ? recCache.find((r) => r.source_url === v.url && r.state === "Finished" && r.file_exists !== false)
-        : null;
-      const linkTag = isPast ? "div" : "a";
-      const linkAttrs = isPast
-        ? matchingJob
-          ? `class="mp-link" data-action="open-vod-recording" data-job-id="${htmlEscape(matchingJob.id)}" role="button" tabindex="0"`
-          : `class="mp-link mp-link-inert" style="cursor:default"`
-        : (() => {
-            const href = /^https?:\/\//i.test(v.url || "") ? htmlEscape(v.url) : "#";
-            return `class="mp-link" href="${href}" target="_blank" rel="noopener"`;
-          })();
+      // Never link out to the source platform — every VOD row here (Past
+      // Broadcasts AND Recent uploads) is either already a local recording
+      // or a candidate to become one; sending the click to YouTube/Twitch
+      // mid-download (or before one has even started) just abandons the
+      // in-app player for a page StriVo already has better data for. A
+      // match is a finished recording whose source_url is this exact VOD's
+      // URL — found, the row opens it in-app; otherwise (idle, downloading,
+      // or failed) the row is inert until one exists.
+      const matchingJob = recCache.find((r) => r.source_url === v.url && r.state === "Finished" && r.file_exists !== false);
+      const linkTag = "div";
+      const linkAttrs = matchingJob
+        ? `class="mp-link" data-action="open-vod-recording" data-job-id="${htmlEscape(matchingJob.id)}" role="button" tabindex="0"`
+        : `class="mp-link mp-link-inert" style="cursor:default"`;
       const state = vodDownloadState[v.url] || "idle";
-      // For the downloading state, embed a live progress widget instead of
-      // plain text. Seed pct/eta/rate from any matching cached job so a
-      // re-render between SSE ticks doesn't reset the bar to 0%.
-      let inner;
-      if (state === "downloading") {
-        const job = recCache.find((r) => r.source_url === v.url);
-        inner = vodProgressHtml(
-          job && job.download_pct,
-          job && job.download_eta_secs,
-          job && job.download_rate_bps,
-        );
-      } else if (state === "downloaded") {
-        inner = "Downloaded";
-      } else {
-        inner = "Download";
-      }
+      // Embeds a live progress widget for the downloading state, seeded
+      // from activeVodJob(v.url) so a re-render between SSE ticks doesn't
+      // reset the bar to 0% — and doesn't show a stale job's numbers.
+      const { html: inner, title: dlTitle } = vodDownloadButtonInner(v.url, state);
       const btn = downloadable
         ? `<button class="vod-dl vod-dl-${state}" data-action="vod-download"
               data-url="${htmlEscape(v.url)}"
               data-channel="${htmlEscape(downloadChannel)}"
               data-platform="${htmlEscape(downloadPlatform)}"
               data-title="${htmlEscape(v.title || "")}"
+              ${dlTitle ? `title="${htmlEscape(dlTitle)}"` : ""}
               ${state !== "idle" ? "disabled" : ""}>${inner}</button>`
         : "";
       // "Upload" was a confusing label on Past Broadcasts — every entry
@@ -652,14 +701,7 @@ function renderPatreonPosts(c) {
             : "";
           const url = p.embed_url || "";
           const state = vodDownloadState[url] || "idle";
-          const cachedJob = recCache.find((r) => r.source_url === url);
-          const inner = state === "downloading"
-            ? vodProgressHtml(
-                cachedJob && cachedJob.download_pct,
-                cachedJob && cachedJob.download_eta_secs,
-                cachedJob && cachedJob.download_rate_bps,
-              )
-            : state === "downloaded" ? "Downloaded" : "Download";
+          const { html: inner, title: dlTitle } = vodDownloadButtonInner(url, state);
           const btn = url
             ? `<button class="vod-dl vod-dl-${state}" data-action="vod-download"
                   data-via="patreon"
@@ -667,11 +709,23 @@ function renderPatreonPosts(c) {
                   data-channel="${htmlEscape(channelName)}"
                   data-platform="Patreon"
                   data-title="${htmlEscape(p.title)}"
+                  ${dlTitle ? `title="${htmlEscape(dlTitle)}"` : ""}
                   ${state !== "idle" ? "disabled" : ""}>${inner}</button>`
             : "";
+          // Never link out to Patreon — same rule as the channel VOD
+          // sections above (vodSectionHtml): keyed on embed_url (==
+          // source_url on the resulting RecordingJob), a downloaded post
+          // opens the in-app player via the same `open-vod-recording`
+          // wiring (wireVodDownloadButtons); otherwise the row is inert.
+          const matchingJob = url
+            ? recCache.find((r) => r.source_url === url && r.state === "Finished" && r.file_exists !== false)
+            : null;
+          const linkAttrs = matchingJob
+            ? `class="mp-link" data-action="open-vod-recording" data-job-id="${htmlEscape(matchingJob.id)}" role="button" tabindex="0"`
+            : `class="mp-link mp-link-inert" style="cursor:default"`;
           return `
       <div class="media-pill">
-        <div class="mp-link" style="cursor: default;">
+        <div ${linkAttrs}>
           <div class="mp-thumb">${thumb}</div>
           <div class="mp-info">
             <div class="mp-title">${htmlEscape(p.title)}</div>
@@ -686,6 +740,25 @@ function renderPatreonPosts(c) {
     : '<div class="empty sm">No video posts.</div>';
   el.innerHTML = `<h2 class="cd-section-title">Posts</h2><div class="media-list">${rows}</div>`;
   wireVodDownloadButtons();
+}
+
+// Repaint whichever channel detail is currently open so its VOD download
+// pills reflect the latest vodDownloadState — call after
+// seedVodDownloadStateFromRecCache() on any event that can change it
+// (RecordingStarted/Finished, RecordingsPruned). Handles both branches:
+// a Patreon creator's posts (renderPatreonPosts) and an ordinary
+// channel's Past Broadcasts/Recent uploads (paintChannelVods). No-ops
+// when no channel detail is open.
+function repaintOpenChannelDownloads() {
+  if (!selectedChannelKey) return;
+  if (selectedChannelKey.startsWith("Patreon:")) {
+    const id = selectedChannelKey.slice("Patreon:".length);
+    const c = (patreonState.creators || []).find((x) => x.id === id);
+    if (c) renderPatreonPosts(c);
+    return;
+  }
+  const [platform, id] = selectedChannelKey.split(":");
+  if (id) paintChannelVods(id, platform);
 }
 
 // #74 — start/stop a per-channel bulk download.

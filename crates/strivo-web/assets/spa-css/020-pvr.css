@@ -762,6 +762,25 @@
   display: flex;
   min-width: 0;
   min-height: 0;
+  /* Recording playback (makeRecordingController's <video class="ms-video">)
+     has an intrinsic size, unlike a live iframe which is told its size via
+     width/height="100%" (018-pvr.js's makeIframeController et al). Without
+     centering, the video keeps its natural width (e.g. 1920px) and pins to
+     the flex start, so on an ultrawide tile it sits left-aligned instead of
+     letterboxed. This applies to both a recording wall tile and the
+     dedicated player (019b-pvr.js) — both mount through the same
+     .ms-mount/makeRecordingController pair. */
+  justify-content: center;
+  align-items: center;
+}
+.ms-mount > video.ms-video {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
 }
 
 /* ── Player bar ──────────────────────────────────────────────────────

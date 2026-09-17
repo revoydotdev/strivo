@@ -7,7 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **Dedicated recording player route (`#/play?recording=<id>`).** Opening a
+  recording no longer lands on the live multiview wall (`#/watch`) with its
+  chat rail, composer, and preset toolbar along for no reason — it opens a
+  focused single-tile player instead. Recordings can still be placed as
+  tiles on the wall through the composer or drag-and-drop; old
+  `#/watch?recording=…&fresh=1` links (bookmarks, external callers) redirect
+  to the new route automatically.
+
+### Changed
+- **The `#/watch` chat rail only appears when a live, chat-capable tile is
+  actually on the wall.** A recordings-only (or empty) layout hides the rail
+  entirely instead of reserving a dead collapsed-rail gutter; the persisted
+  open/closed preference is unaffected once a live Twitch tile appears.
+- **Recent uploads and Patreon post rows never link out to the source
+  platform.** A row is inert until a matching finished download exists, at
+  which point it opens the in-app recording player — the same rule already
+  applied to Past Broadcasts.
+
+### Fixed
+- **Ultrawide fullscreen centering for recording playback.** A recording's
+  `<video>` tile kept its natural width and pinned to the left edge in
+  fullscreen instead of centering with letterboxing; it now centers with
+  `object-fit: contain` like every other tile kind.
 
 ## [0.7.0] — 2026-09-11
 

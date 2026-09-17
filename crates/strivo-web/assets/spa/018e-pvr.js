@@ -135,15 +135,6 @@ function loadPlayerLayout() {
 }
 
 async function renderWatch(ctx) {
-  // teardownAcrossRoutes() in render() already cleared any prior refresh
-  // poll (playerState.refreshTimer + the legacy _watchRefreshTimer
-  // alias). A12 consolidation — don't duplicate the clear here.
-  if (!playerState.layout) loadPlayerLayout();
-  // Collapses the left channel rail to an icon strip on this route (019a)
-  // — a 292px rail plus a 340px open chat rail otherwise leaves a
-  // 16:9-locked wall floating in a fraction of the viewport.
-  enterWatchRoute();
-
   // Honour URL params from rail / dashboard clicks:
   //   ?focus=<streamId>      → load that LIVE stream into the (empty) single slot
   //   ?recording=<recId>     → load that RECORDING into the (empty) single slot
@@ -154,6 +145,28 @@ async function renderWatch(ctx) {
   const recordingId = params.get("recording") || "";
   const fresh = params.get("fresh") === "1";
   const seekTo = parseFloat(params.get("t") || "0") || 0;
+
+  // Back-compat: every recording-open path used to land here
+  // (`#/watch?recording=<id>&fresh=1`) before the dedicated player route
+  // (019b, `#/play`) existed — old bookmarks and any stray external link
+  // still use that shape. Redirect rather than build a wall around one
+  // recording, mirroring the `#/viewer` redirect above (018:7-24).
+  // Recording slots added through the composer or drag-and-drop never
+  // set `fresh=1` and are unaffected — they still land in the wall.
+  if (recordingId && fresh) {
+    const t = params.get("t");
+    location.replace(`#/play?recording=${encodeURIComponent(recordingId)}${t ? `&t=${encodeURIComponent(t)}` : ""}`);
+    return;
+  }
+
+  // teardownAcrossRoutes() in render() already cleared any prior refresh
+  // poll (playerState.refreshTimer + the legacy _watchRefreshTimer
+  // alias). A12 consolidation — don't duplicate the clear here.
+  if (!playerState.layout) loadPlayerLayout();
+  // Collapses the left channel rail to an icon strip on this route (019a)
+  // — a 292px rail plus a 340px open chat rail otherwise leaves a
+  // 16:9-locked wall floating in a fraction of the viewport.
+  enterWatchRoute();
   // B12: explicit null/undefined check — a serialised slot with
   // streamId: "" should still be treated as empty here.
   const slotIsEmpty = playerState.layout.kind === "slot"
@@ -198,10 +211,16 @@ async function renderWatch(ctx) {
   const railToggleGlyph = playerState.chatRailOpen ? "▶" : "◀";
   const railTitle = playerState.chatRailOpen ? "Collapse chat rail" : "Open chat rail";
   const theaterClass = countLeaves(playerState.layout) === 1 ? "is-theater" : "";
+  // The rail starts hidden and without `has-chat-rail` regardless of the
+  // persisted open/closed preference — reconcilePlayerChatRail (018d) is
+  // what decides whether a live, chat-capable tile exists at all and
+  // reveals the rail accordingly, right after this markup mounts. Baking
+  // the preference in here would flash the rail open for one frame on a
+  // recordings-only wall before reconcile hides it again.
   if (!mountPage(`
-    <div id="watch" class="watch-root ${playerState.chatRailOpen ? "has-chat-rail" : ""} ${theaterClass}" role="main">
+    <div id="watch" class="watch-root ${theaterClass}" role="main">
       <div class="watch-content"><div class="empty">Loading…</div></div>
-      <aside class="player-chat-rail" id="player-chat-rail" data-open="${railOpen}">
+      <aside class="player-chat-rail" id="player-chat-rail" data-open="${railOpen}" hidden>
         <div class="player-chat-rail-head">
           <button class="player-chat-rail-toggle sm" id="player-chat-rail-toggle"
                   type="button" title="${railTitle}" aria-pressed="${railOpen}">${railToggleGlyph}</button>

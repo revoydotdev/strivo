@@ -230,7 +230,11 @@ test("fullscreen button requests fullscreen on the .ms-leaf", async ({ page }) =
 });
 
 test("a recording tile renders video.ms-video without a controls attribute", async ({ page }) => {
+  // Old link shape (every recording-open path used to build this) —
+  // #/watch redirects it to the dedicated player route (019b-pvr.js)
+  // rather than building a wall around one recording.
   await page.goto("/app#/watch?recording=11111111-1111-1111-1111-111111111111&fresh=1");
+  await page.waitForFunction(() => /#\/play\?recording=/.test(window.location.hash));
   const v = page.locator("video.ms-video");
   await expect(v).toHaveCount(1);
   await expect(v).not.toHaveAttribute("controls", /.*/);
@@ -358,4 +362,57 @@ test("fullscreen clears compact mode even on a short tile", async ({ page }) => 
 
   await page.evaluate(() => (document.querySelector(".ms-leaf") as HTMLElement).requestFullscreen());
   await expect(page.locator(".ms-leaf").first()).not.toHaveClass(/is-compact/);
+});
+
+// ── Chat rail only for a live, chat-capable tile ─────────────────────
+// Only Twitch chat is wired end-to-end (collectChatableStreams,
+// 018d-pvr.js), so a recording-only wall — or one with no chatable tile
+// at all — must hide the rail rather than reserving a dead gutter.
+
+test("a recording-only wall hides the chat rail entirely", async ({ page }) => {
+  await page.addInitScript(
+    (recordingId) => {
+      localStorage.setItem("strivo-tour-done", "1");
+      localStorage.setItem(
+        "strivo-player-layout",
+        JSON.stringify({ kind: "slot", streamId: null, recordingId }),
+      );
+      localStorage.setItem("strivo-player-preset", "single");
+      localStorage.setItem("strivo-player-chat-rail-open", "1");
+    },
+    "11111111-1111-1111-1111-111111111111",
+  );
+  await page.goto("/app#/watch");
+  await page.waitForSelector(".ms-leaf-rec");
+
+  await expect(page.locator("#player-chat-rail")).toBeHidden();
+  await expect(page.locator("#watch")).toHaveClass(/no-chat-target/);
+  await expect(page.locator("#watch")).not.toHaveClass(/has-chat-rail/);
+});
+
+test("adding a live Twitch tile to a recording-only wall reveals the chat rail", async ({ page }) => {
+  await page.addInitScript(
+    ({ recordingId, streamId }) => {
+      localStorage.setItem("strivo-tour-done", "1");
+      localStorage.setItem(
+        "strivo-player-layout",
+        JSON.stringify({
+          kind: "split",
+          dir: "h",
+          ratio: 0.5,
+          a: { kind: "slot", streamId: null, recordingId },
+          b: { kind: "slot", streamId, recordingId: null },
+        }),
+      );
+      localStorage.setItem("strivo-player-preset", "custom");
+      localStorage.setItem("strivo-player-chat-rail-open", "1");
+    },
+    { recordingId: "11111111-1111-1111-1111-111111111111", streamId: "Twitch:twitch-live-1" },
+  );
+  await page.goto("/app#/watch");
+  await page.waitForSelector(".ms-leaf-rec");
+
+  await expect(page.locator("#player-chat-rail")).toBeVisible();
+  await expect(page.locator("#watch")).toHaveClass(/has-chat-rail/);
+  await expect(page.locator("#watch")).not.toHaveClass(/no-chat-target/);
 });

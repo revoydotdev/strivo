@@ -470,7 +470,7 @@ function paintRecordings(dirtyIds = null) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const id = btn.dataset.jobId;
-      if (id) window.location.hash = `#/watch?recording=${encodeURIComponent(id)}&fresh=1`;
+      if (id) openRecordingPlayer(id);
     });
   });
   body.querySelectorAll("[data-action=rec-info]").forEach((btn) => {
@@ -582,7 +582,7 @@ function paintRecordings(dirtyIds = null) {
         const playable = tr.querySelector('button[data-action="play-rec"]') ||
                          tr.querySelector('.rec-action-play');
         if (playable) playable.click();
-        else if (id) window.location.hash = `#/watch?recording=${encodeURIComponent(id)}&fresh=1`;
+        else if (id) openRecordingPlayer(id);
       } else if (e.key === "i" || e.key === "I") {
         e.preventDefault();
         const info = tr.querySelector('[data-action="info"], .rec-action-info');

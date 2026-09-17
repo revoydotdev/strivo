@@ -252,6 +252,36 @@ function reconcilePlayerChatRail(streams) {
   const tabs = rail.querySelector(".player-chat-rail-tabs");
   const roomLabel = rail.querySelector(".player-chat-rail-room");
   if (!body || !tabs) return;
+  const watch = document.getElementById("watch");
+
+  const chatable = collectChatableStreams(streams);
+  if (chatable.length === 0) {
+    // No live, chat-capable tile anywhere in the layout (a recordings-only
+    // wall, or an empty one) — hide the whole rail rather than rendering
+    // an empty affordance next to a stage that could use the width. The
+    // persisted open/closed preference (playerState.chatRailOpen) is left
+    // untouched, so a live Twitch tile added later restores exactly what
+    // the viewer had before.
+    rail.hidden = true;
+    watch?.classList.remove("has-chat-rail");
+    watch?.classList.add("no-chat-target");
+    if (playerState.chatRailMount) {
+      try { playerState.chatRailMount.teardown(); } catch (_) {}
+      playerState.chatRailMount = null;
+    }
+    if (playerState.chatRailCompose) {
+      try { playerState.chatRailCompose.teardown(); } catch (_) {}
+      playerState.chatRailCompose = null;
+    }
+    playerState.chatRailRoom = null;
+    tabs.innerHTML = "";
+    body.innerHTML = "";
+    if (roomLabel) roomLabel.textContent = "";
+    return;
+  }
+  rail.hidden = false;
+  watch?.classList.remove("no-chat-target");
+  watch?.classList.toggle("has-chat-rail", playerState.chatRailOpen);
 
   if (!playerState.chatRailOpen) {
     if (playerState.chatRailMount) {
@@ -269,7 +299,6 @@ function reconcilePlayerChatRail(streams) {
     return;
   }
 
-  const chatable = collectChatableStreams(streams);
   // PFP/letter-avatar strip. Click to override follow-focus and switch
   // the rail to that channel's chat.
   tabs.innerHTML = chatable.map(({ stream: s }) => {

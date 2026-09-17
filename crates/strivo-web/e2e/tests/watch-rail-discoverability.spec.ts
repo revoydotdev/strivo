@@ -19,6 +19,18 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("first visit opens the left rail by default (neither panel a dead end)", async ({ page }) => {
+  // The chat rail only renders at all when a live, chat-capable (Twitch)
+  // tile is on the wall — seed one so this test can still exercise its
+  // collapsed-toggle affordance rather than a genuinely empty wall, which
+  // now hides the rail entirely (see player-bar.spec.ts's chat-rail
+  // visibility coverage).
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "strivo-player-layout",
+      JSON.stringify({ kind: "slot", streamId: "Twitch:twitch-live-1", recordingId: null }),
+    );
+    localStorage.setItem("strivo-player-preset", "single");
+  });
   await page.goto("/app#/watch");
   await expect(page.locator("#watch")).toBeVisible();
   // First-ever visit: left rail defaults open.
@@ -69,9 +81,16 @@ test("left-rail grab tab appears when collapsed, is large, and toggles the rail"
 test("chat-rail collapsed toggle stretches full-height and toggles the rail", async ({ page }) => {
   await page.addInitScript(() => {
     // Left rail already opened (its own concern is covered above) so
-    // this test isolates the chat rail's collapsed affordance.
+    // this test isolates the chat rail's collapsed affordance. A live,
+    // chat-capable tile must be on the wall — the rail hides entirely
+    // otherwise (see player-bar.spec.ts's chat-rail visibility coverage).
     localStorage.setItem("strivo-player-rail-open", "1");
     localStorage.setItem("strivo-player-chat-rail-open", "0");
+    localStorage.setItem(
+      "strivo-player-layout",
+      JSON.stringify({ kind: "slot", streamId: "Twitch:twitch-live-1", recordingId: null }),
+    );
+    localStorage.setItem("strivo-player-preset", "single");
   });
   await page.goto("/app#/watch");
   await expect(page.locator("#watch")).toBeVisible();

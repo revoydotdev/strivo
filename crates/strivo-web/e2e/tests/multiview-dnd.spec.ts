@@ -406,17 +406,25 @@ test("packing prefers side-by-side for 2 tiles on a wide-short stage, 2x2 stays 
 
 test("packing actually reshapes the rendered tree for a short stage", async ({ page }) => {
   await installFakePlayers(page);
-  // Tall-ish relative to width — split-screen's 2x1 wastes over 30% of
-  // this box, so it should repack to a vertical 1x2 stack instead.
-  await page.setViewportSize({ width: 1440, height: 900 });
+  // Narrow and tall — split-screen's 2x1 wastes over 30% of this box, so
+  // it should repack to a vertical 1x2 stack instead. Neither slot is
+  // populated here, so the chat rail stays hidden entirely
+  // (reconcilePlayerChatRail, 018d-pvr.js) and the stage gets the full
+  // viewport width back — this spec's previous 1440x900/1440x680 pair
+  // relied on a 32px collapsed-rail gutter that no longer reserves space
+  // once there's no live, chat-capable tile to show a rail for, and sat
+  // close enough to the repack threshold that the extra width silently
+  // flipped both outcomes. These dimensions keep a wide margin on both
+  // sides of the threshold instead of hugging it.
+  await page.setViewportSize({ width: 700, height: 1300 });
   await page.goto("/app#/watch");
   await waitForFakePlayers(page);
   await useSplitScreen(page);
   const dir = await page.evaluate(() => (window as any).__strivoTestHooks.playerState.layout.dir);
   expect(dir).toBe("v");
 
-  // And back to side-by-side once the box is short enough that 2x1 wins.
-  await page.setViewportSize({ width: 1440, height: 680 });
+  // And back to side-by-side on a wide, short stage where 2x1 wins.
+  await page.setViewportSize({ width: 1440, height: 500 });
   await page.locator(".ms-preset-summary").click();
   await page.locator('.ms-preset-opt[data-preset="split-screen"]').click();
   const dir2 = await page.evaluate(() => (window as any).__strivoTestHooks.playerState.layout.dir);

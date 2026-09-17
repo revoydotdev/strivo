@@ -305,6 +305,7 @@ const ROUTES = [
   "recordings",
   "schedule",
   "watch",
+  "play",
   "studio",
   "analytics",
   "publish",
@@ -503,6 +504,9 @@ function teardownAcrossRoutes() {
   // not close them.
   if (typeof destroyAllControllers === "function") destroyAllControllers();
   if (typeof destroyChannelDetailPreview === "function") destroyChannelDetailPreview();
+  // #/play swaps in a scratch single-slot layout; hand the wall its own back
+  // before any route (including #/watch) renders.
+  if (typeof restoreWallLayoutAfterPlay === "function") restoreWallLayoutAfterPlay();
   // Modals: kbd-help + body class + every app-modal still in the DOM.
   document.getElementById("kbd-help")?.classList.remove("open");
   // B3: route change always zeroes the modal-open ref count + the

@@ -20,6 +20,12 @@
 .watch-root.has-chat-rail {
   grid-template-columns: 1fr 340px;
 }
+/* No live, chat-capable tile anywhere in the layout (reconcilePlayerChatRail,
+   018d-pvr.js) — the rail is `hidden` entirely rather than merely collapsed,
+   so the stage gets the column back instead of a dead 32px gutter. */
+.watch-root.no-chat-target {
+  grid-template-columns: 1fr;
+}
 /* Theater layout — exactly one tile in the layout tree. The stage locks
    to a 16:9 letterbox and centers, rather than stretching one tile to
    fill whatever oddly-shaped remainder the toolbar + rail leave behind. */
@@ -69,6 +75,13 @@
   background: rgba(0,0,0,0.18);
   overflow: hidden;
   min-height: 0;
+}
+/* The class selector's `display: flex` above outranks the UA stylesheet's
+   `[hidden] { display: none }` (same specificity, author rule wins), so
+   setting the `hidden` attribute (reconcilePlayerChatRail, 018d-pvr.js)
+   would otherwise do nothing — this rule reclaims it. */
+.player-chat-rail[hidden] {
+  display: none;
 }
 .player-chat-rail[data-open="false"] .player-chat-rail-title,
 .player-chat-rail[data-open="false"] .player-chat-rail-room,

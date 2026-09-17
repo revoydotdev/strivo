@@ -312,5 +312,5 @@ async function openRecordingInfo(jobId, opts = {}) {
     b.addEventListener("click", closeRecordingModals));
   overlay.querySelector("[data-action=rec-info-play]")?.addEventListener("click", () => {
     closeRecordingModals();
-    if (jobId) window.location.hash = `#/watch?recording=${encodeURIComponent(jobId)}&fresh=1`;
+    if (jobId) openRecordingPlayer(jobId);
   });

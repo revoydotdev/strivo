@@ -378,7 +378,7 @@ function wireDashboard() {
     const open = () => {
       const id = pill.dataset.jobId;
       if (!id) return;
-      window.location.hash = `#/watch?recording=${encodeURIComponent(id)}&fresh=1`;
+      openRecordingPlayer(id);
     };
     pill.addEventListener("click", (e) => {
       if (e.target.closest("button, a, input")) return;

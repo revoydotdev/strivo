@@ -17,10 +17,12 @@
 
 async function openRecordingPlayer(jobId, _opts = {}) {
   // The inline modal player has been retired — every recording-open
-  // path now navigates to the Player tab so there's a single source of
-  // truth for playback. The seek parameter is preserved as a URL param
-  // so in-context tools (Crunchr transcript click, cuepoints tick,
-  // EDL editor jumps) still land at the right timecode.
+  // path now navigates to the dedicated recording player route
+  // (#/play, 019b-pvr.js) rather than the live multiview wall (#/watch),
+  // so a chat rail/composer/preset toolbar never show up for something
+  // that isn't live. The seek parameter is preserved as a URL param so
+  // in-context tools (Crunchr transcript click, cuepoints tick, EDL
+  // editor jumps) still land at the right timecode.
   if (!jobId) return;
   // Defensive: dismiss any stray keymap/modal state before the route
   // change so the new Player surface isn't covered by leftover chrome.
@@ -28,7 +30,7 @@ async function openRecordingPlayer(jobId, _opts = {}) {
   document.getElementById("kbd-help")?.classList.remove("open");
   document.body.classList.remove("modal-open");
   const seek = _opts && _opts.seekTo ? `&t=${encodeURIComponent(_opts.seekTo)}` : "";
-  window.location.hash = `#/watch?recording=${encodeURIComponent(jobId)}&fresh=1${seek}`;
+  window.location.hash = `#/play?recording=${encodeURIComponent(jobId)}${seek}`;
 }
 
 // Legacy modal-player implementation removed. The shim above redirects

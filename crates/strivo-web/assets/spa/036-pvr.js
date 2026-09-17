@@ -346,7 +346,7 @@ function paintHistory() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const id = btn.dataset.jobId;
-      if (id) window.location.hash = `#/watch?recording=${encodeURIComponent(id)}&fresh=1`;
+      if (id) openRecordingPlayer(id);
     });
   });
   host.querySelectorAll("[data-action=rec-info]").forEach((btn) => {

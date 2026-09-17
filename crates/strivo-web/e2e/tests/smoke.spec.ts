@@ -347,11 +347,11 @@ test("recordings: ⓘ Info opens modal with stats + plugin actions; Esc closes",
   await expect(modal).toHaveCount(0);
 });
 
-test("recordings: ▶ Play opens the in-app watch player", async ({ page }) => {
+test("recordings: ▶ Play opens the dedicated recording player", async ({ page }) => {
   await page.goto("/app#/recordings");
   const row = page.locator("tr[data-rec-row]", { hasText: "Zebra stream" });
   await row.locator("[data-action=rec-play]").click();
-  await expect(page).toHaveURL(/#\/watch/);
+  await expect(page).toHaveURL(/#\/play\?recording=/);
   const tile = page.locator(".ms-leaf-rec").first();
   await expect(tile).toBeVisible();
   await expect(tile.locator("video.ms-video")).toBeVisible();

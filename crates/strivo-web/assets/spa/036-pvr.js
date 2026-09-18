@@ -1202,6 +1202,7 @@ events.on((event) => {
       if (p.download_pct != null) j.download_pct = p.download_pct;
       if (p.download_eta_secs != null) j.download_eta_secs = p.download_eta_secs;
       if (p.download_rate_bps != null) j.download_rate_bps = p.download_rate_bps;
+      if (p.download_phase != null) j.download_phase = p.download_phase;
       // Surgical DOM update for the matching VOD pill (avoids repainting
       // the whole channel detail every 2s).
       updateVodProgressDom(j);
@@ -1217,6 +1218,7 @@ events.on((event) => {
         if (p.download_pct != null) h.download_pct = p.download_pct;
         if (p.download_eta_secs != null) h.download_eta_secs = p.download_eta_secs;
         if (p.download_rate_bps != null) h.download_rate_bps = p.download_rate_bps;
+        if (p.download_phase != null) h.download_phase = p.download_phase;
         if (currentRoute() === "recordings" && typeof patchHistPillProgress === "function") {
           patchHistPillProgress(h);
         }

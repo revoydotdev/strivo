@@ -385,6 +385,7 @@ function wireVodDownloadButtons() {
       e.stopPropagation();
       const url = btn.dataset.url;
       const channel_name = btn.dataset.channel;
+      const channel_id = btn.dataset.channelId || null;
       const platform = btn.dataset.platform;
       const post_title = btn.dataset.title || null;
       if (!url || vodDownloadState[url] === "downloading" || vodDownloadState[url] === "downloaded") {
@@ -412,7 +413,7 @@ function wireVodDownloadButtons() {
             post_title: post_title || "",
           });
         } else {
-          await API.vodDownload({ url, channel_name, platform, post_title });
+          await API.vodDownload({ url, channel_name, channel_id, platform, post_title });
         }
         Toast.success(`Downloading: ${post_title || url}`);
         // The RecordingStarted SSE that follows will land in recCache with
@@ -509,9 +510,10 @@ function vodDownloadButtonInner(url, state) {
     const pct = job && job.download_pct;
     const etaSecs = job && job.download_eta_secs;
     const rateBps = job && job.download_rate_bps;
+    const phase = job && job.download_phase;
     return {
-      html: vodProgressHtml(pct, etaSecs, rateBps),
-      title: vodProgressLabel(pct, etaSecs, rateBps),
+      html: vodProgressHtml(pct, etaSecs, rateBps, phase),
+      title: vodProgressLabel(pct, etaSecs, rateBps, phase),
     };
   }
   return { html: state === "downloaded" ? "Downloaded" : "Download", title: "" };
@@ -531,13 +533,17 @@ function setVodButtonState(btn, state) {
 // R MB/s". Shared by vodProgressHtml (renders it, truncated with ellipsis
 // via CSS) and vodDownloadButtonInner (puts the untruncated form in the
 // button's title attribute so a squeezed label stays readable on hover).
-function vodProgressLabel(pct, etaSecs, rateBps) {
+function vodProgressLabel(pct, etaSecs, rateBps, phase) {
   // Mirrors renderStatePill's convention (below, ~3149): an unknown
   // percent is omitted from the label rather than shown as a literal
   // "0%" — the bar fill can still default to empty, but the text must
   // not lie about progress it hasn't actually observed yet.
   const hasPct = pct != null && Number.isFinite(pct);
   const p = hasPct ? Math.max(0, Math.min(100, Math.round(pct))) : 0;
+  // Merging is a distinct, usually-brief phase after video+audio have both
+  // finished downloading (download_pct is already ~100 by then) — say so
+  // rather than showing a stalled-looking "100%" with no explanation.
+  if (phase === "merging") return "Merging…";
   const eta = etaSecs == null ? "" : fmtEta(etaSecs);
   const rate = rateBps == null ? "" : `${formatBytes(rateBps)}/s`;
   const meta = [eta && `${eta} left`, rate].filter(Boolean).join(" · ");
@@ -548,12 +554,15 @@ function vodProgressLabel(pct, etaSecs, rateBps) {
 // label, stacked (see 000-pvr.css .vod-dl-downloading) so a long label
 // can never squeeze the bar to zero width. Bar gradient runs amber → green
 // so the rightmost fill colour shifts greener as the pull completes.
-function vodProgressHtml(pct, etaSecs, rateBps) {
+function vodProgressHtml(pct, etaSecs, rateBps, phase) {
   const hasPct = pct != null && Number.isFinite(pct);
+  // Merging: keep the bar wherever download progress left it (usually near
+  // full) — merging isn't a new percentage, just a different thing the bar
+  // is now waiting on.
   const p = hasPct ? Math.max(0, Math.min(100, Math.round(pct))) : 0;
-  const label = vodProgressLabel(pct, etaSecs, rateBps);
+  const label = vodProgressLabel(pct, etaSecs, rateBps, phase);
   return `
-    <span class="vod-dl-bar"><span class="vod-dl-fill" style="width:${p}%"></span></span>
+    <span class="vod-dl-bar${phase === "merging" ? " is-merging" : ""}"><span class="vod-dl-fill" style="width:${p}%"></span></span>
     <span class="vod-dl-label">${htmlEscape(label)}</span>
   `;
 }
@@ -582,6 +591,7 @@ function updateVodProgressDom(job) {
       job.download_pct,
       job.download_eta_secs,
       job.download_rate_bps,
+      job.download_phase,
     );
   });
 }
@@ -654,6 +664,7 @@ function vodSectionHtml(title, vods, ctx) {
         ? `<button class="vod-dl vod-dl-${state}" data-action="vod-download"
               data-url="${htmlEscape(v.url)}"
               data-channel="${htmlEscape(downloadChannel)}"
+              data-channel-id="${htmlEscape(v.channel_id || "")}"
               data-platform="${htmlEscape(downloadPlatform)}"
               data-title="${htmlEscape(v.title || "")}"
               ${dlTitle ? `title="${htmlEscape(dlTitle)}"` : ""}

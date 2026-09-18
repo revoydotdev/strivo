@@ -83,6 +83,7 @@ function updateRecInfoModalProgress(p) {
   if (p.download_pct != null) live.download_pct = p.download_pct;
   if (p.download_eta_secs != null) live.download_eta_secs = p.download_eta_secs;
   if (p.download_rate_bps != null) live.download_rate_bps = p.download_rate_bps;
+  if (p.download_phase != null) live.download_phase = p.download_phase;
   const pillHost = overlay.querySelector(".rec-info-head");
   const existing = pillHost && pillHost.querySelector(".state-pill");
   if (existing) existing.outerHTML = renderStatePill(recordingDisplayState(live));
@@ -220,7 +221,7 @@ async function openRecordingInfo(jobId, opts = {}) {
   // renderRecordingsTimeline (012-pvr.js).
   const liveJob = recCache.find((r) => r.id === jobId);
   if (liveJob) {
-    for (const k of ["download_pct", "download_eta_secs", "download_rate_bps", "bytes_written", "duration_secs"]) {
+    for (const k of ["download_pct", "download_eta_secs", "download_rate_bps", "download_phase", "bytes_written", "duration_secs"]) {
       if (liveJob[k] != null) rec[k] = liveJob[k];
     }
   }

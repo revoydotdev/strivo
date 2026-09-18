@@ -52,7 +52,7 @@ async function renderRecordingsTimeline(context = captureRouteContext()) {
     // showing whatever /history happened to return, however stale.
     if (live) {
       const merged = { ...row };
-      for (const k of ["download_pct", "download_eta_secs", "download_rate_bps", "bytes_written", "duration_secs"]) {
+      for (const k of ["download_pct", "download_eta_secs", "download_rate_bps", "download_phase", "bytes_written", "duration_secs"]) {
         if (live[k] != null) merged[k] = live[k];
       }
       return merged;
@@ -959,6 +959,9 @@ function recordingDisplayState(j) {
     return { label: "File Error", className: "file-error", pct: null };
   }
   if (j && j.source_url && cls === "recording") {
+    if (j.download_phase === "merging") {
+      return { label: "Merging", className: "downloading merging", pct: pctForDownload(j) };
+    }
     return { label: "Downloading", className: "downloading", pct: pctForDownload(j) };
   }
   return { label: lbl, className: cls, pct: null };
@@ -1024,9 +1027,13 @@ function renderStatePill(disp) {
   }
   const pct = disp.pct;
   const rounded = Math.round(pct);
+  // Merging keeps the bar at wherever download progress left it, but the
+  // label says what the job is actually waiting on rather than a percent
+  // that has stopped moving.
+  const label = disp.label === "Merging" ? "Merging…" : `${rounded}%`;
   return `<span class="state-pill micro ${disp.className} has-fill" style="--state-fill:${pct.toFixed(1)}%">
     <span class="state-pill-fill" aria-hidden="true"></span>
-    <span class="state-pill-label">${rounded}%</span>
+    <span class="state-pill-label">${htmlEscape(label)}</span>
   </span>`;
 }
 

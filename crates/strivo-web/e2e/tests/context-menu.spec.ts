@@ -15,6 +15,14 @@ import { test, expect } from "@playwright/test";
 
 const LIVE_ROW = '.ch-row[data-channel-id="UClive0000000000000000aa"]';
 const LIVE_CHANNEL_KEY = "YouTube:UClive0000000000000000aa";
+// "Offline Channel" (twitch:offlinechan) carries auto_record: true in the
+// mock fixture — a monitored channel, used below to prove the Uploads
+// toggle becomes an implied/disabled state (C4) rather than a live control.
+// It renders in both the MONITORED and OFFLINE rail sections (it's both
+// monitored and not live), so scope to one to avoid a strict-mode
+// multi-match.
+const MONITORED_ROW = '#rail-sec-monitored .ch-row[data-channel-id="twitch:offlinechan"]';
+const MONITORED_CHANNEL_KEY = "Twitch:twitch:offlinechan";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("strivo-tour-done", "1"));
@@ -106,6 +114,27 @@ test("a failed Uploads PUT rolls the checkbox back and shows an error toast", as
 
   await expect(uploads).toHaveAttribute("aria-checked", "false");
   await expect(page.locator(".toast.error").last()).toBeVisible();
+});
+
+test("Uploads is implied (checked, disabled) for a monitored channel", async ({ page }) => {
+  await page.goto("/app#/library");
+  const row = page.locator(MONITORED_ROW);
+  await expect(row).toBeVisible();
+  await row.click({ button: "right" });
+
+  const menu = page.locator(".ch-ctx-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveAttribute("data-channel-key", MONITORED_CHANNEL_KEY);
+
+  // No live togglable Uploads control — auto_record: true means uploads
+  // ride along with the livestream capture (C4).
+  await expect(menu.locator('[data-ctx-action="auto-download-uploads"]')).toHaveCount(0);
+  const implied = menu.locator(".ch-ctx-menu-item.is-implied");
+  await expect(implied).toBeVisible();
+  await expect(implied).toContainText("Uploads");
+  await expect(implied).toContainText("Included with Livestreams");
+  await expect(implied).toHaveAttribute("aria-checked", "true");
+  await expect(implied).toBeDisabled();
 });
 
 test("context menu dismisses on outside click and Escape", async ({ page }) => {

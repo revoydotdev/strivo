@@ -61,6 +61,19 @@
   width: 1em;
   text-align: center;
 }
+/* C4: "Uploads" implied by "Livestreams" — checked, disabled, with the
+   reason inline rather than a control the click handler would ignore. */
+.ch-ctx-menu-item.is-implied {
+  cursor: default;
+  opacity: 0.8;
+}
+.ch-ctx-menu-item.is-implied:hover { background: transparent; }
+.ch-ctx-hint {
+  margin-left: auto;
+  color: var(--fg-muted, var(--fg));
+  opacity: 0.65;
+  white-space: nowrap;
+}
 
 /* Remediation B — the bulk/download contract is shared by channel and
    playlist surfaces. Keep the scope choice visually separate from actions. */

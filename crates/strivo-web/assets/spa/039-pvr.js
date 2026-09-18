@@ -58,6 +58,20 @@ function ctxMenuItemHtml(action, checked, label) {
   </button>`;
 }
 
+// C4: a monitored channel (auto_record on, Twitch/YouTube) now auto-downloads
+// its uploads too — the explicit "Uploads" toggle is redundant, not just
+// inert, for as long as Livestreams stays on. Render it checked-and-disabled
+// with a one-line reason rather than a togglable control that would silently
+// no-op (or worse, read as "off" once unchecked while uploads keep landing
+// anyway).
+function ctxMenuImpliedItemHtml(label, hint) {
+  return `<button class="ch-ctx-menu-item is-implied" type="button" role="menuitemcheckbox"
+             aria-checked="true" aria-disabled="true" disabled title="${htmlEscape(hint)}">
+    <span class="ch-ctx-check" aria-hidden="true">✓</span>${htmlEscape(label)}
+    <span class="ch-ctx-hint micro">${htmlEscape(hint)}</span>
+  </button>`;
+}
+
 function positionCtxMenu(menu, clientX, clientY) {
   // Append first so offsetWidth/Height are real, then clamp into the
   // viewport — a naive left/top=clientX/clientY menu clips at screen edges.
@@ -127,8 +141,13 @@ async function openChannelCtxMenu(ctx, clientX, clientY) {
       const match = (p.creators || []).find((c) => c.id === ctx.channelId);
       autoDownloadUploads = !!(match && match.auto_download_uploads);
     } else {
-      const channels = await API.channels();
-      const match = (channels || []).find((c) => c.id === ctx.channelId && c.platform === ctx.platform);
+      // API.channels() resolves { channels: [...] } (see loadChannelList,
+      // 012-pvr.js) — this used to .find() directly on that wrapper
+      // object, which has no .find method, so the lookup always threw and
+      // silently fell through to the catch below, leaving autoRecord (and
+      // therefore the Uploads-implied state, C4) permanently false.
+      const resp = await API.channels();
+      const match = (resp.channels || []).find((c) => c.id === ctx.channelId && c.platform === ctx.platform);
       autoRecord = !!(match && match.auto_record);
       autoDownloadUploads = !!(match && match.auto_download_uploads);
     }
@@ -164,7 +183,9 @@ async function openChannelCtxMenu(ctx, clientX, clientY) {
     `<div class="ch-ctx-menu-section">
        <div class="ch-ctx-menu-label micro">Automatic downloads</div>
        ${isPatreon ? "" : ctxMenuItemHtml("auto-record", autoRecord, "Livestreams")}
-       ${ctxMenuItemHtml("auto-download-uploads", autoDownloadUploads, "Uploads")}
+       ${!isPatreon && autoRecord
+         ? ctxMenuImpliedItemHtml("Uploads", "Included with Livestreams")
+         : ctxMenuItemHtml("auto-download-uploads", autoDownloadUploads, "Uploads")}
      </div>`,
     `<div class="ch-ctx-menu-section">
        <button class="ch-ctx-menu-item" type="button" data-ctx-action="download-latest-vod">
@@ -224,6 +245,10 @@ async function openChannelCtxMenu(ctx, clientX, clientY) {
         (next) => API.toggleAutoRecord(ctx.channelKey, next),
         "livestream auto-download",
       );
+      // Uploads flips between its own toggle and the disabled "implied by
+      // Livestreams" state (C4) — reopen in place so it reflects the new
+      // autoRecord value immediately instead of only on the next open.
+      openChannelCtxMenu(ctx, clientX, clientY);
     } else if (action === "auto-download-uploads") {
       await ctxToggle(
         btn,
@@ -255,7 +280,7 @@ async function downloadLatestVod(ctx) {
   if (cached) {
     if (!(await confirmDialog(`Download latest VOD from ${ctx.title || ctx.channelId}?`, { ok: "Download" }))) return;
     try {
-      await API.vodDownload({ url: cached.url, channel_name: ctx.title, platform: ctx.platform, post_title: cached.title || null });
+      await API.vodDownload({ url: cached.url, channel_name: ctx.title, channel_id: ctx.channelId || null, platform: ctx.platform, post_title: cached.title || null });
       Toast.success("Latest VOD download started");
     } catch (err) {
       Toast.error(`Download failed: ${err.message || err}`);
@@ -264,6 +289,8 @@ async function downloadLatestVod(ctx) {
     return;
   }
   pendingLatestVodCtxMenu = { channelId: ctx.channelId, name: ctx.title, platform: ctx.platform };
+  // channelId travels through the pending record so the deferred download
+  // below (once the ChannelVods SSE reply lands) still carries it (C1).
   try {
     await API.requestChannelVods(ctx.channelId, ctx.platform);
     Toast.info("Loading the latest VOD…");
@@ -279,7 +306,7 @@ events.on((event) => {
     const request = pendingLatestVodCtxMenu;
     pendingLatestVodCtxMenu = null;
     if (latest) {
-      API.vodDownload({ url: latest.url, channel_name: request.name, platform: request.platform, post_title: latest.title || null })
+      API.vodDownload({ url: latest.url, channel_name: request.name, channel_id: request.channelId || null, platform: request.platform, post_title: latest.title || null })
         .then(() => Toast.success(`Downloading latest VOD — ${request.name}`))
         .catch((err) => Toast.error(`Download failed: ${err.message || err}`));
     } else {

@@ -358,6 +358,8 @@ function paintChannelVods(channelId, platform) {
   const ctx = {
     channelName: (channel && (channel.display_name || channel.name)) || "",
     platform: platform || (channel && channel.platform) || "",
+    channelId,
+    channel,
   };
   if (!vods) {
     if (streamsEl) streamsEl.innerHTML = vodSectionHtml("Past Broadcasts", null, ctx);
@@ -427,6 +429,28 @@ function wireVodDownloadButtons() {
         delete vodDownloadState[url];
         setVodButtonState(btn, "idle");
         Toast.error(`Download failed: ${err.message}`);
+      }
+    });
+  });
+  document.querySelectorAll('[data-action="toggle-auto-download-uploads"]').forEach((btn) => {
+    if (btn.dataset.wired === "1") return;
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", async () => {
+      const next = btn.dataset.enabled === "1";
+      const prevLabel = btn.textContent;
+      const prevPressed = btn.getAttribute("aria-pressed");
+      btn.disabled = true;
+      try {
+        await API.setAutoDownloadUploads(btn.dataset.channelKey, next);
+        btn.dataset.enabled = next ? "0" : "1";
+        btn.setAttribute("aria-pressed", next ? "true" : "false");
+        btn.textContent = next ? "✓ Auto-downloading uploads" : "Auto-download uploads";
+      } catch (err) {
+        btn.setAttribute("aria-pressed", prevPressed);
+        btn.textContent = prevLabel;
+        Toast.error(`Couldn't update upload auto-download: ${err.message}`);
+      } finally {
+        btn.disabled = false;
       }
     });
   });
@@ -617,11 +641,12 @@ function vodSectionHtml(title, vods, ctx) {
   // smaller original style.
   const isPast = title === "Past Broadcasts";
   const titleCls = isPast ? "cd-section-title past-broadcasts" : "cd-section-title";
+  const heading = `<h2 class="${titleCls}">${title}${title === "Recent uploads" ? uploadsHeaderStatusHtml(ctx) : ""}</h2>`;
   if (vods === null) {
-    return `<h2 class="${titleCls}">${title}</h2><div class="empty sm">Loading…</div>`;
+    return `${heading}<div class="empty sm">Loading…</div>`;
   }
   if (vods.length === 0) {
-    return `<h2 class="${titleCls}">${title}</h2><div class="empty sm">None</div>`;
+    return `${heading}<div class="empty sm">None</div>`;
   }
   const channelName = (ctx && ctx.channelName) || "";
   const platform = (ctx && ctx.platform) || "";
@@ -690,8 +715,24 @@ function vodSectionHtml(title, vods, ctx) {
     </div>`;
     })
     .join("");
-  return `<h2 class="${titleCls}">${title}</h2>
+  return `${heading}
     <div class="media-list">${rows}</div>`;
+}
+
+// C4/item 5: a compact status readout beside "Recent uploads" — implied
+// (auto_record on, text-only, matches the context menu's disabled state)
+// or an explicit toggle when the channel isn't monitored. Patreon never
+// reaches here (its uploads render through renderPatreonPosts).
+function uploadsHeaderStatusHtml(ctx) {
+  const channel = ctx && ctx.channel;
+  if (!channel) return "";
+  if (channel.auto_record) {
+    return `<span class="cd-uploads-status implied" title="Included with Livestreams monitoring">Auto-downloading · included with Livestreams</span>`;
+  }
+  const on = !!channel.auto_download_uploads;
+  return `<button type="button" class="cd-uploads-status toggle" data-action="toggle-auto-download-uploads"
+            data-channel-key="${htmlEscape(`${ctx.platform}:${ctx.channelId}`)}" data-enabled="${on ? "0" : "1"}"
+            aria-pressed="${on ? "true" : "false"}">${on ? "✓ Auto-downloading uploads" : "Auto-download uploads"}</button>`;
 }
 
 // Patreon channel detail: render cached posts with a pull action.

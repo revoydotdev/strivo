@@ -1753,7 +1753,10 @@ async fn handle_client(
                         tx.send(crate::recording::bulk::BulkCommand::ListPlaylists { channel_id });
                 }
             }
-            ClientMessage::ListPlaylistItems { channel_id, playlist_id } => {
+            ClientMessage::ListPlaylistItems {
+                channel_id,
+                playlist_id,
+            } => {
                 if let Some(ref tx) = bulk_tx {
                     let _ = tx.send(crate::recording::bulk::BulkCommand::ListPlaylistItems {
                         channel_id,
@@ -1798,9 +1801,10 @@ async fn handle_client(
                         playlist_id,
                         vod_ids,
                     },
-                    crate::ipc::BulkAction::Stop => {
-                        crate::recording::bulk::BulkCommand::Stop { channel_id, operation_id }
-                    }
+                    crate::ipc::BulkAction::Stop => crate::recording::bulk::BulkCommand::Stop {
+                        channel_id,
+                        operation_id,
+                    },
                 };
                 if let Some(ref tx) = bulk_tx {
                     let _ = tx.send(cmd);

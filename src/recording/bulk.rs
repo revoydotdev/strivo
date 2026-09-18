@@ -40,9 +40,7 @@ pub enum BulkCommand {
     },
     /// Fetch a YouTube channel's playlists and emit them as
     /// DaemonEvent::PlaylistList for the scope picker (task #73).
-    ListPlaylists {
-        channel_id: String,
-    },
+    ListPlaylists { channel_id: String },
     /// Fetch playlist items for display.  This command is deliberately
     /// read-only and never invokes the catalog downloader.
     ListPlaylistItems {
@@ -124,7 +122,10 @@ pub fn spawn(
                         });
                     });
                 }
-                BulkCommand::Stop { channel_id, operation_id } => {
+                BulkCommand::Stop {
+                    channel_id,
+                    operation_id,
+                } => {
                     if let Some((running_id, cancel)) = active.get(&channel_id) {
                         if operation_id.is_none() || operation_id == Some(*running_id) {
                             cancel.cancel();
@@ -151,7 +152,10 @@ pub fn spawn(
                         });
                     });
                 }
-                BulkCommand::ListPlaylistItems { channel_id, playlist_id } => {
+                BulkCommand::ListPlaylistItems {
+                    channel_id,
+                    playlist_id,
+                } => {
                     let cfg = config.clone();
                     let etx = event_tx.clone();
                     tokio::spawn(async move {
@@ -355,7 +359,14 @@ async fn run_channel_pull(
                     });
                 }
                 CatalogProgress::Progress { pct } => {
-                    let _ = etx2.send(DaemonEvent::BulkProgress { operation_id, channel_id: cid.clone(), done, total, percent: Some(pct), active: true });
+                    let _ = etx2.send(DaemonEvent::BulkProgress {
+                        operation_id,
+                        channel_id: cid.clone(),
+                        done,
+                        total,
+                        percent: Some(pct),
+                        active: true,
+                    });
                 }
                 _ => {}
             }
@@ -454,7 +465,8 @@ async fn fetch_playlist_items(
         cfg.cookies_path.clone(),
     );
     yt.load_stored_tokens().await.context("youtube auth")?;
-    yt.fetch_playlist_items(playlist_id, channel_id, None, None).await
+    yt.fetch_playlist_items(playlist_id, channel_id, None, None)
+        .await
 }
 
 /// Resolve a channel's back-catalog VODs. Mirrors the `pull` CLI path.

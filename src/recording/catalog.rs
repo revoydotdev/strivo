@@ -56,7 +56,9 @@ pub type ProgressTx = mpsc::UnboundedSender<CatalogProgress>;
 
 #[derive(Debug, Clone)]
 pub enum CatalogProgress {
-    Progress { pct: f32 },
+    Progress {
+        pct: f32,
+    },
     Discovered(usize),
     Skipped {
         vod_id: String,
@@ -236,7 +238,12 @@ fn video_filename(_platform: PlatformKind, format: &ResolvedFormat) -> String {
     format!("video.{ext}")
 }
 
-async fn download_one(vod: &VodEntry, target: &Path, opts: &CatalogPullOptions, progress: Option<&ProgressTx>) -> Result<u64> {
+async fn download_one(
+    vod: &VodEntry,
+    target: &Path,
+    opts: &CatalogPullOptions,
+    progress: Option<&ProgressTx>,
+) -> Result<u64> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -253,7 +260,11 @@ async fn download_one(vod: &VodEntry, target: &Path, opts: &CatalogPullOptions, 
     // Poll until exit. yt-dlp downloads are typically minutes, so 1s polling is fine.
     loop {
         let p = proc.progress();
-        if let Some(pct) = p.pct { let _ = progress.as_ref().map(|tx| tx.send(CatalogProgress::Progress { pct })); }
+        if let Some(pct) = p.pct {
+            let _ = progress
+                .as_ref()
+                .map(|tx| tx.send(CatalogProgress::Progress { pct }));
+        }
         match proc.try_wait()? {
             Some(status) => {
                 if !status.success() {

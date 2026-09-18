@@ -69,6 +69,7 @@ function makeRecordingController(spec) {
   let watchdog = null;
   let stallWatchdog = null;
   let stallBaseline = null;
+  let stallProgressSeen = false;
   let errorNote = null;
   let loadingRequested = false;
   const outputPath = spec.outputPath || "";
@@ -101,14 +102,19 @@ function makeRecordingController(spec) {
   // report loadedmetadata and then simply never decode a frame (black
   // screen, dead audio, no error event at all). Once metadata is in and
   // playback is wanted, sample currentTime every 8s; if it hasn't moved and
-  // the element isn't paused/ended/seeking, that's a stall.
+  // the element isn't paused/ended/seeking, that's a stall — unless it is
+  // ordinary buffering: data still arriving (a `progress` event since the
+  // last sample) with nothing decodable ahead yet (readyState below
+  // HAVE_FUTURE_DATA) just re-arms instead of failing a slow-disk load.
   const armStallWatchdog = () => {
     cancelStallWatchdog();
     if (!loadingRequested || el.paused || el.ended || el.dataset.failed) return;
     stallBaseline = el.currentTime;
+    stallProgressSeen = false;
     stallWatchdog = setTimeout(() => {
       if (!loadingRequested || el.paused || el.ended || el.seeking || el.dataset.failed) return;
-      if (Math.abs(el.currentTime - stallBaseline) < 0.25) {
+      const buffering = stallProgressSeen && el.readyState < 3;
+      if (Math.abs(el.currentTime - stallBaseline) < 0.25 && !buffering) {
         fail("stall", "playback loaded but never started decoding frames");
       } else {
         armStallWatchdog();
@@ -164,6 +170,7 @@ function makeRecordingController(spec) {
   el.addEventListener("loadedmetadata", () => { if (playing) armStallWatchdog(); });
   el.addEventListener("playing", seen);
   el.addEventListener("playing", () => armStallWatchdog());
+  el.addEventListener("progress", () => { stallProgressSeen = true; });
   // Disarm on anything that legitimately stops advancing time, so a healthy
   // paused/seeking/ended video never trips the watchdog.
   el.addEventListener("pause", cancelStallWatchdog);

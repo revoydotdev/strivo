@@ -131,6 +131,40 @@ test("a healthy paused recording shows no stall overlay after 8+ seconds", async
   await expect(page.locator("#healthy-recording-test .ms-media-error")).toHaveCount(0);
 });
 
+// Slow-disk/network buffering is not a decode stall: time stands still, but
+// bytes keep arriving (`progress`) with nothing decodable ahead yet
+// (readyState < HAVE_FUTURE_DATA). The watchdog must keep waiting.
+test("a buffering recording (data still arriving) shows no stall overlay", async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    localStorage.setItem("strivo-tour-done", "1");
+    localStorage.setItem("strivo:e2e", "1");
+  });
+  await page.goto("/app#/library");
+  await page.evaluate(() => {
+    const hook = (window as any).__strivoTestHooks;
+    const host = document.createElement("div");
+    host.id = "buffering-recording-test";
+    document.body.appendChild(host);
+    const controller = hook.makeRecordingController({ playing: true, muted: true });
+    controller.mount(host);
+    const video = host.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => 0 });
+    Object.defineProperty(video, "paused", { configurable: true, get: () => false });
+    Object.defineProperty(video, "ended", { configurable: true, get: () => false });
+    Object.defineProperty(video, "seeking", { configurable: true, get: () => false });
+    Object.defineProperty(video, "readyState", { configurable: true, get: () => 2 });
+    video.dispatchEvent(new Event("loadedmetadata"));
+    video.dispatchEvent(new Event("playing"));
+    (window as any).__bufferingVideo = video;
+  });
+  for (let i = 0; i < 3; i++) {
+    await page.evaluate(() => (window as any).__bufferingVideo.dispatchEvent(new Event("progress")));
+    await page.clock.fastForward(8100);
+  }
+  await expect(page.locator("#buffering-recording-test .ms-media-error")).toHaveCount(0);
+});
+
 test("an in-progress recording shows the still-recording affordance, not a player", async ({ page }) => {
   await page.goto(`/app#/play?recording=${IN_PROGRESS_ID}`);
   await expect(page.locator(".ms-empty-pill")).toHaveText(/still recording/i);

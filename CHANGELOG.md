@@ -54,7 +54,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - **The recording player (`#/play`) opened muted at volume 0.** It inherited
   the multiview wall's "silent until raised" tile rule; it now starts audible
   at the last recording-player volume (a saved per-recording volume still
-  wins). Wall tiles still start silent.
+  wins). Wall tiles still start silent. When the browser refuses unmuted
+  autoplay (a fresh load straight onto `#/play`), the tile shows a "▶ Play"
+  button instead of a frozen first frame.
 - **A recording that loaded but never decoded a frame sat on a black screen
   with no feedback.** An 8-second stall watchdog now shows the "Can't play
   this recording" overlay — with the file's codecs and whether this browser

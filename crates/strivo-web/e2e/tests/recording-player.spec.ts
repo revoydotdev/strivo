@@ -131,6 +131,43 @@ test("a healthy paused recording shows no stall overlay after 8+ seconds", async
   await expect(page.locator("#healthy-recording-test .ms-media-error")).toHaveCount(0);
 });
 
+// Unmuted autoplay without a user gesture is refused by the browser, which
+// used to leave a frozen first frame with no way to tell it apart from a
+// broken file. A blocked play() must surface an explicit Play button, and
+// clicking it (the user gesture) starts playback and removes the prompt.
+test("blocked autoplay shows a Play prompt that starts playback", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("strivo-tour-done", "1");
+    localStorage.setItem("strivo:e2e", "1");
+  });
+  await page.goto("/app#/library");
+  await page.evaluate(() => {
+    const hook = (window as any).__strivoTestHooks;
+    const host = document.createElement("div");
+    host.id = "blocked-autoplay-test";
+    host.style.position = "relative";
+    document.body.appendChild(host);
+    const controller = hook.makeRecordingController({ playing: false, muted: false });
+    controller.mount(host);
+    const video = host.querySelector("video") as HTMLVideoElement;
+    let allowed = false;
+    (window as any).__playCalls = 0;
+    video.play = () => {
+      (window as any).__playCalls++;
+      return allowed
+        ? Promise.resolve()
+        : Promise.reject(new DOMException("play() needs a user gesture", "NotAllowedError"));
+    };
+    controller.play();
+    allowed = true; // the next attempt comes from the prompt's click
+  });
+  const prompt = page.locator("#blocked-autoplay-test .ms-play-prompt");
+  await expect(prompt).toBeVisible();
+  await prompt.click();
+  await expect(prompt).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__playCalls)).toBe(2);
+});
+
 // Slow-disk/network buffering is not a decode stall: time stands still, but
 // bytes keep arriving (`progress`) with nothing decodable ahead yet
 // (readyState < HAVE_FUTURE_DATA). The watchdog must keep waiting.

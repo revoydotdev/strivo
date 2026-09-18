@@ -121,8 +121,40 @@ function makeRecordingController(spec) {
       }
     }, 8000);
   };
+  // Browsers refuse unmuted autoplay without a user gesture (a fresh page
+  // load straight onto #/play), and both the `autoplay` attribute and a
+  // rejected play() fail silently — the tile then shows a frozen first frame
+  // indistinguishable from a broken file. When playback was wanted but the
+  // element is still paused, offer an explicit play button; the click is
+  // the gesture the browser was waiting for.
+  let playPrompt = null;
+  const clearPlayPrompt = () => {
+    playPrompt?.remove();
+    playPrompt = null;
+  };
+  const showPlayPrompt = () => {
+    if (playPrompt || !loadingRequested || !el.paused || el.ended || el.dataset.failed) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ms-play-prompt";
+    btn.setAttribute("aria-label", "Play recording");
+    btn.textContent = "▶ Play";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearPlayPrompt();
+      el.play().catch(() => showPlayPrompt());
+    });
+    el.parentElement?.appendChild(btn);
+    playPrompt = btn;
+  };
+  const tryPlay = () => {
+    el.play().catch((err) => {
+      if (err && err.name === "NotAllowedError") showPlayPrompt();
+    });
+  };
   const fail = (kind, why) => {
     if (el.dataset.failed === kind) return;
+    clearPlayPrompt();
     cancelWatchdog();
     cancelStallWatchdog();
     el.dataset.failed = kind;
@@ -144,7 +176,7 @@ function makeRecordingController(spec) {
       loadingRequested = true;
       el.load();
       startWatchdog();
-      el.play().catch(() => {});
+      tryPlay();
     });
     note.querySelector(".ms-media-error-copy-path")?.addEventListener("click", (e) => {
       const p = e.currentTarget.dataset.path || "";
@@ -177,6 +209,12 @@ function makeRecordingController(spec) {
   el.addEventListener("seeking", cancelStallWatchdog);
   el.addEventListener("seeked", () => { if (!el.paused) armStallWatchdog(); });
   el.addEventListener("ended", cancelStallWatchdog);
+  el.addEventListener("playing", clearPlayPrompt);
+  // Autoplay gets a moment to start on its own before we conclude the
+  // browser blocked it.
+  el.addEventListener("canplay", () => {
+    if (loadingRequested && el.paused) setTimeout(showPlayPrompt, 600);
+  });
   if (playing) { loadingRequested = true; startWatchdog(); }
 
   const subs = new Set();
@@ -219,6 +257,7 @@ function makeRecordingController(spec) {
       cancelStallWatchdog();
       loadingRequested = false;
       clearFailure();
+      clearPlayPrompt();
       try {
         el.pause();
       } catch (_) {
@@ -247,8 +286,8 @@ function makeRecordingController(spec) {
     isReady() {
       return true;
     },
-    play() { loadingRequested = true; startWatchdog(); el.play().catch(() => {}); },
-    pause() { loadingRequested = false; cancelWatchdog(); cancelStallWatchdog(); el.pause(); },
+    play() { loadingRequested = true; startWatchdog(); tryPlay(); },
+    pause() { loadingRequested = false; cancelWatchdog(); cancelStallWatchdog(); clearPlayPrompt(); el.pause(); },
     togglePlay() { el.paused ? controller.play() : controller.pause(); },
     seek(sec) { try { el.currentTime = Math.max(0, sec); } catch (_) { /* advisory */ } },
     currentTime() { return el.currentTime; },

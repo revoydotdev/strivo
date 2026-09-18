@@ -8,6 +8,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- **Auto-download new uploads, Twitch/YouTube/Patreon, both editions.** The
+  channel rail's right-click "Automatic downloads" section now lists
+  **Livestreams** and **Uploads** as two adjacent, independently toggleable
+  checkboxes — both functional in a plain PVR build, not just Creator. A
+  new `auto_download_uploads` config list (Twitch/YouTube) mirrors
+  `auto_record_channels`'s shape; Patreon reuses the existing
+  `auto_pull_creators` list rather than gaining a second one. The monitor
+  checks opted-in channels for new uploads on their own 15-minute cadence
+  (separate from the ~90s live-status poll, to avoid multiplying API cost),
+  persists a per-channel watermark (the newest publish time seen, cleared when
+  a channel is opted out) so a fresh opt-in never triggers a
+  back-catalog download, dedupes against the recordings catalog and any
+  in-flight download, and skips a Twitch/YouTube channel's own past-
+  broadcast VOD when `auto_record` already captures it live. New route:
+  `PUT /api/v1/channels/{key}/auto_download_uploads`.
 - **Dedicated recording player route (`#/play?recording=<id>`).** Opening a
   recording no longer lands on the live multiview wall (`#/watch`) with its
   chat rail, composer, and preset toolbar along for no reason — it opens a
@@ -27,6 +42,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   applied to Past Broadcasts.
 
 ### Fixed
+- **Channel rail context menu: "Download uploads" was Creator-only and
+  mislabeled.** The PVR build showed a permanently-disabled "(Creator)"
+  button, and the Creator build's control was actually the archiver
+  back-catalog tandem, not "download new uploads" — both toggles now do
+  what they say (see the Added entry above), and every toggle in this menu
+  (alerts, livestreams, uploads, and — Creator only — back-catalog
+  archiving) rolls back its checkbox and shows an error toast if the
+  underlying request fails, instead of showing a checked state the server
+  never actually saved.
+- **Per-channel toggles did nothing until the daemon restarted.** The channel
+  and Patreon monitors held the `config.toml` snapshot from startup forever,
+  so toggling a channel's livestream auto-record (and Patreon auto-pull) from
+  the web UI was saved but ignored by the running daemon. Both monitors now
+  re-read the config at the start of every poll, and the toggle routes
+  trigger an immediate poll, so changes apply within seconds.
 - **Ultrawide fullscreen centering for recording playback.** A recording's
   `<video>` tile kept its natural width and pinned to the left edge in
   fullscreen instead of centering with letterboxing; it now centers with

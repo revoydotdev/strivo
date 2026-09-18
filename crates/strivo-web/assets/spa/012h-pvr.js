@@ -13,7 +13,6 @@ const DOWNLOAD_SCOPE_LABELS = Object.freeze({
 
 const playlistItemsCache = Object.create(null);
 let openPlaylistContext = null;
-let pendingLatestVod = null;
 
 function bulkProgressText(st) {
   if (!st || !st.active) return "";
@@ -257,41 +256,10 @@ events.on((event) => {
       openPlaylistViewer(openPlaylistContext, openPlaylistContext.playlist, p.items || [], false);
     }
   }
-  if (event.ChannelVods && pendingLatestVod && event.ChannelVods.channel_id === pendingLatestVod.channelId) {
-    const latest = (event.ChannelVods.vods || []).filter((v) => v.url).sort((a, b) => (b.published_at || "").localeCompare(a.published_at || ""))[0];
-    const request = pendingLatestVod;
-    pendingLatestVod = null;
-    if (latest) API.vodDownload({ url: latest.url, channel_name: request.name, platform: request.platform, post_title: latest.title || null }).then(() => Toast.success(`Downloading latest VOD — ${request.name}`)).catch((e) => Toast.error(`Download failed: ${e.message}`));
-    else Toast.error("No downloadable VOD found");
-  }
-});
-
-// Add a one-shot latest-VOD action to the shared context menu in PVR and
-// Creator builds.  It deliberately does not depend on Creator hooks.
-// This source sorts before 039-pvr.js (where the context menu is declared),
-// so defer the wrapper until the concatenated module has finished evaluating.
-queueMicrotask(() => {
-  if (typeof openChannelCtxMenu !== "function") return;
-  const priorOpenChannelCtxMenu = openChannelCtxMenu;
-  openChannelCtxMenu = async function remediationContextMenu(ctx, x, y) {
-    await priorOpenChannelCtxMenu(ctx, x, y);
-    const menu = document.querySelector(".ch-ctx-menu");
-    if (!menu) return;
-    const section = document.createElement("div");
-    section.className = "ch-ctx-menu-section";
-    section.innerHTML = '<button class="ch-ctx-menu-item" type="button" data-ctx-action="download-latest-vod"><span class="ch-ctx-check" aria-hidden="true">⇩</span>Download latest VOD</button>';
-    menu.appendChild(section);
-    menu.addEventListener("click", async (e) => {
-      if (!e.target.closest('[data-ctx-action="download-latest-vod"]')) return;
-      const cached = (channelVods[ctx.channelId] || []).filter((v) => v.url).sort((a, b) => (b.published_at || "").localeCompare(a.published_at || ""))[0];
-      if (cached) {
-        if (!(await confirmDialog(`Download latest VOD from ${ctx.title || ctx.channelId}?`, { ok: "Download" }))) return;
-        API.vodDownload({ url: cached.url, channel_name: ctx.title, platform: ctx.platform, post_title: cached.title || null }).then(() => Toast.success("Latest VOD download started")).catch((err) => Toast.error(`Download failed: ${err.message}`));
-        closeChannelCtxMenu();
-      } else {
-        pendingLatestVod = { channelId: ctx.channelId, name: ctx.title, platform: ctx.platform };
-        try { await API.requestChannelVods(ctx.channelId, ctx.platform); Toast.info("Loading the latest VOD…"); } catch (err) { pendingLatestVod = null; Toast.error(`Couldn't load VODs: ${err.message}`); }
-      }
-    });
-  };
+  // The one-shot "Download latest VOD" context-menu action lives in
+  // 039-pvr.js (`downloadLatestVod` / the `ChannelVods` handler there) —
+  // it used to be monkey-patched on from here, but folding it into the
+  // menu's own module keeps section ordering (Automatic downloads, then
+  // this one-shot action, then the Creator-only archiver row) in one
+  // place instead of split across two files.
 });

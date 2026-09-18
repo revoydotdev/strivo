@@ -31,6 +31,16 @@ pub struct AppConfig {
     #[serde(default)]
     pub auto_record_channels: Vec<AutoRecordEntry>,
 
+    /// Twitch/YouTube channels whose new uploads (not the channel's own
+    /// live-capture VODs — see `AutoDownloadUploadsEntry`) the monitor
+    /// should fetch and auto-download. Patreon has its own opt-in list,
+    /// `auto_pull_creators`, and is deliberately NOT stored here: adding a
+    /// second Patreon list would create two sources of truth for the same
+    /// per-creator switch. Empty by default — opt-in per channel from the
+    /// rail context menu, mirroring `auto_record_channels`.
+    #[serde(default)]
+    pub auto_download_uploads: Vec<AutoDownloadUploadsEntry>,
+
     /// Per-channel overrides of the global notification/webhook switches
     /// (`[notifications]` on_go_live / on_recording_finished). Absent
     /// channel = follow the global default unchanged. Applies to both PVR
@@ -513,6 +523,16 @@ pub struct CaptureProfile {
     pub cutoff_episodes: Option<u32>,
 }
 
+/// Per-channel opt-in to auto-downloading a Twitch/YouTube channel's new
+/// uploads, as distinct from `AutoRecordEntry`'s "capture the live stream
+/// itself" switch. Mirrors `AutoRecordEntry`'s shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoDownloadUploadsEntry {
+    pub platform: String,
+    pub channel_id: String,
+    pub channel_name: String,
+}
+
 /// Per-creator opt-in to Patreon auto-download. Identifying by
 /// campaign_id rather than the creator name because creators rename
 /// themselves. creator_name is kept around purely for UI display when
@@ -751,6 +771,7 @@ impl Default for AppConfig {
             theme: ThemeRef::default(),
             ui: UiConfig::default(),
             auto_record_channels: Vec::new(),
+            auto_download_uploads: Vec::new(),
             channel_alerts: Vec::new(),
             capture_profiles: Vec::new(),
             auto_pull_creators: Vec::new(),

@@ -1,4 +1,5 @@
 pub mod patreon;
+pub mod uploads;
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -43,6 +44,30 @@ pub struct ChannelMonitor {
     last_live: HashMap<String, chrono::DateTime<chrono::Utc>>,
     /// Path backing `last_live`.
     last_live_path: PathBuf,
+    /// Per-channel "last checked for new uploads" watermark (Twitch/YouTube
+    /// only — see `monitor::uploads`). Key is `Platform:channel_id`.
+    upload_watermarks: uploads::WatermarkMap,
+    /// Path backing `upload_watermarks`.
+    upload_watermarks_path: PathBuf,
+    /// Wall-clock time of the last upload check, so it runs on its own
+    /// `UPLOAD_CHECK_INTERVAL_SECS` cadence instead of every `poll_all`.
+    last_upload_check: Option<std::time::Instant>,
+    /// Where `config` was loaded from. Re-read at the start of every poll so
+    /// per-channel opt-ins toggled from the web UI (auto_record,
+    /// auto_download_uploads) apply without a daemon restart.
+    config_path: Option<PathBuf>,
+}
+
+/// Replace `config` with a fresh read of `path`, keeping the previous
+/// snapshot if the file cannot be read or parsed. The web routes persist
+/// per-channel toggles to config.toml and then send `PollNow`; the monitors
+/// used to hold the startup snapshot forever, so those toggles silently did
+/// nothing until the daemon restarted.
+pub(crate) fn reload_config(config: &mut AppConfig, path: Option<&std::path::Path>) {
+    match AppConfig::load(path) {
+        Ok(fresh) => *config = fresh,
+        Err(e) => tracing::warn!("monitor: config reload failed, keeping previous snapshot: {e:#}"),
+    }
 }
 
 impl ChannelMonitor {
@@ -59,6 +84,8 @@ impl ChannelMonitor {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        let upload_watermarks_path = AppConfig::state_dir().join("upload_watermarks.json");
+        let upload_watermarks = uploads::load_watermarks(&upload_watermarks_path);
         Self {
             platforms,
             config,
@@ -75,6 +102,10 @@ impl ChannelMonitor {
             persist: None,
             last_live,
             last_live_path,
+            upload_watermarks,
+            upload_watermarks_path,
+            last_upload_check: None,
+            config_path: None,
         }
     }
 
@@ -92,6 +123,11 @@ impl ChannelMonitor {
     /// Set an external auth notify (shared with auth tasks)
     pub fn set_auth_notify(&mut self, notify: Arc<tokio::sync::Notify>) {
         self.auth_notify = notify;
+    }
+
+    /// Enable per-poll config reloads from the file the daemon loaded.
+    pub fn set_config_path(&mut self, path: Option<PathBuf>) {
+        self.config_path = path;
     }
 
     /// Provide a read-only persistence handle for capture-profile cutoffs.
@@ -180,7 +216,7 @@ impl ChannelMonitor {
             .await;
 
         // Immediate first poll
-        if let Err(e) = self.poll_all().await {
+        if let Err(e) = self.poll_all(false).await {
             tracing::error!("Initial poll error: {e}");
             let _ = self
                 .event_tx
@@ -209,14 +245,18 @@ impl ChannelMonitor {
                     interval.tick().await;
                 }
                 _ = interval.tick() => {
-                    if let Err(e) = self.poll_all().await {
+                    if let Err(e) = self.poll_all(false).await {
                         tracing::error!("Monitor poll error: {e}");
                         let _ = self.event_tx.send(DaemonEvent::Error(format!("Poll error: {e}")));
                     }
                 }
                 _ = self.poll_notify.notified() => {
                     tracing::info!("On-demand re-poll triggered");
-                    if let Err(e) = self.poll_all().await {
+                    // `force=true`: an on-demand poll includes YouTube WebSub
+                    // PollNow notifications (crates/strivo-web/src/routes/websub.rs),
+                    // so a freshly-uploaded video the user opted into should not
+                    // wait out the 15-minute upload-check interval.
+                    if let Err(e) = self.poll_all(true).await {
                         tracing::error!("Monitor poll error: {e}");
                         let _ = self.event_tx.send(DaemonEvent::Error(format!("Poll error: {e}")));
                     }
@@ -229,7 +269,7 @@ impl ChannelMonitor {
                     // tick — the original cause of "Twitch missing from
                     // the sidebar for the first minute" symptom.
                     tracing::info!("Platform auth event, re-polling");
-                    if let Err(e) = self.poll_all().await {
+                    if let Err(e) = self.poll_all(false).await {
                         tracing::error!("Monitor poll error: {e}");
                         let _ = self.event_tx.send(DaemonEvent::Error(format!("Poll error: {e}")));
                     }
@@ -287,8 +327,9 @@ impl ChannelMonitor {
         false
     }
 
-    async fn poll_all(&mut self) -> Result<()> {
+    async fn poll_all(&mut self, force_upload_check: bool) -> Result<()> {
         let poll_started = std::time::Instant::now();
+        reload_config(&mut self.config, self.config_path.as_deref());
         // Phase 1 — fan out per-platform channel + live-status fetches
         // concurrently. Previously these ran in series: a slow YouTube call
         // (quota / SSL handshake) blocked Twitch live-detection for the full
@@ -390,6 +431,12 @@ impl ChannelMonitor {
                             .iter()
                             .any(|a| a.channel_id == ch.id && a.platform == kind.to_string());
 
+                        ch.auto_download_uploads = self
+                            .config
+                            .auto_download_uploads
+                            .iter()
+                            .any(|a| a.channel_id == ch.id && a.platform == kind.to_string());
+
                         // Track/stamp last-seen-live for the offline
                         // "last live: N ago" label.
                         if ch.is_live {
@@ -462,6 +509,17 @@ impl ChannelMonitor {
             }
         }
 
+        // Auto-download new uploads (Twitch/YouTube) — throttled to its own
+        // interval so it doesn't multiply API cost on every live-status
+        // poll. See `monitor::uploads` for the interval/quota rationale.
+        let due = self
+            .last_upload_check
+            .is_none_or(|t| t.elapsed().as_secs() >= uploads::UPLOAD_CHECK_INTERVAL_SECS);
+        if force_upload_check || due {
+            self.check_uploads(&all_channels).await;
+            self.last_upload_check = Some(std::time::Instant::now());
+        }
+
         // Sort: live first, then alphabetical
         all_channels.sort_by(|a, b| {
             a.platform
@@ -491,6 +549,141 @@ impl ChannelMonitor {
         }
 
         Ok(())
+    }
+
+    /// Check opted-in Twitch/YouTube channels for new uploads and enqueue
+    /// downloads for any found. See `monitor::uploads` for the interval,
+    /// dedupe, and past-broadcast rules. Best-effort throughout: a single
+    /// channel's fetch failure never blocks the others or the caller.
+    async fn check_uploads(&mut self, channels: &[ChannelEntry]) {
+        let opted_in: Vec<&ChannelEntry> = channels
+            .iter()
+            .filter(|ch| ch.auto_download_uploads && ch.platform != PlatformKind::Patreon)
+            .collect();
+        // Forget watermarks of channels that are no longer opted in, so
+        // re-enabling later starts fresh instead of downloading everything
+        // published while the toggle was off.
+        let opted_keys: std::collections::HashSet<String> = opted_in
+            .iter()
+            .map(|ch| uploads::watermark_key(ch.platform, &ch.id))
+            .collect();
+        let before = self.upload_watermarks.len();
+        self.upload_watermarks.retain(|k, _| opted_keys.contains(k));
+        let mut dirty = self.upload_watermarks.len() != before;
+        if opted_in.is_empty() {
+            if dirty {
+                if let Err(e) =
+                    uploads::save_watermarks(&self.upload_watermarks_path, &self.upload_watermarks)
+                {
+                    tracing::warn!("upload check: failed to persist watermarks: {e}");
+                }
+            }
+            return;
+        }
+        let Some(persist) = self.persist.clone() else {
+            // No DB handle means no reliable dedupe — skip rather than risk
+            // re-downloading the same upload every check.
+            tracing::debug!("upload check: no persist handle, skipping");
+            return;
+        };
+
+        // In-flight source_url set, loaded once per check rather than once
+        // per VOD candidate.
+        let in_flight: std::collections::HashSet<String> = match persist.load_recording_jobs().await
+        {
+            Ok(jobs) => jobs
+                .into_iter()
+                .filter(|j| {
+                    matches!(
+                        j.state,
+                        crate::recording::job::RecordingState::ResolvingUrl
+                            | crate::recording::job::RecordingState::Recording
+                    )
+                })
+                .filter_map(|j| j.source_url)
+                .collect(),
+            Err(e) => {
+                tracing::warn!("upload check: failed to load in-flight jobs: {e}");
+                std::collections::HashSet::new()
+            }
+        };
+
+        for ch in opted_in {
+            let key = uploads::watermark_key(ch.platform, &ch.id);
+            let watermark = self.upload_watermarks.get(&key).copied();
+
+            let mut vods = None;
+            for platform in &self.platforms {
+                let plat = platform.read().await;
+                if plat.kind() != ch.platform {
+                    continue;
+                }
+                match plat.fetch_channel_vods(&ch.id, watermark, Some(10)).await {
+                    Ok(v) => vods = Some(v),
+                    Err(e) => {
+                        tracing::warn!(
+                            "upload check: fetch_channel_vods failed for {}:{}: {e}",
+                            ch.platform,
+                            ch.id
+                        );
+                    }
+                }
+                break;
+            }
+            let Some(vods) = vods else { continue };
+
+            let picked = uploads::select_new_uploads(&vods, watermark, ch.auto_record);
+            for vod in &picked {
+                if in_flight.contains(&vod.url) {
+                    continue;
+                }
+                match persist
+                    .is_vod_recorded(vod.platform, &vod.channel_id, &vod.id)
+                    .await
+                {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!("upload check: dedupe lookup failed: {e}");
+                        continue;
+                    }
+                }
+                if let Err(e) = persist.upsert_catalog_entry(vod).await {
+                    tracing::warn!("upload check: catalog upsert failed: {e}");
+                }
+                tracing::info!("auto-download upload: {} - {}", ch.display_name, vod.title);
+                let spec = crate::intents::DownloadVodSpec {
+                    url: vod.url.clone(),
+                    channel_name: ch.display_name.clone(),
+                    platform: ch.platform,
+                    post_title: Some(vod.title.clone()),
+                    cookies: crate::intents::CookieSource::FromConfig,
+                    output_policy: crate::intents::OutputPathPolicy::Fresh,
+                };
+                let _ = self
+                    .recording_tx
+                    .send(crate::intents::download_vod(spec, &self.config));
+            }
+
+            // Advance to the newest publish time actually observed, never to
+            // wall-clock now: a platform lists a video some time after its
+            // `published_at` (YouTube processing), so a now-based watermark
+            // would permanently skip any upload published just before a
+            // check but not yet visible in it. A channel with no dated VODs
+            // on its first check starts at now so later uploads still count.
+            if let Some(next) = uploads::next_watermark(&vods, watermark) {
+                self.upload_watermarks.insert(key, next);
+                dirty = true;
+            }
+        }
+
+        if dirty {
+            if let Err(e) =
+                uploads::save_watermarks(&self.upload_watermarks_path, &self.upload_watermarks)
+            {
+                tracing::warn!("upload check: failed to persist watermarks: {e}");
+            }
+        }
     }
 
     /// True if the channel's capture profile has a `cutoff_episodes` and at
@@ -581,8 +774,7 @@ impl ChannelMonitor {
     // `CookieSource::FromConfig`, which centralises the per-platform
     // policy. The reload-on-every-fire pattern was specific to the old
     // hand-rolled lookup; the monitor's `self.config` snapshot is
-    // refreshed by the daemon's config-reload path, so the read-through
-    // is no longer needed.
+    // re-read from disk at the start of every poll (`reload_config`).
 }
 
 /// Free-space lookup for the disk-budget enforcement gate. statvfs on

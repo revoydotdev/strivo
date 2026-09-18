@@ -222,6 +222,115 @@ async fn put_auto_record(
 }
 
 #[derive(Debug, Deserialize)]
+struct AutoDownloadUploadsPayload {
+    enabled: bool,
+}
+
+/// `PUT /api/v1/channels/<channel_key>/auto_download_uploads` — toggle
+/// auto-downloading a channel's new uploads. Mirrors `put_auto_record`'s
+/// shape, but Patreon is special-cased: it has no entry of its own here
+/// (core has no second source of truth for the Patreon opt-in) — instead
+/// this writes/reads `config.auto_pull_creators`, keyed by campaign_id
+/// (which is exactly what the rail's Patreon `channel_id` already is —
+/// see `PatreonCreator::to_channel_entry`). Twitch/YouTube write
+/// `config.auto_download_uploads`.
+async fn put_auto_download_uploads(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(channel_key): Path<String>,
+    Json(body): Json<AutoDownloadUploadsPayload>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return crate::problem::Problem::unauthorized().into_response();
+    }
+    let Some((plat_str, ch_id)) = channel_key.split_once(':') else {
+        return crate::problem::Problem::bad_request("channel_key must be Platform:id")
+            .into_response();
+    };
+    let Some(platform) = parse_platform(plat_str) else {
+        return crate::problem::Problem::bad_request(format!("unknown platform: {plat_str}"))
+            .into_response();
+    };
+
+    let _config_guard = state.config_write_lock.lock().await;
+    let mut cfg = match strivo_core::config::AppConfig::load(state.config_path()) {
+        Ok(c) => c,
+        Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
+    };
+
+    if platform == PlatformKind::Patreon {
+        let already_in = cfg
+            .auto_pull_creators
+            .iter()
+            .any(|e| e.campaign_id == ch_id);
+        match (body.enabled, already_in) {
+            (true, false) => {
+                let creator_name = match state.snapshot().await {
+                    Ok(strivo_core::ipc::ServerMessage::StateSnapshot {
+                        patreon_creators, ..
+                    }) => patreon_creators
+                        .iter()
+                        .find(|c| c.id == ch_id)
+                        .map(|c| c.display_name.clone())
+                        .unwrap_or_else(|| ch_id.to_string()),
+                    _ => ch_id.to_string(),
+                };
+                cfg.auto_pull_creators
+                    .push(strivo_core::config::AutoPullEntry {
+                        campaign_id: ch_id.to_string(),
+                        creator_name,
+                    });
+            }
+            (false, true) => {
+                cfg.auto_pull_creators.retain(|e| e.campaign_id != ch_id);
+            }
+            _ => {}
+        }
+    } else {
+        let already_in = cfg
+            .auto_download_uploads
+            .iter()
+            .any(|c| format!("{}:{}", c.platform, c.channel_id) == channel_key);
+        match (body.enabled, already_in) {
+            (true, false) => {
+                let display_name = match state.snapshot().await {
+                    Ok(strivo_core::ipc::ServerMessage::StateSnapshot { channels, .. }) => channels
+                        .iter()
+                        .find(|c| c.id == ch_id)
+                        .map(|c| c.display_name.clone())
+                        .unwrap_or_else(|| ch_id.to_string()),
+                    _ => ch_id.to_string(),
+                };
+                cfg.auto_download_uploads
+                    .push(strivo_core::config::AutoDownloadUploadsEntry {
+                        platform: format!("{platform:?}"),
+                        channel_id: ch_id.to_string(),
+                        channel_name: display_name,
+                    });
+            }
+            (false, true) => {
+                cfg.auto_download_uploads
+                    .retain(|c| format!("{}:{}", c.platform, c.channel_id) != channel_key);
+            }
+            _ => {}
+        }
+    }
+
+    if let Err(e) = cfg.save(state.config_path()) {
+        return crate::problem::Problem::internal(e.to_string()).into_response();
+    }
+    if let Err(e) = state.refresh_config().await {
+        tracing::warn!("config cache refresh failed: {e}");
+    }
+    let _ = state.ipc.send_command(ClientMessage::PollNow).await;
+    (
+        StatusCode::OK,
+        Json(json!({"status": "ok", "enabled": body.enabled})),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
 struct ChannelAlertsPayload {
     #[serde(default)]
     on_live: Option<bool>,
@@ -425,6 +534,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/channels/{channel_key}/auto_record",
             put(put_auto_record),
+        )
+        .route(
+            "/api/v1/channels/{channel_key}/auto_download_uploads",
+            put(put_auto_download_uploads),
         )
         .route(
             "/api/v1/channels/{channel_key}/alerts",

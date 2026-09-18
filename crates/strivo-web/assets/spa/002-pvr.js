@@ -148,6 +148,14 @@ const API = {
       method: "PUT",
       body: { enabled: true, format: format || "", profile: profile || "" },
     }),
+  // Auto-download new uploads (Twitch/YouTube: config.auto_download_uploads;
+  // Patreon: config.auto_pull_creators — the route picks the right store from
+  // the channel key's platform). Present and functional in both editions.
+  setAutoDownloadUploads: (channelKey, enabled) =>
+    API._fetch(`/channels/${encodeURIComponent(channelKey)}/auto_download_uploads`, {
+      method: "PUT",
+      body: { enabled },
+    }),
   // Per-channel override of the global live/upload alert switches. Pass
   // `{on_live, on_upload}`; both undefined/null clears the override and
   // reverts the channel to the global default.

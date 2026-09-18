@@ -44,9 +44,68 @@ test("right-click a channel rail row opens the context menu", async ({ page }) =
   await expect(menu).toHaveAttribute("data-channel-key", LIVE_CHANNEL_KEY);
   await expect(menu.getByText("Alert on live")).toBeVisible();
   await expect(menu.getByText("Alert on new upload")).toBeVisible();
-  await expect(menu.getByText("Download livestreams")).toBeVisible();
-  // Mock lane serves full (Creator-included) source — see file header.
-  await expect(menu.getByText("Download uploads")).toBeVisible();
+  // Livestreams + Uploads sit adjacent under one "Automatic downloads"
+  // label, both enabled (functional) toggles in every edition.
+  const livestreams = menu.locator('[data-ctx-action="auto-record"]');
+  const uploads = menu.locator('[data-ctx-action="auto-download-uploads"]');
+  await expect(livestreams).toBeVisible();
+  await expect(livestreams).toContainText("Livestreams");
+  await expect(livestreams).toBeEnabled();
+  await expect(uploads).toBeVisible();
+  await expect(uploads).toContainText("Uploads");
+  await expect(uploads).toBeEnabled();
+  // Livestreams immediately precedes Uploads in the DOM.
+  const autoDlSection = menu.locator(".ch-ctx-menu-section", { hasText: "Automatic downloads" });
+  const items = autoDlSection.locator("[data-ctx-action]");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toHaveAttribute("data-ctx-action", "auto-record");
+  await expect(items.nth(1)).toHaveAttribute("data-ctx-action", "auto-download-uploads");
+  // Mock lane serves full (Creator-included) source — see file header —
+  // so the honestly-relabeled archiver-tandem row also renders, in its
+  // own section below Automatic downloads.
+  await expect(menu.getByText("Archive back catalog after capture")).toBeVisible();
+});
+
+test("toggling Uploads fires PUT .../auto_download_uploads and flips the check", async ({ page }) => {
+  await page.goto("/app#/library");
+  const row = page.locator(LIVE_ROW);
+  await row.click({ button: "right" });
+
+  const menu = page.locator(".ch-ctx-menu");
+  await expect(menu).toBeVisible();
+  const uploads = menu.locator('[data-ctx-action="auto-download-uploads"]');
+  await expect(uploads).toHaveAttribute("aria-checked", "false");
+
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) =>
+        req.url().includes(`/api/v1/channels/${encodeURIComponent(LIVE_CHANNEL_KEY)}/auto_download_uploads`) &&
+        req.method() === "PUT",
+    ),
+    uploads.click(),
+  ]);
+  expect(request.postDataJSON()).toMatchObject({ enabled: true });
+  await expect(uploads).toHaveAttribute("aria-checked", "true");
+});
+
+test("a failed Uploads PUT rolls the checkbox back and shows an error toast", async ({ page }) => {
+  await page.route("**/api/v1/channels/*/auto_download_uploads", (route) =>
+    route.fulfill({ status: 500, json: { title: "boom" } }),
+  );
+
+  await page.goto("/app#/library");
+  const row = page.locator(LIVE_ROW);
+  await row.click({ button: "right" });
+
+  const menu = page.locator(".ch-ctx-menu");
+  await expect(menu).toBeVisible();
+  const uploads = menu.locator('[data-ctx-action="auto-download-uploads"]');
+  await expect(uploads).toHaveAttribute("aria-checked", "false");
+
+  await uploads.click();
+
+  await expect(uploads).toHaveAttribute("aria-checked", "false");
+  await expect(page.locator(".toast.error").last()).toBeVisible();
 });
 
 test("context menu dismisses on outside click and Escape", async ({ page }) => {

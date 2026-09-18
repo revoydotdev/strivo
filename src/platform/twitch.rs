@@ -581,6 +581,7 @@ impl Platform for TwitchPlatform {
                     started_at: None,
                     thumbnail_url: None,
                     auto_record: false,
+                    auto_download_uploads: false,
                     last_live_at: None,
                     live_video_id: None,
                 });
@@ -633,6 +634,7 @@ impl Platform for TwitchPlatform {
                     started_at,
                     thumbnail_url: thumbnail,
                     auto_record: false,
+                    auto_download_uploads: false,
                     last_live_at: None,
                     live_video_id: None,
                 });

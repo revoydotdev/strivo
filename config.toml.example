@@ -124,6 +124,20 @@
 # # Name of a [[capture_profiles]] entry to apply to this channel instead.
 # # profile = "1080p60+transcript"
 
+# ─── Auto-download uploads (Twitch/YouTube) ────────────────────────────────
+# Each [[auto_download_uploads]] block auto-downloads that channel's new
+# uploads (not its own live-capture VODs — see auto_record_channels above)
+# as the monitor discovers them, at most every 15 minutes. Toggle from the
+# rail's right-click "Automatic downloads → Uploads" menu item; edits there
+# round-trip through this file. Patreon has no entry here — see
+# auto_pull_creators below, which the same rail toggle writes for a Patreon
+# creator.
+#
+# [[auto_download_uploads]]
+# platform     = "twitch"
+# channel_id   = "12345"
+# channel_name = "streamer_name"
+
 # ─── Capture profiles ──────────────────────────────────────────────────────
 # Named, reusable capture presets — define recording settings once and
 # attach them to many channels via auto_record_channels.profile.

@@ -198,6 +198,13 @@ pub struct ChannelEntry {
     pub started_at: Option<DateTime<Utc>>,
     pub thumbnail_url: Option<String>,
     pub auto_record: bool,
+    /// Opt-in to auto-downloading this channel's new uploads (Twitch/YouTube:
+    /// `config.auto_download_uploads`; Patreon: `config.auto_pull_creators`).
+    /// Stamped by the monitor the same way `auto_record` is, so the rail
+    /// context menu can read both from one `API.channels()` /
+    /// `API.patreon()` call.
+    #[serde(default)]
+    pub auto_download_uploads: bool,
     /// When StriVo last observed this channel live (for the "last live: N ago"
     /// label on offline rows). Stamped by the monitor from its persisted
     /// last-live tracking; platform builders leave it None.

@@ -235,6 +235,7 @@ mod tests {
             platform: PlatformKind::Twitch,
             is_live: true,
             auto_record: false,
+            auto_download_uploads: false,
             stream_title: None,
             game_or_category: None,
             viewer_count: None,

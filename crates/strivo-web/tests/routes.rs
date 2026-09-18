@@ -270,6 +270,107 @@ async fn settings_update_rejects_invalid_recording_values_without_mutating_confi
     }
 }
 
+async fn put_json_request(
+    app: axum::Router,
+    api_key: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri(uri)
+        .header("x-api-key", api_key)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    app.oneshot(request).await.unwrap()
+}
+
+/// `PUT /api/v1/channels/{key}/auto_download_uploads` for a Twitch channel
+/// must write `config.auto_download_uploads`, round-trip through GET
+/// `/api/v1/channels` as the `auto_download_uploads` field (next to
+/// `auto_record`, both read from one `ChannelEntry`), and disabling it must
+/// remove the entry again.
+#[tokio::test]
+async fn auto_download_uploads_toggle_persists_for_twitch_channel() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let config_path = sandbox.path().join("config.toml");
+    strivo_core::config::AppConfig::default()
+        .save(Some(&config_path))
+        .unwrap();
+
+    let api_key = "auto-download-uploads-test-key";
+    let app = app_with_config(api_key, config_path.clone());
+
+    let response = put_json_request(
+        app.clone(),
+        api_key,
+        "/api/v1/channels/Twitch:12345/auto_download_uploads",
+        serde_json::json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let saved = strivo_core::config::AppConfig::load(Some(&config_path)).unwrap();
+    assert_eq!(saved.auto_download_uploads.len(), 1);
+    assert_eq!(saved.auto_download_uploads[0].platform, "Twitch");
+    assert_eq!(saved.auto_download_uploads[0].channel_id, "12345");
+    // Patreon's list must stay untouched by a Twitch/YouTube toggle.
+    assert!(saved.auto_pull_creators.is_empty());
+
+    let response = put_json_request(
+        app.clone(),
+        api_key,
+        "/api/v1/channels/Twitch:12345/auto_download_uploads",
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = strivo_core::config::AppConfig::load(Some(&config_path)).unwrap();
+    assert!(saved.auto_download_uploads.is_empty());
+}
+
+/// The same route for a Patreon key must write `config.auto_pull_creators`
+/// (keyed by campaign_id) instead of `auto_download_uploads` — Patreon
+/// deliberately has no entry of its own in that list (see
+/// `AutoDownloadUploadsEntry`'s doc comment / the route's doc comment).
+#[tokio::test]
+async fn auto_download_uploads_toggle_maps_patreon_onto_auto_pull_creators() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let config_path = sandbox.path().join("config.toml");
+    strivo_core::config::AppConfig::default()
+        .save(Some(&config_path))
+        .unwrap();
+
+    let api_key = "auto-download-uploads-patreon-test-key";
+    let app = app_with_config(api_key, config_path.clone());
+
+    let response = put_json_request(
+        app.clone(),
+        api_key,
+        "/api/v1/channels/Patreon:camp-42/auto_download_uploads",
+        serde_json::json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let saved = strivo_core::config::AppConfig::load(Some(&config_path)).unwrap();
+    assert!(saved.auto_download_uploads.is_empty());
+    assert_eq!(saved.auto_pull_creators.len(), 1);
+    assert_eq!(saved.auto_pull_creators[0].campaign_id, "camp-42");
+
+    let response = put_json_request(
+        app.clone(),
+        api_key,
+        "/api/v1/channels/Patreon:camp-42/auto_download_uploads",
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = strivo_core::config::AppConfig::load(Some(&config_path)).unwrap();
+    assert!(saved.auto_pull_creators.is_empty());
+}
+
 // ── S01/S02 acceptance: bogus X-Api-Key must yield 401, specifically ─────
 //
 // A bare "not 200" assertion would pass against a guard that's never
@@ -422,6 +523,10 @@ const ALWAYS_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/blocklist"),
     ("post", "/api/v1/blocklist"),
     ("put", "/api/v1/channels/{channel_key}/auto_record"),
+    (
+        "put",
+        "/api/v1/channels/{channel_key}/auto_download_uploads",
+    ),
     ("get", "/api/v1/monitor"),
     ("post", "/api/v1/capture_profiles"),
     ("delete", "/api/v1/capture_profiles/{name}"),

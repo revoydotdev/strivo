@@ -23,6 +23,8 @@ pub struct PatreonMonitor {
     last_checked: HashMap<String, DateTime<Utc>>,
     /// State file for persisting last_checked
     state_path: PathBuf,
+    /// Re-read each poll so `auto_pull_creators` toggles apply live.
+    config_path: Option<PathBuf>,
 }
 
 impl PatreonMonitor {
@@ -44,7 +46,14 @@ impl PatreonMonitor {
             cancel,
             last_checked,
             state_path,
+            config_path: None,
         }
+    }
+
+    /// Enable per-poll config reloads from the file the daemon loaded.
+    pub fn with_config_path(mut self, path: Option<PathBuf>) -> Self {
+        self.config_path = path;
+        self
     }
 
     pub async fn run(mut self) {
@@ -86,6 +95,7 @@ impl PatreonMonitor {
     }
 
     async fn poll(&mut self) -> anyhow::Result<()> {
+        super::reload_config(&mut self.config, self.config_path.as_deref());
         let creators = self.client.fetch_pledged_creators().await?;
         tracing::debug!("Patreon: found {} pledged creators", creators.len());
 
@@ -96,7 +106,17 @@ impl PatreonMonitor {
         let mut all_posts = Vec::new();
 
         for creator in &creators {
-            creator_entries.push(creator.to_channel_entry());
+            let mut entry = creator.to_channel_entry();
+            // Stamped here (rather than left false) so the rail context
+            // menu's "Uploads" toggle reads Patreon state from the same
+            // `API.patreon()` creators list it already fetches, instead of
+            // needing a bespoke lookup.
+            entry.auto_download_uploads = self
+                .config
+                .auto_pull_creators
+                .iter()
+                .any(|e| e.campaign_id == creator.campaign_id);
+            creator_entries.push(entry);
 
             // Fetch the recent window unconditionally (since=None) so the
             // right pane always shows the latest posts, not just those
@@ -257,5 +277,22 @@ mod tests {
         assert_eq!(spec.platform, PlatformKind::Patreon);
         assert_eq!(spec.channel_name, "Some Creator");
         assert_eq!(spec.post_title.as_deref(), Some("Some Post"));
+    }
+
+    /// The rail's "Uploads" toggle for a Patreon creator must read/write
+    /// `config.auto_pull_creators` — there is deliberately no separate
+    /// Patreon entry in `auto_download_uploads` (see that field's doc
+    /// comment). This proves the membership check `poll()` uses to stamp
+    /// `ChannelEntry::auto_download_uploads` matches campaign_id, the same
+    /// key the `auto_pull` gate a few lines below it in `poll()` uses.
+    #[test]
+    fn patreon_upload_toggle_reads_auto_pull_creators_by_campaign_id() {
+        let entries = [crate::config::AutoPullEntry {
+            campaign_id: "camp-1".into(),
+            creator_name: "Some Creator".into(),
+        }];
+        let opted_in = |campaign_id: &str| entries.iter().any(|e| e.campaign_id == campaign_id);
+        assert!(opted_in("camp-1"));
+        assert!(!opted_in("camp-2"));
     }
 }

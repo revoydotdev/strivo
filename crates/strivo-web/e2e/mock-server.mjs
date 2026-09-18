@@ -59,6 +59,7 @@ const CHANNELS = [
     started_at: new Date().toISOString(),
     thumbnail_url: null,
     auto_record: false,
+    auto_download_uploads: false,
   },
   {
     id: "twitch:offlinechan",

@@ -4,7 +4,7 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use std::fs;
-use strivo_core::config::{AppConfig, ThemeRef};
+use strivo_core::config::{AppConfig, AutoDownloadUploadsEntry, ThemeRef};
 use tempfile::TempDir;
 
 fn seeded_config(recording_dir: std::path::PathBuf) -> AppConfig {
@@ -37,6 +37,41 @@ fn save_then_load_roundtrip() {
     let loaded = AppConfig::load(Some(&path)).expect("load");
     assert_eq!(loaded.poll_interval_secs, 42);
     assert_eq!(loaded.recording_dir, seeded.recording_dir);
+}
+
+#[test]
+fn auto_download_uploads_roundtrips() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("config.toml");
+
+    let mut seeded = seeded_config(tmp.path().join("recordings"));
+    seeded.auto_download_uploads.push(AutoDownloadUploadsEntry {
+        platform: "Twitch".into(),
+        channel_id: "123".into(),
+        channel_name: "some_streamer".into(),
+    });
+    seeded.save(Some(&path)).expect("save");
+
+    let loaded = AppConfig::load(Some(&path)).expect("load");
+    assert_eq!(loaded.auto_download_uploads.len(), 1);
+    assert_eq!(loaded.auto_download_uploads[0].channel_id, "123");
+    assert_eq!(loaded.auto_download_uploads[0].platform, "Twitch");
+}
+
+#[test]
+fn config_without_auto_download_uploads_still_parses() {
+    // An existing config.toml written before this field existed must keep
+    // loading — `#[serde(default)]` is the contract under test.
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        "recording_dir = \"/tmp/recs\"\npoll_interval_secs = 60\n",
+    )
+    .unwrap();
+
+    let loaded = AppConfig::load(Some(&path)).expect("load");
+    assert!(loaded.auto_download_uploads.is_empty());
 }
 
 #[test]

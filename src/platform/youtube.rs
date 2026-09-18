@@ -548,6 +548,7 @@ impl YouTubePlatform {
                         started_at,
                         thumbnail_url: thumbnail,
                         auto_record: false,
+                        auto_download_uploads: false,
                         last_live_at: None,
                         // The id of the broadcast actually airing. YouTube's
                         // player API addresses a video, not a channel, so the
@@ -892,6 +893,7 @@ impl Platform for YouTubePlatform {
                         started_at: None,
                         thumbnail_url: None,
                         auto_record: false,
+                        auto_download_uploads: false,
                         last_live_at: None,
                         live_video_id: None,
                     });

@@ -652,6 +652,7 @@ pub async fn run_with_plugins_at(
         let tx = event_tx.clone();
         let rec_tx = recording_tx.clone();
         let cfg = config.clone();
+        let patreon_config_path = config_path.map(std::path::Path::to_path_buf);
         let cancel_clone = cancel.clone();
         let reauth = patreon_reauth.clone();
         tokio::spawn(async move {
@@ -704,7 +705,8 @@ pub async fn run_with_plugins_at(
                     tx.clone(),
                     rec_tx.clone(),
                     cancel_clone.clone(),
-                );
+                )
+                .with_config_path(patreon_config_path.clone());
                 tokio::select! {
                     _ = monitor.run() => break,
                     _ = reauth.notified() => {
@@ -755,6 +757,7 @@ pub async fn run_with_plugins_at(
             cancel.clone(),
         );
         monitor.set_auth_notify(auth_notify.clone());
+        monitor.set_config_path(config_path.map(std::path::Path::to_path_buf));
         if let Some(ref db) = persist_db {
             monitor.set_persist(db.clone());
         }

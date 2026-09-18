@@ -2,6 +2,54 @@
 /// never needed the reload workaround — it is a controller purely so the
 /// reconciler can treat every tile the same way, and so a repaint stops
 /// dropping playback position on the floor.
+// Defect 2: codec → MIME map used to pre-check browser support and to name
+// the format in the stall/error overlay. Values are representative profile
+// strings, not the file's exact profile — good enough for isTypeSupported
+// to answer yes/no on the codec family.
+const RECORDING_CODEC_MIME = {
+  av1: { mime: 'video/webm; codecs="av01.0.08M.08"', label: "AV1", kind: "video" },
+  vp9: { mime: 'video/webm; codecs="vp09.00.40.08"', label: "VP9", kind: "video" },
+  h264: { mime: 'video/mp4; codecs="avc1.640028"', label: "H.264", kind: "video" },
+  hevc: { mime: 'video/mp4; codecs="hvc1.1.6.L120.90"', label: "HEVC", kind: "video" },
+  opus: { mime: 'audio/webm; codecs="opus"', label: "Opus", kind: "audio" },
+  aac: { mime: 'audio/mp4; codecs="mp4a.40.2"', label: "AAC", kind: "audio" },
+};
+function recordingCodecSupport(codec) {
+  const entry = RECORDING_CODEC_MIME[String(codec || "").toLowerCase()];
+  if (!entry) return null;
+  let supported = null;
+  try {
+    if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) {
+      supported = MediaSource.isTypeSupported(entry.mime);
+    }
+  } catch (_) {
+    /* advisory */
+  }
+  if (supported === null) {
+    try {
+      const probe = document.createElement(entry.kind === "audio" ? "audio" : "video");
+      const ans = probe.canPlayType(entry.mime);
+      supported = ans !== "";
+    } catch (_) {
+      supported = null;
+    }
+  }
+  return { ...entry, supported };
+}
+function recordingCodecNote(videoCodec, audioCodec) {
+  const parts = [];
+  const flags = [];
+  [["video", videoCodec], ["audio", audioCodec]].forEach(([role, codec]) => {
+    if (!codec) return;
+    const info = recordingCodecSupport(codec);
+    const label = (info && info.label) || codec;
+    parts.push(`${label} ${role}`);
+    if (info && info.supported === false) flags.push(`${label} is not supported by this browser`);
+  });
+  if (!parts.length) return "";
+  return parts.join(" / ") + (flags.length ? ` — ${flags.join("; ")}.` : ".");
+}
+
 function makeRecordingController(spec) {
   const el = document.createElement("video");
   el.className = "watch-tile-iframe ms-video";
@@ -19,8 +67,13 @@ function makeRecordingController(spec) {
   // this the tile just sits there looking like it is still loading, which is
   // indistinguishable from a slow network.
   let watchdog = null;
+  let stallWatchdog = null;
+  let stallBaseline = null;
   let errorNote = null;
   let loadingRequested = false;
+  const outputPath = spec.outputPath || "";
+  const recordingId = spec.recordingId || "";
+  const downloadUrl = recordingId ? `/api/v1/recordings/${encodeURIComponent(recordingId)}/download` : "";
   const clearFailure = () => {
     delete el.dataset.failed;
     errorNote?.remove();
@@ -29,6 +82,11 @@ function makeRecordingController(spec) {
   const cancelWatchdog = () => {
     if (watchdog) clearTimeout(watchdog);
     watchdog = null;
+  };
+  const cancelStallWatchdog = () => {
+    if (stallWatchdog) clearTimeout(stallWatchdog);
+    stallWatchdog = null;
+    stallBaseline = null;
   };
   const startWatchdog = () => {
     cancelWatchdog();
@@ -39,23 +97,52 @@ function makeRecordingController(spec) {
       }
     }, 15000);
   };
+  // Metadata loading is not the only way playback can go nowhere: a file can
+  // report loadedmetadata and then simply never decode a frame (black
+  // screen, dead audio, no error event at all). Once metadata is in and
+  // playback is wanted, sample currentTime every 8s; if it hasn't moved and
+  // the element isn't paused/ended/seeking, that's a stall.
+  const armStallWatchdog = () => {
+    cancelStallWatchdog();
+    if (!loadingRequested || el.paused || el.ended || el.dataset.failed) return;
+    stallBaseline = el.currentTime;
+    stallWatchdog = setTimeout(() => {
+      if (!loadingRequested || el.paused || el.ended || el.seeking || el.dataset.failed) return;
+      if (Math.abs(el.currentTime - stallBaseline) < 0.25) {
+        fail("stall", "playback loaded but never started decoding frames");
+      } else {
+        armStallWatchdog();
+      }
+    }, 8000);
+  };
   const fail = (kind, why) => {
     if (el.dataset.failed === kind) return;
     cancelWatchdog();
+    cancelStallWatchdog();
     el.dataset.failed = kind;
     errorNote?.remove();
+    const codecNote = recordingCodecNote(spec.videoCodec, spec.audioCodec);
     const note = document.createElement("div");
     note.className = "ms-media-error";
     note.innerHTML =
       `<strong>Can't play this recording</strong><span>${htmlEscape(why)}</span>` +
       (kind === "decode" ? `<span class="pg-cap-hint">The file may need repair or remuxing.</span>` : "") +
-      `<button type="button" class="btn btn-ghost btn-sm">Retry</button>`;
-    note.querySelector("button")?.addEventListener("click", () => {
+      (codecNote ? `<span class="pg-cap-hint">${htmlEscape(codecNote)}</span>` : "") +
+      `<span class="ms-media-error-actions">` +
+      `<button type="button" class="btn btn-ghost btn-sm ms-media-error-retry">Retry</button>` +
+      (downloadUrl ? `<a class="btn btn-ghost btn-sm ms-media-error-download" href="${htmlEscape(downloadUrl)}" download>Download file</a>` : "") +
+      (outputPath ? `<button type="button" class="btn btn-ghost btn-sm ms-media-error-copy-path" data-path="${htmlEscape(outputPath)}">Copy file path</button>` : "") +
+      `</span>`;
+    note.querySelector(".ms-media-error-retry")?.addEventListener("click", () => {
       clearFailure();
       loadingRequested = true;
       el.load();
       startWatchdog();
       el.play().catch(() => {});
+    });
+    note.querySelector(".ms-media-error-copy-path")?.addEventListener("click", (e) => {
+      const p = e.currentTarget.dataset.path || "";
+      try { navigator.clipboard && navigator.clipboard.writeText(p); } catch (_) { /* advisory */ }
     });
     el.parentElement?.appendChild(note);
     errorNote = note;
@@ -74,7 +161,15 @@ function makeRecordingController(spec) {
   // metadata, which is exactly the truncated-MP4 case, so time it out too.
   const seen = () => { cancelWatchdog(); clearFailure(); };
   el.addEventListener("loadedmetadata", seen);
+  el.addEventListener("loadedmetadata", () => { if (playing) armStallWatchdog(); });
   el.addEventListener("playing", seen);
+  el.addEventListener("playing", () => armStallWatchdog());
+  // Disarm on anything that legitimately stops advancing time, so a healthy
+  // paused/seeking/ended video never trips the watchdog.
+  el.addEventListener("pause", cancelStallWatchdog);
+  el.addEventListener("seeking", cancelStallWatchdog);
+  el.addEventListener("seeked", () => { if (!el.paused) armStallWatchdog(); });
+  el.addEventListener("ended", cancelStallWatchdog);
   if (playing) { loadingRequested = true; startWatchdog(); }
 
   const subs = new Set();
@@ -114,6 +209,7 @@ function makeRecordingController(spec) {
     },
     destroy() {
       cancelWatchdog();
+      cancelStallWatchdog();
       loadingRequested = false;
       clearFailure();
       try {
@@ -135,7 +231,7 @@ function makeRecordingController(spec) {
     },
     repoint(next) {
       if (next && next.src && next.src !== el.getAttribute("src")) {
-        cancelWatchdog(); clearFailure();
+        cancelWatchdog(); cancelStallWatchdog(); clearFailure();
         loadingRequested = !!next.playing;
         el.src = next.src;
         if (loadingRequested) startWatchdog();
@@ -145,7 +241,7 @@ function makeRecordingController(spec) {
       return true;
     },
     play() { loadingRequested = true; startWatchdog(); el.play().catch(() => {}); },
-    pause() { loadingRequested = false; cancelWatchdog(); el.pause(); },
+    pause() { loadingRequested = false; cancelWatchdog(); cancelStallWatchdog(); el.pause(); },
     togglePlay() { el.paused ? controller.play() : controller.pause(); },
     seek(sec) { try { el.currentTime = Math.max(0, sec); } catch (_) { /* advisory */ } },
     currentTime() { return el.currentTime; },

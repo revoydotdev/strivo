@@ -314,6 +314,10 @@ function reconcileControllers(stage) {
           // YouTube's player API addresses a video; the daemon resolves the
           // airing broadcast's id during live detection.
           videoId: mount.dataset.videoId || "",
+          videoCodec: mount.dataset.videoCodec || "",
+          audioCodec: mount.dataset.audioCodec || "",
+          outputPath: mount.dataset.outputPath || "",
+          recordingId: mount.dataset.recordingId || "",
           muted,
           volume: tileVolumeForKey(sourceKey),
           playing: mount.dataset.playing !== "0",

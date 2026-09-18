@@ -1031,6 +1031,12 @@
   z-index: 4;
 }
 .ms-media-error strong { font-size: 0.82rem; }
+.ms-media-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+}
 
 /* Playback state stays inside the rounded tile instead of looking like a
  * page-wide spinner. It is text-first for accessibility and only appears

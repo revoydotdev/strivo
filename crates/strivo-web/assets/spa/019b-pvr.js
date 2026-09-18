@@ -28,6 +28,30 @@ function restoreWallLayoutAfterPlay() {
   _prePlayLayout = undefined;
 }
 
+// Defect 1: the multiview wall (#/watch) starts every tile silent — that's
+// the correct default there (see tileVolumeForKey in 018-pvr.js). But the
+// dedicated #/play route is a deliberate single-recording open, not a wall
+// full of tiles the viewer hasn't chosen yet, so a recording with no saved
+// per-content volume should come up audible at whatever the viewer last set
+// IN THIS PLAYER — not silent. A saved per-recording volume (from either
+// route, since both key off contentKeyOf) still wins over this default.
+const PLAY_VOLUME_KEY = "strivo:play-volume";
+function loadPlayVolume() {
+  try {
+    const v = parseFloat(localStorage.getItem(PLAY_VOLUME_KEY));
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+  } catch (_) {
+    return 1;
+  }
+}
+function savePlayVolume(v) {
+  try {
+    localStorage.setItem(PLAY_VOLUME_KEY, String(Math.max(0, Math.min(1, v))));
+  } catch (_) {
+    /* private mode */
+  }
+}
+
 async function renderRecordingPlayer(ctx) {
   // Collapses the left channel rail the same way #/watch does — a
   // single-tile player floating next to a full-width channel list is the
@@ -83,6 +107,10 @@ async function renderRecordingPlayer(ctx) {
          <div class="ms-media">
            <div class="ms-mount" data-content-key="r:${htmlEscape(recordingId)}"
                 data-kind="recording" data-path="" data-playing="1"
+                data-video-codec="${htmlEscape((rec && rec.video_codec) || "")}"
+                data-audio-codec="${htmlEscape((rec && rec.audio_codec) || "")}"
+                data-output-path="${htmlEscape((rec && rec.output_path) || "")}"
+                data-recording-id="${htmlEscape(recordingId)}"
                 data-src="/api/v1/recordings/${encodeURIComponent(recordingId)}/download"></div>
          </div>
          <div class="player-bar"></div>
@@ -119,11 +147,23 @@ async function renderRecordingPlayer(ctx) {
   playerState.layout = _slot(null, recordingId);
 
   const contentKey = `r:${recordingId}`;
+  const hasSavedVolume = Object.prototype.hasOwnProperty.call(playerState.volumes || {}, contentKey);
+  if (!hasSavedVolume) {
+    // Seed this recording's per-content volume from the recording player's
+    // remembered volume (default 1.0) rather than leaving it unset — unset
+    // reads as 0 (silent) everywhere else in the player stack.
+    setTileVolumeAt("", loadPlayVolume());
+  }
+
   let ctl = playerState.controllers.get(contentKey);
   if (!ctl) {
     try {
       ctl = _playerControllerFactory("recording", {
         src: mount.dataset.src,
+        videoCodec: mount.dataset.videoCodec || "",
+        audioCodec: mount.dataset.audioCodec || "",
+        outputPath: mount.dataset.outputPath || "",
+        recordingId: mount.dataset.recordingId || "",
         muted: computeMuted(""),
         volume: tileVolumeAt(""),
         playing: true,
@@ -140,6 +180,12 @@ async function renderRecordingPlayer(ctx) {
 
   mountPlayerBar(leaf, ctl, { path: "" });
   wireTileKeys(leaf, () => playerState.controllers.get(contentKey));
+
+  // Remember whatever the viewer dials to next time a recording opens here
+  // with no saved volume of its own.
+  leaf.querySelector(".ms-vol")?.addEventListener("input", (e) => {
+    savePlayVolume(Number(e.target.value) / 100);
+  });
 
   if (seekTo > 0 && typeof ctl.onState === "function") {
     const unsub = ctl.onState((s) => {

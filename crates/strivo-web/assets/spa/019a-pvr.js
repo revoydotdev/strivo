@@ -154,6 +154,10 @@ function renderPopulatedSlotHtml(slot, path, streams) {
           <div class="ms-mount" data-content-key="r:${htmlEscape(slot.recordingId)}"
                data-kind="recording" data-path="${htmlEscape(path)}"
                data-playing="${playing ? "1" : "0"}"
+               data-video-codec="${htmlEscape((rec && rec.video_codec) || "")}"
+               data-audio-codec="${htmlEscape((rec && rec.audio_codec) || "")}"
+               data-output-path="${htmlEscape((rec && rec.output_path) || "")}"
+               data-recording-id="${htmlEscape(slot.recordingId)}"
                data-src="/api/v1/recordings/${encodeURIComponent(slot.recordingId)}/download"></div>
         </div>
         <div class="player-bar" data-recording-channel="${htmlEscape(channel)}"></div>

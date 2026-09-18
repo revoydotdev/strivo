@@ -8,20 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
-- **Auto-download new uploads, Twitch/YouTube/Patreon, both editions.** The
-  channel rail's right-click "Automatic downloads" section now lists
-  **Livestreams** and **Uploads** as two adjacent, independently toggleable
-  checkboxes — both functional in a plain PVR build, not just Creator. A
-  new `auto_download_uploads` config list (Twitch/YouTube) mirrors
-  `auto_record_channels`'s shape; Patreon reuses the existing
-  `auto_pull_creators` list rather than gaining a second one. The monitor
-  checks opted-in channels for new uploads on their own 15-minute cadence
-  (separate from the ~90s live-status poll, to avoid multiplying API cost),
-  persists a per-channel watermark (the newest publish time seen, cleared when
-  a channel is opted out) so a fresh opt-in never triggers a
-  back-catalog download, dedupes against the recordings catalog and any
-  in-flight download, and skips a Twitch/YouTube channel's own past-
-  broadcast VOD when `auto_record` already captures it live. New route:
+- **Auto-download new uploads, Twitch/YouTube/Patreon, both editions.** A
+  monitored Twitch/YouTube channel (livestream auto-record on) now also
+  downloads its new uploads; the channel rail's right-click "Automatic
+  downloads" section shows **Uploads** as "Included with Livestreams" for
+  those, and as its own toggle for channels that aren't monitored (the new
+  `auto_download_uploads` config list — extra channels beyond the monitored
+  ones). Patreon reuses the existing `auto_pull_creators` list. The channel
+  detail's Recent uploads header shows the same state. The monitor checks
+  eligible channels for new uploads on their own 15-minute cadence (separate
+  from the ~90s live-status poll, to avoid multiplying API cost), persists a
+  per-channel watermark (the newest publish time seen) so a channel's first
+  check never triggers a back-catalog download, dedupes against the
+  recordings catalog, in-flight downloads, and its own just-enqueued pulls
+  (repeated WebSub pushes can't double-download), and skips a channel's
+  past-broadcast VOD only when a live capture of that broadcast actually
+  exists. Each check logs a one-line summary at info level. New route:
   `PUT /api/v1/channels/{key}/auto_download_uploads`.
 - **Dedicated recording player route (`#/play?recording=<id>`).** Opening a
   recording no longer lands on the live multiview wall (`#/watch`) with its
@@ -40,8 +42,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   platform.** A row is inert until a matching finished download exists, at
   which point it opens the in-app recording player — the same rule already
   applied to Past Broadcasts.
+- **Recordings carry `video_codec` / `audio_codec`** (ffprobe `codec_name`,
+  probed when a recording finishes) on `GET /api/v1/recordings` and
+  `/recordings/{id}`, and a finished recording's `duration_secs` is now the
+  media's real duration rather than the job's wall-clock run time.
+- **Channel rail rows and Home's Live Now cards are no longer links**, so
+  hovering one no longer paints its URL in the browser's status bar. They
+  stay keyboard-reachable (`role="link"`, Enter/Space) and draggable.
 
 ### Fixed
+- **The recording player (`#/play`) opened muted at volume 0.** It inherited
+  the multiview wall's "silent until raised" tile rule; it now starts audible
+  at the last recording-player volume (a saved per-recording volume still
+  wins). Wall tiles still start silent.
+- **A recording that loaded but never decoded a frame sat on a black screen
+  with no feedback.** An 8-second stall watchdog now shows the "Can't play
+  this recording" overlay — with the file's codecs and whether this browser
+  supports them, plus Retry / Download file / Copy file path — while
+  ordinary buffering (data still arriving) is left alone.
+- **VOD download progress went backwards and froze during the merge.**
+  yt-dlp fetches video then audio and restarts its percentage per format;
+  progress is now one overall, monotonic figure, a new `download_phase`
+  (`downloading` / `merging`) drives a "Merging…" label, and
+  `bytes_written` reflects the partial files on disk instead of 0 until the
+  merge finished.
+- **Manual VOD downloads recorded an empty `channel_id`** and could start a
+  second yt-dlp for a URL already downloading; the SPA now sends the
+  channel id and the daemon ignores a duplicate in-flight request.
+- **The channel context menu read every channel as unmonitored** — it
+  called `.find()` on the `{channels: […]}` response wrapper instead of its
+  array.
 - **Channel rail context menu: "Download uploads" was Creator-only and
   mislabeled.** The PVR build showed a permanently-disabled "(Creator)"
   button, and the Creator build's control was actually the archiver

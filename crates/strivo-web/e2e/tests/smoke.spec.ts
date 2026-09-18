@@ -23,7 +23,11 @@ test("left rail lists channels, live first", async ({ page }) => {
   await page.goto("/app#/library");
   await expect(page.locator("#channel-list")).toBeVisible();
   await expect(page.locator("#channel-list .ch-row", { hasText: "Live Channel" })).toBeVisible();
-  await expect(page.locator("#channel-list .ch-row", { hasText: "Offline Channel" })).toBeVisible();
+  // "Offline Channel" has auto_record: true in the mock fixture, so it
+  // renders in both the MONITORED and OFFLINE sections (paintChannelList,
+  // 012-pvr.js) — scope to the OFFLINE section body to avoid a strict-mode
+  // multi-match.
+  await expect(page.locator("#rail-sec-offline .ch-row", { hasText: "Offline Channel" })).toBeVisible();
   // LIVE section header appears for the live channel.
   await expect(page.locator(".ch-section-title", { hasText: "LIVE" })).toBeVisible();
 });
@@ -44,6 +48,39 @@ test("clicking a YouTube channel shows detail with streams + uploads", async ({ 
   await expect(page.getByText("How I edit my videos")).toBeVisible();
   await expect(page.locator(".cd-section-title.past-broadcasts", { hasText: "Past Broadcasts" })).toBeVisible();
   await expect(page.locator(".cd-section-title", { hasText: "Recent uploads" })).toBeVisible();
+});
+
+test("channel rail rows are not links and are keyboard-activatable (item 4)", async ({ page }) => {
+  await page.goto("/app#/library");
+  const row = page.locator(".ch-row", { hasText: "Live Channel" });
+  await expect(row).toBeVisible();
+  // No href — the bug was hovering a row painting its destination in the
+  // browser's status bar, which only an <a href> can do.
+  await expect(row).not.toHaveAttribute("href", /.*/);
+  await expect(row).toHaveAttribute("role", "link");
+  await expect(row).toHaveAttribute("tabindex", "0");
+  await row.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".cd-name")).toHaveText("Live Channel");
+});
+
+test("Recent uploads header shows an explicit toggle for an unmonitored channel", async ({ page }) => {
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("Yesterday's livestream")).toBeVisible();
+  // "Live Channel" has auto_record: false in the mock fixture, so uploads
+  // aren't implied — the header shows a live toggle (item 5).
+  const toggle = page.locator('[data-action="toggle-auto-download-uploads"]');
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.url().includes("/auto_download_uploads") && req.method() === "PUT",
+    ),
+    toggle.click(),
+  ]);
+  expect(request.postDataJSON()).toMatchObject({ enabled: true });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
 });
 
 test("past-broadcasts pills have a download button that flips to Downloading on click", async ({ page }) => {
@@ -80,15 +117,16 @@ test("patreon creators appear in the left rail (seeded from /patreon)", async ({
 
 test("offline channels collapse into one sortable list", async ({ page }) => {
   await page.goto("/app#/library");
-  // Exactly two sections: LIVE and OFFLINE.
-  await expect(page.locator(".ch-section-title")).toHaveCount(2);
+  // LIVE, MONITORED (auto_record channels, which can overlap OFFLINE — see
+  // "Offline Channel" in the mock fixture) and OFFLINE.
+  await expect(page.locator(".ch-section-title")).toHaveCount(3);
   const offline = page.locator('.ch-section-title[data-rail-section="offline"]');
   await expect(offline).toHaveAttribute("aria-expanded", "true");
   await offline.click();
   await expect(offline).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator('[data-rail-body="offline"]')).toBeHidden();
-  // Sort control offers name plus both last-live directions.
-  await expect(page.locator("#rail-sort option")).toHaveCount(3);
+  // Sort control offers name, both last-live directions, and viewers.
+  await expect(page.locator("#rail-sort option")).toHaveCount(4);
 });
 
 test("no Activity surface anywhere", async ({ page }) => {
@@ -355,7 +393,10 @@ test("recordings: ▶ Play opens the dedicated recording player", async ({ page 
   const tile = page.locator(".ms-leaf-rec").first();
   await expect(tile).toBeVisible();
   await expect(tile.locator("video.ms-video")).toBeVisible();
-  await expect(tile.locator(".ms-solo")).toBeVisible();
+  // Item 1: #/play now starts a recording audible by default (no saved
+  // per-content volume), so the mute button renders as .ms-unsolo ("mute
+  // this tile"), not .ms-solo ("unmute — solo this tile").
+  await expect(tile.locator(".ms-unsolo")).toBeVisible();
   await expect(tile.locator(".ms-fs")).toBeVisible();
   await expect(tile.locator(".ms-remove")).toBeVisible();
 });

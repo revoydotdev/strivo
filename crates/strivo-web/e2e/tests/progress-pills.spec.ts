@@ -376,3 +376,108 @@ test("a Finished upload's row opens the in-app player, never the source platform
   await page.waitForFunction(() => /#\/play\?recording=/.test(window.location.hash));
   expect(page.url()).toContain(`#/play?recording=${jobId}`);
 });
+
+// ── Full click → POST → SSE sequence (item 3 regression) ──────────────
+//
+// Every test above pre-seeds a job already in recCache; nothing drove the
+// actual click → POST /vods/download → RecordingStarted(ResolvingUrl) →
+// RecordingStarted(Recording) → RecordingProgress ticks (bytes only, then
+// download_pct, then download_phase:"merging") → RecordingFinished
+// sequence the real daemon emits. This is the permanent regression guard
+// for that path, including that the POST body carries channel_id (C1) and
+// that the merging phase renders distinctly from a plain percentage (C2).
+
+test("clicking Download drives the pill through the real RecordingStarted/Progress/Finished sequence", async ({ page, request }) => {
+  const jobId = crypto.randomUUID();
+  let started = false;
+  let state = "ResolvingUrl";
+
+  const job = () => ({
+    id: jobId,
+    channel_id: "UClive0000000000000000aa",
+    channel_name: "Live Channel",
+    platform: "YouTube",
+    stream_title: "Yesterday's livestream",
+    state,
+    source_url: VOD_URL,
+    output_path: "/x/out.mkv",
+    started_at: new Date().toISOString(),
+    bytes_written: 0,
+    duration_secs: 0,
+    transcode: false,
+    error: null,
+    watched: false,
+    playlist: null,
+    thumbnail_url: null,
+    file_exists: state === "Finished",
+  });
+
+  await page.route("**/api/v1/recordings*", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    if (started) body.recordings = [job(), ...body.recordings];
+    await route.fulfill({ response, json: body });
+  });
+
+  let postBody: Record<string, unknown> | null = null;
+  await page.route("**/api/v1/vods/download", (route) => {
+    postBody = route.request().postDataJSON();
+    return route.fulfill({ status: 202, contentType: "application/json", body: '{"status":"queued"}' });
+  });
+
+  const broadcast = (data: unknown) => request.post("/__test__/broadcast", { data });
+
+  await page.goto("/app#/library");
+  await page.locator(".ch-row", { hasText: "Live Channel" }).click();
+  await expect(page.getByText("Yesterday's livestream")).toBeVisible();
+
+  const dlBtn = vodPillButton(page);
+  await expect(dlBtn).toHaveClass(/vod-dl-idle/);
+  await dlBtn.click();
+
+  // C1: the click sends channel_id, not just channel_name.
+  await expect.poll(() => postBody).not.toBeNull();
+  expect(postBody).toMatchObject({ url: VOD_URL, channel_id: "UClive0000000000000000aa" });
+
+  // RecordingStarted carries no job payload the SPA reads directly — it
+  // just invalidates and refetches /recordings (036-pvr.js) — so recCache
+  // only picks up the new job once that refetch lands. Wait for it
+  // explicitly before sending ticks that patch the job BY ID, or a tick
+  // that outraces the refetch silently no-ops (recCache.find returns
+  // nothing) and the assertions below would be testing a false pass.
+  started = true;
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes("/api/v1/recordings") && r.request().method() === "GET"),
+    broadcast({ RecordingStarted: { job: { ...job(), state: "ResolvingUrl" } } }),
+  ]);
+  state = "Recording";
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes("/api/v1/recordings") && r.request().method() === "GET"),
+    broadcast({ RecordingStarted: { job: job() } }),
+  ]);
+  await expect(dlBtn).toHaveClass(/vod-dl-downloading/);
+
+  // Progress with no pct yet — bytes-only tick.
+  await broadcast({ RecordingProgress: { job_id: jobId, bytes_written: 1_000_000, duration_secs: 5 } });
+  await expect(dlBtn.locator(".vod-dl-label")).toContainText("Downloading");
+
+  // Ticks with a rising download_pct.
+  await broadcast({ RecordingProgress: { job_id: jobId, bytes_written: 40_000_000, duration_secs: 20, download_pct: 42 } });
+  await expect(dlBtn.locator(".vod-dl-label")).toContainText("42%");
+
+  // Video+audio both finished downloading; merging begins. Bar holds its
+  // last percent, label switches to "Merging…" (C2).
+  await broadcast({ RecordingProgress: { job_id: jobId, bytes_written: 95_000_000, duration_secs: 40, download_pct: 99, download_phase: "merging" } });
+  await expect(dlBtn.locator(".vod-dl-label")).toHaveText("Merging…");
+  // Bar keeps its last download percent — merging isn't a new percentage.
+  await expect(dlBtn.locator(".vod-dl-fill")).toHaveAttribute("style", "width:99%");
+
+  state = "Finished";
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes("/api/v1/recordings") && r.request().method() === "GET"),
+    broadcast({ RecordingFinished: { job_id: jobId, final_state: "Finished", error: null } }),
+  ]);
+  await expect(dlBtn).toHaveClass(/vod-dl-downloaded/);
+  await expect(dlBtn).toHaveText("Downloaded");
+});

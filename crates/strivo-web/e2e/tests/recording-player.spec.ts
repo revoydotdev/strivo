@@ -27,6 +27,110 @@ test("a finished recording renders a real player with none of the wall's chrome"
   await expect(page.locator(".watch-toolbar")).toHaveCount(0);
 });
 
+// Defect 1 — #/play must not inherit the multiview wall's silent-by-default
+// tile rule. A recording with no saved per-content volume should come up
+// audible here (remembered recording-player volume, default 1.0); the wall
+// itself (#/watch) keeps every tile silent until raised.
+test("#/play starts a recording audible, not muted at 0", async ({ page }) => {
+  await page.goto(`/app#/play?recording=${FINISHED_ID}`);
+  const video = page.locator("video.ms-video");
+  await expect(video).toHaveCount(1);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
+  await expect
+    .poll(() => video.evaluate((el: HTMLVideoElement) => el.volume))
+    .toBeGreaterThan(0);
+});
+
+test("a wall tile for the same recording still starts silent (#/watch default unchanged)", async ({ page }) => {
+  await page.addInitScript((recordingId) => {
+    localStorage.setItem("strivo-tour-done", "1");
+    localStorage.setItem(
+      "strivo-player-layout",
+      JSON.stringify({ kind: "slot", streamId: null, recordingId }),
+    );
+    localStorage.setItem("strivo-player-preset", "single");
+  }, FINISHED_ID);
+  await page.goto("/app#/watch");
+  const video = page.locator("video.ms-video");
+  await expect(video).toHaveCount(1);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(true);
+});
+
+// Defect 2 — a recording whose metadata loads but never actually decodes a
+// frame (black screen, dead audio, no `error` event) used to sit there
+// forever with no feedback. A genuine decode stall isn't reproducible on
+// demand in headless Chromium (there's no "valid header, zero decodable
+// frames" fixture that behaves the same across engines/CI), so — like the
+// existing performance-media.spec.ts controller tests — this drives the
+// REAL makeRecordingController (via __strivoTestHooks) directly rather than
+// through page navigation, and freezes the real <video> element's
+// `currentTime`/`paused`/`ended`/`seeking` getters so the 8s stall watchdog
+// sees exactly the "loaded but never advancing" condition it exists to
+// catch. `page.clock` fast-forwards past the 8s wait instead of a real
+// wall-clock sleep.
+test("a recording that loads metadata but never advances shows the stall overlay", async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    localStorage.setItem("strivo-tour-done", "1");
+    localStorage.setItem("strivo:e2e", "1");
+  });
+  await page.goto("/app#/library");
+  await page.evaluate(() => {
+    const hook = (window as any).__strivoTestHooks;
+    const host = document.createElement("div");
+    host.id = "stall-recording-test";
+    document.body.appendChild(host);
+    const controller = hook.makeRecordingController({
+      playing: true,
+      muted: true,
+      videoCodec: "av1",
+      audioCodec: "opus",
+    });
+    controller.mount(host);
+    const video = host.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => 0 });
+    Object.defineProperty(video, "paused", { configurable: true, get: () => false });
+    Object.defineProperty(video, "ended", { configurable: true, get: () => false });
+    Object.defineProperty(video, "seeking", { configurable: true, get: () => false });
+    video.dispatchEvent(new Event("loadedmetadata"));
+    video.dispatchEvent(new Event("playing"));
+    (window as any).__stallController = controller;
+  });
+  await expect(page.locator("#stall-recording-test .ms-media-error")).toHaveCount(0);
+  await page.clock.fastForward(8100);
+  await expect(page.locator("#stall-recording-test .ms-media-error")).toBeVisible();
+  await expect(page.locator("#stall-recording-test .ms-media-error")).toContainText(/never started decoding/i);
+  // Codec info (C3) is surfaced when known, with a support verdict per codec.
+  await expect(page.locator("#stall-recording-test .ms-media-error")).toContainText(/AV1 video \/ Opus audio/i);
+  await expect(page.locator("#stall-recording-test .ms-media-error-retry")).toBeVisible();
+});
+
+// A healthy, paused recording must never trip the stall watchdog — pause
+// disarms it (018a-pvr.js), so sitting on a loaded frame for longer than
+// the 8s window is normal, not broken.
+test("a healthy paused recording shows no stall overlay after 8+ seconds", async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    localStorage.setItem("strivo-tour-done", "1");
+    localStorage.setItem("strivo:e2e", "1");
+  });
+  await page.goto("/app#/library");
+  await page.evaluate(() => {
+    const hook = (window as any).__strivoTestHooks;
+    const host = document.createElement("div");
+    host.id = "healthy-recording-test";
+    document.body.appendChild(host);
+    const controller = hook.makeRecordingController({ playing: false, muted: true });
+    controller.mount(host);
+    const video = host.querySelector("video") as HTMLVideoElement;
+    // Metadata loads, then the tile is paused — a normal "loaded, waiting
+    // for the viewer to press play" state.
+    video.dispatchEvent(new Event("loadedmetadata"));
+  });
+  await page.clock.fastForward(9000);
+  await expect(page.locator("#healthy-recording-test .ms-media-error")).toHaveCount(0);
+});
+
 test("an in-progress recording shows the still-recording affordance, not a player", async ({ page }) => {
   await page.goto(`/app#/play?recording=${IN_PROGRESS_ID}`);
   await expect(page.locator(".ms-empty-pill")).toHaveText(/still recording/i);

@@ -100,6 +100,7 @@ pub fn build_payload(event: &DaemonEvent) -> Option<WebhookPayload> {
             final_state,
             error,
             new_path: None,
+            ..
         } => {
             let failed = error.is_some() || matches!(final_state, RecordingState::Failed);
             let event_name = if failed {
@@ -285,6 +286,9 @@ mod tests {
             final_state: RecordingState::Finished,
             error: None,
             new_path: None,
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         };
         let payload = build_payload(&event).expect("payload");
         assert_eq!(payload.event, "recording_finished");
@@ -300,6 +304,9 @@ mod tests {
             final_state: RecordingState::Failed,
             error: Some("ffmpeg exited 1".to_string()),
             new_path: None,
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         };
         let payload = build_payload(&event).expect("payload");
         assert_eq!(payload.event, "recording_failed");
@@ -315,6 +322,9 @@ mod tests {
             final_state: RecordingState::Finished,
             error: Some("incomplete write".to_string()),
             new_path: None,
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         };
         let payload = build_payload(&event).expect("payload");
         assert_eq!(payload.event, "recording_failed");

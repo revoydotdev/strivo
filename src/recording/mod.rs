@@ -154,6 +154,10 @@ pub enum RecordingCommand {
         output_path: PathBuf,
         cookies_path: Option<PathBuf>,
         post_title: Option<String>,
+        /// Platform channel id, when known. Empty/`None` keeps the
+        /// pre-existing behaviour of an empty `RecordingJob::channel_id`.
+        #[serde(default)]
+        channel_id: Option<String>,
     },
 }
 
@@ -271,6 +275,9 @@ fn finalize_completion(
             final_state,
             error,
             new_path: None,
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         });
         return;
     }
@@ -280,6 +287,9 @@ fn finalize_completion(
             final_state,
             error,
             new_path: None,
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         });
         return;
     };
@@ -325,6 +335,9 @@ fn finalize_completion(
                             final_state: RecordingState::Finished,
                             error: Some(format!("merged segments preserved as {}", temp.display())),
                             new_path: None,
+                            duration_secs: None,
+                            video_codec: None,
+                            audio_codec: None,
                         });
                         return;
                     }
@@ -404,11 +417,38 @@ fn finalize_completion(
             }
         };
 
+        // Finish-time probe: `duration_secs` accumulated during
+        // `RecordingProgress` is wall-clock job time, which for a VOD
+        // download bears no relation to the media's actual duration (a
+        // 90-minute VOD can download in under a minute). ffprobe gives the
+        // real duration plus the codec fields the recordings list exposes.
+        // Best-effort: a probe failure keeps the wall-clock estimate and
+        // leaves the codec fields unset rather than failing the completion.
+        let probe_path = renamed.clone().unwrap_or_else(|| base.clone());
+        let mut probed_duration_secs = None;
+        let mut probed_video_codec = None;
+        let mut probed_audio_codec = None;
+        match crate::media::probe_file(&probe_path).await {
+            Ok(info) => {
+                if info.duration_secs > 0.0 {
+                    probed_duration_secs = Some(info.duration_secs);
+                }
+                probed_video_codec = info.video_codec;
+                probed_audio_codec = info.audio_codec;
+            }
+            Err(e) => {
+                tracing::debug!(job_id = %job_id, error = %e, "post-record ffprobe failed; keeping wall-clock duration");
+            }
+        }
+
         let _ = etx.send(DaemonEvent::RecordingFinished {
             job_id,
             final_state: RecordingState::Finished,
             error: warn,
             new_path: renamed,
+            duration_secs: probed_duration_secs,
+            video_codec: probed_video_codec,
+            audio_codec: probed_audio_codec,
         });
     });
 }
@@ -813,9 +853,25 @@ pub async fn run_manager(
                         }
                         let _ = event_tx.send(DaemonEvent::AllRecordingsStopped);
                     }
-                    RecordingCommand::DownloadVod { url, channel_name, platform, output_path, cookies_path, post_title } => {
+                    RecordingCommand::DownloadVod { url, channel_name, platform, output_path, cookies_path, post_title, channel_id } => {
+                        // Dedupe: a DownloadVod for a URL that's already
+                        // resolving/downloading must not spawn a second
+                        // yt-dlp — a re-download of a *Finished* URL stays
+                        // allowed (that's a deliberate user re-pull).
+                        let already_active = active.values().any(|r| {
+                            r.job.source_url.as_deref() == Some(url.as_str())
+                                && matches!(
+                                    r.job.state,
+                                    RecordingState::ResolvingUrl | RecordingState::Recording
+                                )
+                        });
+                        if already_active {
+                            tracing::info!(url = %url, "VOD download already in flight for this URL; ignoring duplicate request");
+                            continue;
+                        }
+
                         let mut job = RecordingJob::new(
-                            String::new(),
+                            channel_id.unwrap_or_default(),
                             channel_name,
                             platform,
                             output_path.clone(),
@@ -884,7 +940,7 @@ pub async fn run_manager(
                         Err(e) => {
                             rec.job.state = RecordingState::Failed;
                             rec.job.error = Some(e.clone());
-                            let _ = event_tx.send(DaemonEvent::RecordingFinished { job_id, final_state: RecordingState::Failed, error: Some(e.clone()), new_path: None });
+                            let _ = event_tx.send(DaemonEvent::RecordingFinished { job_id, final_state: RecordingState::Failed, error: Some(e.clone()), new_path: None, duration_secs: None, video_codec: None, audio_codec: None });
                             let _ = event_tx.send(DaemonEvent::Error(e));
                         }
                     }
@@ -930,6 +986,7 @@ pub async fn run_manager(
                             download_pct: dp.pct,
                             download_eta_secs: dp.eta_secs,
                             download_rate_bps: dp.rate_bps,
+                            download_phase: dp.phase.map(|p| p.as_str().to_string()),
                         });
 
                         match proc.try_wait() {

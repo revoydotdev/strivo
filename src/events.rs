@@ -37,6 +37,11 @@ pub enum DaemonEvent {
         /// Bytes-per-second transfer rate, or None.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         download_rate_bps: Option<u64>,
+        /// Stage of a yt-dlp VOD pull: `"downloading"` or `"merging"`.
+        /// Omitted for live captures / before the first yt-dlp line parses.
+        /// See `recording::ytdlp::DownloadPhase`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        download_phase: Option<String>,
     },
     RecordingFinished {
         job_id: Uuid,
@@ -48,6 +53,18 @@ pub enum DaemonEvent {
         /// so the library keeps pointing at the file.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         new_path: Option<std::path::PathBuf>,
+        /// ffprobe-measured duration, replacing the wall-clock estimate
+        /// accumulated during `RecordingProgress` — accurate for a VOD pull,
+        /// where wall-clock job time and the media's actual duration are
+        /// unrelated. `None` when the probe failed (wall-clock is kept).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_secs: Option<f64>,
+        /// ffprobe `codec_name` of the first video/audio stream. `None` when
+        /// unknown or the probe failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        video_codec: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio_codec: Option<String>,
     },
     Notification {
         title: String,

@@ -149,6 +149,9 @@ impl DaemonState {
                 final_state,
                 error,
                 new_path,
+                duration_secs,
+                video_codec,
+                audio_codec,
             } => {
                 if let Some(job) = self.recordings.get_mut(job_id) {
                     job.state = *final_state;
@@ -159,6 +162,18 @@ impl DaemonState {
                     // pointing at a name that no longer exists.
                     if let Some(p) = new_path {
                         job.output_path = p.clone();
+                    }
+                    // ffprobe-measured values from the finish-time probe
+                    // replace the wall-clock duration estimate and fill in
+                    // the codec fields; a probe failure leaves both alone.
+                    if let Some(d) = duration_secs {
+                        job.duration_secs = *d;
+                    }
+                    if video_codec.is_some() {
+                        job.video_codec = video_codec.clone();
+                    }
+                    if audio_codec.is_some() {
+                        job.audio_codec = audio_codec.clone();
                     }
                 } else {
                     tracing::warn!(job_id = %job_id, "RecordingFinished for unknown job_id — state desync, journal will not be updated");
@@ -1580,6 +1595,7 @@ async fn handle_client(
                     post_title: Some(post_title),
                     cookies: crate::intents::CookieSource::FromConfig,
                     output_policy: crate::intents::OutputPathPolicy::Fresh,
+                    channel_id: None,
                 };
                 let _ = recording_tx.send(crate::intents::download_vod(spec, &config));
             }
@@ -1588,6 +1604,7 @@ async fn handle_client(
                 channel_name,
                 platform,
                 post_title,
+                channel_id,
             } => {
                 // Routed through `crate::intents::download_vod` so the
                 // cookies/output-path policy is shared with the other
@@ -1599,6 +1616,7 @@ async fn handle_client(
                     post_title,
                     cookies: crate::intents::CookieSource::FromConfig,
                     output_policy: crate::intents::OutputPathPolicy::Fresh,
+                    channel_id,
                 };
                 let _ = recording_tx.send(crate::intents::download_vod(spec, &config));
             }
@@ -2073,9 +2091,10 @@ async fn persist_event(
             job_id,
             final_state,
             error,
-            // The path fix is already applied to the in-memory job by the
-            // state handler above, and `snapshot` serialises that job.
-            new_path: _,
+            // The path fix (and the ffprobe duration/codec fields) are
+            // already applied to the in-memory job by the state handler
+            // above, and `snapshot` serialises that job.
+            ..
         } => {
             let Some(pj) = snapshot(job_id, *final_state, error.clone()) else {
                 tracing::warn!(job_id = %job_id, "persist_event: RecordingFinished for job_id not in in-memory recordings — journal not updated");
@@ -2313,6 +2332,7 @@ mod tests {
             download_pct: None,
             download_eta_secs: None,
             download_rate_bps: None,
+            download_phase: None,
         };
 
         state.apply(&DaemonEvent::CookieSessionRejected {
@@ -2383,6 +2403,9 @@ mod tests {
             final_state: RecordingState::Finished,
             error: None,
             new_path: Some(std::path::PathBuf::from("/tmp/capture.mp4")),
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         });
 
         let got = st.recordings.get(&id).expect("job survives finishing");
@@ -2407,6 +2430,9 @@ mod tests {
             final_state: RecordingState::Finished,
             error: None,
             new_path: None,
+            duration_secs: None,
+            video_codec: None,
+            audio_codec: None,
         });
 
         let got = st.recordings.get(&id).unwrap();

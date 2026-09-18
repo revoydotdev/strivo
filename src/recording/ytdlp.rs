@@ -13,12 +13,41 @@ const STDERR_TAIL_LINES: usize = 40;
 /// Last-known yt-dlp download progress for VOD pulls. Populated by parsing
 /// `[download]  XX.X% of NNN at RR ETA TT` lines on stdout. All fields are
 /// optional because yt-dlp reports `Unknown` for rate + ETA early on.
+///
+/// `pct` is an *overall* 0..100 value across every format yt-dlp downloads
+/// for this job (see [`ProgressAggregator`]) — not the raw per-line percent,
+/// which regresses every time yt-dlp starts a new format.
 #[derive(Debug, Clone, Default)]
 pub struct DownloadProgress {
     pub pct: Option<f32>,
     pub eta_secs: Option<u32>,
     pub rate_bps: Option<u64>,
     pub bytes_total: Option<u64>,
+    /// Which stage of a VOD pull this progress reflects. `None` for
+    /// ffmpeg-driven live captures and before the first yt-dlp line parses.
+    pub phase: Option<DownloadPhase>,
+}
+
+/// Stage of a yt-dlp VOD pull. `Merging` covers the `[Merger]`/
+/// `[VideoRemuxer]`/`[FixupM3u8]` post-processing step yt-dlp runs after all
+/// formats have downloaded — there is no further `[download]` percent during
+/// that window, so the aggregator freezes `pct` rather than reporting it as
+/// stalled or regressing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DownloadPhase {
+    #[default]
+    Downloading,
+    Merging,
+}
+
+impl DownloadPhase {
+    /// Wire value for `DaemonEvent::RecordingProgress::download_phase`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Downloading => "downloading",
+            Self::Merging => "merging",
+        }
+    }
 }
 
 /// Parse "1.23GiB" / "456.7MiB" / "789KiB" / "12B" → bytes. yt-dlp uses
@@ -105,7 +134,194 @@ pub(crate) fn parse_download_line(line: &str) -> Option<DownloadProgress> {
         eta_secs,
         rate_bps,
         bytes_total,
+        phase: None,
     })
+}
+
+/// Parse a `[download] Destination: <path>` line. yt-dlp emits one of these
+/// each time it starts writing a new file — once per format for a
+/// multi-format pull (`bv*+ba/b`), plus once more for the merged output on
+/// single-format/pre-merged selections.
+fn parse_destination_line(line: &str) -> Option<PathBuf> {
+    let body = line
+        .trim_start()
+        .strip_prefix("[download] Destination:")?
+        .trim();
+    if body.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(body))
+    }
+}
+
+/// Parse the format count out of yt-dlp's
+/// `[info] <id>: Downloading N format(s): 399+251-12` line. The count comes
+/// from splitting the id spec after the colon on `+`, not the `N` yt-dlp
+/// prints (that number is a labeling quirk, not reliably the format count).
+fn format_count_from_info_line(line: &str) -> Option<usize> {
+    let after = line.split("Downloading ").nth(1)?;
+    let spec = after.split("format(s):").nth(1)?.trim();
+    if spec.is_empty() {
+        None
+    } else {
+        Some(spec.split('+').count())
+    }
+}
+
+/// True for yt-dlp's post-processing lines that follow all formats
+/// finishing — no further `[download]` percent lines occur during this
+/// window, so the caller should hold `pct` rather than read it as stalled.
+fn is_merge_phase_line(line: &str) -> bool {
+    let l = line.trim_start();
+    l.starts_with("[Merger]") || l.starts_with("[VideoRemuxer]") || l.starts_with("[FixupM3u8]")
+}
+
+/// Turns yt-dlp's per-format, regressing `[download]` percent lines into one
+/// overall, monotonically-increasing 0..100 progress for the whole job.
+///
+/// yt-dlp's default VOD selector (`bv*+ba/b`) downloads video then audio
+/// sequentially, each restarting its own percent from 0, then merges. A
+/// naive pass-through of the raw line (the pre-fix behaviour) regresses
+/// (98% → 15.8%) when the second format starts and goes silent during the
+/// merge — this aggregator weights each format by its `bytes_total` once
+/// known (falling back to an equal share among formats whose size isn't
+/// known yet) and never reports a lower overall percent than it already
+/// has.
+///
+/// Pure and side-effect free so the state machine is unit-testable without
+/// spawning yt-dlp; `YtDlpProcess`'s stdout reader task owns the only
+/// mutable instance.
+#[derive(Debug, Clone)]
+pub(crate) struct ProgressAggregator {
+    total_formats: usize,
+    format_index: usize,
+    format_totals: Vec<Option<u64>>,
+    seen_first_destination: bool,
+    current_pct: f32,
+    monotonic_pct: f32,
+    phase: DownloadPhase,
+    last_eta: Option<u32>,
+    last_rate: Option<u64>,
+}
+
+impl Default for ProgressAggregator {
+    fn default() -> Self {
+        Self {
+            total_formats: 1,
+            format_index: 0,
+            format_totals: vec![None],
+            seen_first_destination: false,
+            current_pct: 0.0,
+            monotonic_pct: 0.0,
+            phase: DownloadPhase::Downloading,
+            last_eta: None,
+            last_rate: None,
+        }
+    }
+}
+
+impl ProgressAggregator {
+    /// Feed one line of yt-dlp stdout.
+    pub(crate) fn observe(&mut self, line: &str) {
+        if let Some(n) = format_count_from_info_line(line) {
+            self.total_formats = n.max(1);
+            self.format_totals = vec![None; self.total_formats];
+            return;
+        }
+        if parse_destination_line(line).is_some() {
+            if self.seen_first_destination {
+                self.format_index =
+                    (self.format_index + 1).min(self.total_formats.saturating_sub(1));
+                self.current_pct = 0.0;
+            } else {
+                self.seen_first_destination = true;
+            }
+            return;
+        }
+        if is_merge_phase_line(line) {
+            self.phase = DownloadPhase::Merging;
+            return;
+        }
+        if let Some(p) = parse_download_line(line) {
+            self.phase = DownloadPhase::Downloading;
+            self.current_pct = p.pct.unwrap_or(self.current_pct);
+            self.last_eta = p.eta_secs;
+            self.last_rate = p.rate_bps;
+            if let Some(bt) = p.bytes_total {
+                if self.format_totals.len() <= self.format_index {
+                    self.format_totals.resize(self.format_index + 1, None);
+                }
+                self.format_totals[self.format_index] = Some(bt);
+            }
+        }
+    }
+
+    /// Weighted overall percent across every format, using known
+    /// `bytes_total`s where available and the average of the known ones as
+    /// a stand-in for formats not yet started.
+    fn overall_pct(&self) -> f32 {
+        if self.total_formats <= 1 {
+            return self.current_pct;
+        }
+        let known: Vec<u64> = self.format_totals.iter().filter_map(|t| *t).collect();
+        let avg = if known.is_empty() {
+            1.0
+        } else {
+            known.iter().sum::<u64>() as f64 / known.len() as f64
+        };
+        let mut total_weight = 0.0f64;
+        let mut done_weight = 0.0f64;
+        for i in 0..self.total_formats {
+            let weight = self
+                .format_totals
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|b| b as f64)
+                .unwrap_or(avg);
+            total_weight += weight;
+            match i.cmp(&self.format_index) {
+                std::cmp::Ordering::Less => done_weight += weight,
+                std::cmp::Ordering::Equal => {
+                    done_weight += weight * (self.current_pct as f64 / 100.0)
+                }
+                std::cmp::Ordering::Greater => {}
+            }
+        }
+        if total_weight <= 0.0 {
+            0.0
+        } else {
+            ((done_weight / total_weight) * 100.0) as f32
+        }
+    }
+
+    /// Current overall progress. Monotonic: never reports a lower `pct` than
+    /// a previous call. Always capped below 100 — literal 100% is reserved
+    /// for the actual `RecordingFinished` event, never this in-progress
+    /// snapshot, which is what keeps the merge phase (no percent of its
+    /// own) from reading as "done" before the job actually is. Capping
+    /// unconditionally (not just once merging starts) is what keeps this
+    /// monotonic: a value already delivered pre-merge can never need to be
+    /// walked back down once the merge phase begins.
+    pub(crate) fn snapshot(&mut self) -> DownloadProgress {
+        let raw = self.overall_pct().clamp(0.0, 100.0);
+        self.monotonic_pct = self.monotonic_pct.max(raw).min(99.9);
+        DownloadProgress {
+            pct: Some(self.monotonic_pct),
+            eta_secs: if self.phase == DownloadPhase::Merging {
+                None
+            } else {
+                self.last_eta
+            },
+            rate_bps: if self.phase == DownloadPhase::Merging {
+                None
+            } else {
+                self.last_rate
+            },
+            bytes_total: self.format_totals.get(self.format_index).copied().flatten(),
+            phase: Some(self.phase),
+        }
+    }
 }
 
 /// YT-2 — resolve a YouTube `/live` channel URL to the underlying
@@ -255,6 +471,12 @@ pub struct YtDlpProcess {
     /// reader task spawned in `with_options`; read each poll tick by the
     /// recording manager to feed `RecordingProgress` events.
     progress: Arc<Mutex<DownloadProgress>>,
+    /// Every `[download] Destination: <path>` yt-dlp has printed so far —
+    /// one per format for a multi-format pull. `file_size()` sums whichever
+    /// of these still exist on disk while the final merged `output_path`
+    /// hasn't been created yet, so `bytes_written` reflects real progress
+    /// instead of reading 0 for the whole download+merge window.
+    destinations: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl YtDlpProcess {
@@ -393,15 +615,36 @@ impl YtDlpProcess {
         }
 
         let progress = Arc::new(Mutex::new(DownloadProgress::default()));
+        let destinations: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
         if let Some(stdout) = child.stdout.take() {
             let progress = progress.clone();
+            let destinations = destinations.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
+                let mut agg = ProgressAggregator::default();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(p) = parse_download_line(&line) {
-                        if let Ok(mut g) = progress.lock() {
-                            *g = p;
+                    if let Some(path) = parse_destination_line(&line) {
+                        if let Ok(mut d) = destinations.lock() {
+                            d.push(path);
                         }
+                    }
+                    let prev_format_index = agg.format_index;
+                    let prev_phase = agg.phase;
+                    agg.observe(&line);
+                    // Phase-transition breadcrumbs only — never the raw line
+                    // (which can carry stream titles/paths) or cookies.
+                    if agg.format_index != prev_format_index {
+                        tracing::debug!(
+                            format = agg.format_index + 1,
+                            total = agg.total_formats,
+                            "yt-dlp: next format download started"
+                        );
+                    }
+                    if agg.phase != prev_phase && agg.phase == DownloadPhase::Merging {
+                        tracing::debug!("yt-dlp: merge/remux phase started");
+                    }
+                    if let Ok(mut g) = progress.lock() {
+                        *g = agg.snapshot();
                     }
                 }
             });
@@ -412,6 +655,7 @@ impl YtDlpProcess {
             output_path,
             stderr_tail,
             progress,
+            destinations,
         })
     }
 
@@ -473,10 +717,28 @@ impl YtDlpProcess {
         Ok(self.child.try_wait()?)
     }
 
+    /// Bytes on disk for this download. The final merged `output_path` only
+    /// exists once yt-dlp finishes merging, so while a multi-format VOD
+    /// pull is still in progress this sums whatever per-format
+    /// `Destination` files are (still) present instead of reporting 0 for
+    /// the whole download+merge window. `--no-keep-video` removes the
+    /// per-format files once the merge lands, so there's no double-count
+    /// once `output_path` exists and the sources are gone.
     pub fn file_size(&self) -> u64 {
-        std::fs::metadata(&self.output_path)
+        let output = std::fs::metadata(&self.output_path)
             .map(|m| m.len())
-            .unwrap_or(0)
+            .unwrap_or(0);
+        let parts: u64 = self
+            .destinations
+            .lock()
+            .map(|d| {
+                d.iter()
+                    .filter_map(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0);
+        output + parts
     }
 
     /// Snapshot the latest `[download]` line yt-dlp emitted. Returns
@@ -702,6 +964,124 @@ mod tests {
         assert!(parse_download_line("ERROR: nope").is_none());
         // Completion line uses "in" instead of "ETA" — out of scope, ignored.
         assert!(parse_download_line("[download] 100% of 1.23GiB in 04:23").is_none());
+    }
+
+    #[test]
+    fn parses_destination_line() {
+        let p = parse_destination_line("[download] Destination: /r/out.f399.mp4").unwrap();
+        assert_eq!(p, PathBuf::from("/r/out.f399.mp4"));
+        assert!(
+            parse_destination_line("[download]  45.2% of 1.23GiB at 5.50MiB/s ETA 00:42").is_none()
+        );
+    }
+
+    #[test]
+    fn parses_format_count_from_info_line() {
+        // Real line (see module doc): the "1" in "1 format(s)" is a
+        // labeling quirk — the actual count comes from splitting the id
+        // spec on '+'.
+        assert_eq!(
+            format_count_from_info_line("[info] -iyIne7c3DM: Downloading 1 format(s): 399+251-12"),
+            Some(2)
+        );
+        assert_eq!(
+            format_count_from_info_line("[info] abc: Downloading 1 format(s): 137"),
+            Some(1)
+        );
+        assert_eq!(
+            format_count_from_info_line("[download] Destination: x"),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_merge_phase_lines() {
+        assert!(is_merge_phase_line(
+            "[Merger] Merging formats into \"/r/out.mkv\""
+        ));
+        assert!(is_merge_phase_line("[VideoRemuxer] Remuxing video"));
+        assert!(is_merge_phase_line("[FixupM3u8] Fixing up \"out.mp4\""));
+        assert!(!is_merge_phase_line("[download] Destination: x"));
+    }
+
+    /// Replays the real yt-dlp transcript from a YouTube VOD pull (video
+    /// then audio sequentially, then merge) and asserts the aggregated
+    /// overall percent never regresses — the bug this fixes had it go
+    /// 98.0% → 15.8% when the audio format started, then freeze at 89.7%
+    /// with no visible merge phase.
+    #[test]
+    fn aggregator_overall_pct_is_monotonic_across_a_real_transcript() {
+        let lines = [
+            "[youtube] Extracting URL: https://www.youtube.com/watch?v=-iyIne7c3DM",
+            "[youtube] -iyIne7c3DM: Downloading webpage",
+            "[info] -iyIne7c3DM: Downloading 1 format(s): 399+251-12",
+            "[download] Destination: /path/out.f399.mp4",
+            "[download]   0.0% of  989.48MiB at  Unknown B/s ETA Unknown",
+            "[download]   2.1% of  989.48MiB at   40.11MiB/s ETA 00:24",
+            "[download]  50.0% of  989.48MiB at   40.11MiB/s ETA 00:12",
+            "[download]  98.0% of  989.48MiB at   20.30MiB/s ETA 00:01",
+            "[download] Destination: /path/out.f251-12.webm",
+            "[download]  15.8% of   80.12MiB at   10.00MiB/s ETA 00:05",
+            "[download]  89.7% of   80.12MiB at   10.00MiB/s ETA 00:01",
+            "[Merger] Merging formats into \"/path/out.mkv\"",
+            "Deleting original file /path/out.f399.mp4 (pass -k to keep)",
+            "Deleting original file /path/out.f251-12.webm (pass -k to keep)",
+        ];
+        let mut agg = ProgressAggregator::default();
+        let mut last_pct = 0.0f32;
+        for line in lines {
+            agg.observe(line);
+            let snap = agg.snapshot();
+            let pct = snap
+                .pct
+                .expect("pct always populated once observing starts");
+            assert!(
+                pct >= last_pct,
+                "pct regressed: {last_pct} -> {pct} on line {line:?}"
+            );
+            last_pct = pct;
+        }
+        assert_eq!(agg.phase, DownloadPhase::Merging);
+        assert!(
+            last_pct < 100.0,
+            "pct must stay below 100 until the job actually finishes, got {last_pct}"
+        );
+        assert!(
+            last_pct > 50.0,
+            "final pct should reflect the large video format being fully done, got {last_pct}"
+        );
+    }
+
+    #[test]
+    fn aggregator_single_format_download_uses_raw_percent() {
+        let mut agg = ProgressAggregator::default();
+        agg.observe("[download] Destination: /r/out.mp4");
+        agg.observe("[download]  45.0% of 100.00MiB at 5.00MiB/s ETA 00:10");
+        let snap = agg.snapshot();
+        assert_eq!(snap.pct, Some(45.0));
+        assert_eq!(snap.phase, Some(DownloadPhase::Downloading));
+    }
+
+    #[test]
+    fn aggregator_merge_phase_holds_and_caps_below_100() {
+        let mut agg = ProgressAggregator::default();
+        agg.observe("[download] Destination: /r/out.mp4");
+        agg.observe("[download] 100.0% of 100.00MiB at 5.00MiB/s ETA 00:00");
+        let before = agg.snapshot().pct.unwrap();
+        assert!(
+            before < 100.0,
+            "must cap below 100 even pre-merge, got {before}"
+        );
+        agg.observe("[Merger] Merging formats into \"/r/out.mkv\"");
+        let held = agg.snapshot().pct.unwrap();
+        assert!(
+            held < 100.0,
+            "merge phase must cap pct below 100, got {held}"
+        );
+        assert!(held >= before, "merge phase must not regress");
+        // No further download lines: stays held on repeated snapshots.
+        let held_again = agg.snapshot().pct.unwrap();
+        assert_eq!(held, held_again);
     }
 }
 

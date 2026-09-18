@@ -52,6 +52,14 @@ pub struct RecordingJob {
     /// correlation instead of FIFO-by-channel-name guesswork.
     #[serde(default)]
     pub source_url: Option<String>,
+    /// ffprobe `codec_name` of the first video stream (e.g. "av1", "vp9",
+    /// "h264", "hevc"). Populated by the finish-time probe; `None` for rows
+    /// persisted before this field existed or when the probe failed.
+    #[serde(default)]
+    pub video_codec: Option<String>,
+    /// ffprobe `codec_name` of the first audio stream (e.g. "opus", "aac").
+    #[serde(default)]
+    pub audio_codec: Option<String>,
 }
 
 impl RecordingJob {
@@ -80,6 +88,8 @@ impl RecordingJob {
             playlist: None,
             thumbnail_url: None,
             source_url: None,
+            video_codec: None,
+            audio_codec: None,
         }
     }
 
@@ -121,6 +131,8 @@ impl RecordingJob {
             playlist: None,
             thumbnail_url: None,
             source_url: None,
+            video_codec: None,
+            audio_codec: None,
         }
     }
 

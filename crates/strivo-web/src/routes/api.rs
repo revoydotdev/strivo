@@ -284,6 +284,11 @@ struct VodDownloadPayload {
     platform: PlatformKind,
     #[serde(default)]
     post_title: Option<String>,
+    /// Platform channel id, when the caller (the channel-detail pane) has
+    /// one. Threaded through to `RecordingJob::channel_id`; empty/absent
+    /// keeps today's behaviour of an empty channel id for the job.
+    #[serde(default)]
+    channel_id: Option<String>,
 }
 
 /// A YouTube URL addressing a channel tab (its live-now alias, uploads
@@ -332,6 +337,7 @@ async fn vod_download(
         channel_name: body.channel_name,
         platform: body.platform,
         post_title: body.post_title,
+        channel_id: body.channel_id,
     };
     match state.ipc.send_command(cmd).await {
         Ok(()) => (StatusCode::ACCEPTED, Json(json!({"status": "queued"}))).into_response(),

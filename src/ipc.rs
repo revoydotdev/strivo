@@ -117,6 +117,12 @@ pub enum ClientMessage {
         /// Display title for the slug; falls back to channel + date.
         #[serde(default)]
         post_title: Option<String>,
+        /// Platform channel id, when the caller has one (the webui's
+        /// channel-detail pane does). Threaded through to
+        /// `RecordingJob::channel_id`; empty/absent keeps the pre-existing
+        /// behaviour of an empty channel id for this job.
+        #[serde(default)]
+        channel_id: Option<String>,
     },
     /// Minimal "start a live capture" envelope used by the webui. The
     /// daemon translates this through `intents::start_recording` so

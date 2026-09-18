@@ -125,13 +125,19 @@
 # # profile = "1080p60+transcript"
 
 # ─── Auto-download uploads (Twitch/YouTube) ────────────────────────────────
-# Each [[auto_download_uploads]] block auto-downloads that channel's new
-# uploads (not its own live-capture VODs — see auto_record_channels above)
-# as the monitor discovers them, at most every 15 minutes. Toggle from the
-# rail's right-click "Automatic downloads → Uploads" menu item; edits there
-# round-trip through this file. Patreon has no entry here — see
-# auto_pull_creators below, which the same rail toggle writes for a Patreon
-# creator.
+# A channel is checked for new uploads (regular VODs/highlights, not its own
+# live-capture — see auto_record_channels above) whenever EITHER it has an
+# [[auto_download_uploads]] block below OR it's in auto_record_channels — a
+# monitored channel implicitly gets its uploads checked too, on the
+# assumption that "record this channel's streams" also means "and don't let
+# a plain upload slip past me". [[auto_download_uploads]] is for channels you
+# want upload-checked WITHOUT also live-recording them; the monitor still
+# discovers new uploads at most every 15 minutes either way. Toggle from the
+# rail's right-click "Automatic downloads → Uploads" menu item, which writes
+# an entry here regardless of auto_record — the webui shows the toggle as on
+# for either reason but only writes/removes this explicit list. Patreon has
+# no entry here — see auto_pull_creators below, which the same rail toggle
+# writes for a Patreon creator.
 #
 # [[auto_download_uploads]]
 # platform     = "twitch"

@@ -29,6 +29,7 @@ pub fn download_vod(spec: DownloadVodSpec, config: &AppConfig) -> RecordingComma
         output_path,
         cookies_path,
         post_title: spec.post_title,
+        channel_id: spec.channel_id,
     }
 }
 
@@ -62,6 +63,7 @@ mod tests {
             post_title: Some("post".into()),
             cookies: CookieSource::Inherit,
             output_policy: policy,
+            channel_id: None,
         }
     }
 

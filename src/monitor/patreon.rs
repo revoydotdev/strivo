@@ -239,6 +239,7 @@ fn auto_pull_spec(
         post_title: Some(post_title.to_string()),
         cookies: crate::intents::CookieSource::FromConfig,
         output_policy: crate::intents::OutputPathPolicy::Fresh,
+        channel_id: None,
     }
 }
 

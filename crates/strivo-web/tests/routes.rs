@@ -1116,6 +1116,103 @@ async fn durable_archive_entry_lists_details_and_range_downloads_without_snapsho
     );
 }
 
+/// `GET /api/v1/recordings` and `GET /api/v1/recordings/{id}` must surface
+/// the finish-time ffprobe `video_codec`/`audio_codec` fields when the
+/// journal row carries them, and omit them (rather than emit `null`
+/// confusingly, though `Option<String>` fields serialize as `null` here
+/// since `RecordingJob` doesn't use `skip_serializing_if` on them) when
+/// they're unset — both are read straight off the persisted `RecordingJob`,
+/// same as every other field, since `augment_recording` just adds
+/// `file_exists` on top.
+#[tokio::test]
+async fn recordings_list_and_detail_expose_codec_fields() {
+    use strivo_core::platform::PlatformKind;
+    use strivo_core::recording::job::{RecordingJob, RecordingState};
+    use strivo_core::recording::persist::{PersistDb, PersistedJob};
+
+    let api_key = "codec-fields-test-key";
+    let dir = tempfile::tempdir().unwrap();
+    let recording_dir = dir.path().join("recordings");
+    std::fs::create_dir_all(&recording_dir).unwrap();
+    let media = recording_dir.join("probed.mkv");
+    std::fs::write(&media, b"probed bytes").unwrap();
+    let config_path = dir.path().join("config.toml");
+    let cfg = strivo_core::config::AppConfig {
+        recording_dir: recording_dir.clone(),
+        ..Default::default()
+    };
+    cfg.save(Some(&config_path)).unwrap();
+
+    let mut job = RecordingJob::new(
+        "codec-channel".into(),
+        "Codec channel".into(),
+        PlatformKind::YouTube,
+        media,
+        false,
+        Some("Probed VOD".into()),
+    );
+    job.state = RecordingState::Finished;
+    job.video_codec = Some("av1".into());
+    job.audio_codec = Some("opus".into());
+    let db_path = dir.path().join("jobs.db");
+    PersistDb::open(&db_path)
+        .unwrap()
+        .upsert_job(&PersistedJob {
+            id: job.id.to_string(),
+            kind: "Recording".into(),
+            payload: serde_json::to_string(&job).unwrap(),
+            state: "finished".into(),
+            attempts: 0,
+            last_error: None,
+            episode_dir: None,
+        })
+        .await
+        .unwrap();
+
+    let mut state = AppState::test_state(api_key);
+    state.config_path = Some(Arc::new(config_path));
+    state.jobs_db_path = Arc::new(db_path);
+    let router = build_router(state);
+
+    let detail = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/recordings/{}", job.id))
+                .header("x-api-key", api_key)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(detail.into_body(), 1024 * 1024).await.unwrap()).unwrap();
+    assert_eq!(body["video_codec"], "av1");
+    assert_eq!(body["audio_codec"], "opus");
+
+    let list = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/recordings?limit=10")
+                .header("x-api-key", api_key)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(list.into_body(), 1024 * 1024).await.unwrap()).unwrap();
+    let recordings = body["recordings"].as_array().expect("recordings array");
+    let found = recordings
+        .iter()
+        .find(|r| r["id"] == job.id.to_string())
+        .expect("seeded job present in list");
+    assert_eq!(found["video_codec"], "av1");
+    assert_eq!(found["audio_codec"], "opus");
+}
+
 /// Builds an `AppState` + real router wired to a durable jobs.db seeded
 /// with a single recording of the given state, same setup as
 /// `durable_archive_entry_lists_details_and_range_downloads_without_snapshot`

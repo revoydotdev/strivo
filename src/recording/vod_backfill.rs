@@ -127,6 +127,7 @@ async fn run(
         post_title: req.stream_title.or(Some(vod.title)),
         cookies: crate::intents::CookieSource::Inherit,
         output_policy: crate::intents::OutputPathPolicy::AdjacentTo(req.live_output_path),
+        channel_id: Some(req.channel_id.clone()),
     };
     recording_tx
         .send(crate::intents::download_vod(spec, &config))

@@ -52,6 +52,11 @@ pub struct ChannelMonitor {
     /// Wall-clock time of the last upload check, so it runs on its own
     /// `UPLOAD_CHECK_INTERVAL_SECS` cadence instead of every `poll_all`.
     last_upload_check: Option<std::time::Instant>,
+    /// URLs enqueued for auto-download by the current daemon run, keyed to
+    /// when they were enqueued. Closes the race where a freshly-enqueued
+    /// job hasn't reached `jobs.db` yet when the next `check_uploads` runs
+    /// — see the dedupe comment in `check_uploads`.
+    enqueued_uploads: HashMap<String, std::time::Instant>,
     /// Where `config` was loaded from. Re-read at the start of every poll so
     /// per-channel opt-ins toggled from the web UI (auto_record,
     /// auto_download_uploads) apply without a daemon restart.
@@ -105,6 +110,7 @@ impl ChannelMonitor {
             upload_watermarks,
             upload_watermarks_path,
             last_upload_check: None,
+            enqueued_uploads: HashMap::new(),
             config_path: None,
         }
     }
@@ -556,9 +562,20 @@ impl ChannelMonitor {
     /// dedupe, and past-broadcast rules. Best-effort throughout: a single
     /// channel's fetch failure never blocks the others or the caller.
     async fn check_uploads(&mut self, channels: &[ChannelEntry]) {
+        // Eligibility: the explicit "Uploads" toggle (`auto_download_uploads`)
+        // always opts a channel in; a channel with live-capture monitoring
+        // on (`auto_record`) is implicitly eligible too, since "record this
+        // channel's streams" reasonably implies "and don't let a plain
+        // upload slip past me" — this was the gap that silently missed a
+        // monitored-but-not-explicitly-upload-opted channel's new upload.
+        // `ChannelEntry.auto_download_uploads` still reflects only the
+        // explicit toggle, so callers (the webui) can tell "explicit" from
+        // "implied by auto_record" apart.
         let opted_in: Vec<&ChannelEntry> = channels
             .iter()
-            .filter(|ch| ch.auto_download_uploads && ch.platform != PlatformKind::Patreon)
+            .filter(|ch| {
+                (ch.auto_download_uploads || ch.auto_record) && ch.platform != PlatformKind::Patreon
+            })
             .collect();
         // Forget watermarks of channels that are no longer opted in, so
         // re-enabling later starts fresh instead of downloading everything
@@ -587,26 +604,75 @@ impl ChannelMonitor {
             return;
         };
 
-        // In-flight source_url set, loaded once per check rather than once
-        // per VOD candidate.
-        let in_flight: std::collections::HashSet<String> = match persist.load_recording_jobs().await
-        {
-            Ok(jobs) => jobs
-                .into_iter()
-                .filter(|j| {
-                    matches!(
-                        j.state,
-                        crate::recording::job::RecordingState::ResolvingUrl
-                            | crate::recording::job::RecordingState::Recording
-                    )
-                })
-                .filter_map(|j| j.source_url)
-                .collect(),
+        // Loaded once per check rather than once per VOD candidate: the
+        // in-flight source_url set (dedupe) and, per channel, the
+        // `started_at` of every live-capture recording (source_url is None
+        // — a DownloadVod job always sets it, see `RecordingJob::source_url`)
+        // for the past-broadcast rule in `uploads::select_new_uploads`.
+        let all_jobs = match persist.load_recording_jobs().await {
+            Ok(jobs) => jobs,
             Err(e) => {
-                tracing::warn!("upload check: failed to load in-flight jobs: {e}");
-                std::collections::HashSet::new()
+                tracing::warn!("upload check: failed to load recording jobs: {e}");
+                Vec::new()
             }
         };
+        let in_flight: std::collections::HashSet<String> = all_jobs
+            .iter()
+            .filter(|j| {
+                matches!(
+                    j.state,
+                    crate::recording::job::RecordingState::ResolvingUrl
+                        | crate::recording::job::RecordingState::Recording
+                )
+            })
+            .filter_map(|j| j.source_url.clone())
+            .collect();
+        let mut captured_by_channel: HashMap<
+            (PlatformKind, String),
+            Vec<chrono::DateTime<chrono::Utc>>,
+        > = HashMap::new();
+        for j in &all_jobs {
+            if j.source_url.is_none() {
+                captured_by_channel
+                    .entry((j.platform, j.channel_id.clone()))
+                    .or_default()
+                    .push(j.started_at);
+            }
+        }
+
+        // Reconcile/expire the "just enqueued this check" dedupe set: drop
+        // an entry once the journal shows its job finished or failed (from
+        // then on `in_flight`/`is_vod_recorded` cover it), or after a
+        // generous TTL regardless — a URL must never get stuck permanently
+        // un-enqueueable if bookkeeping around the journal write is ever
+        // wrong. This exists because `in_flight` alone has a race: a
+        // freshly enqueued job only lands in `jobs.db` asynchronously after
+        // its `RecordingStarted` event, so two `poll_all(force=true)` calls
+        // in quick succession (repeated WebSub `PollNow` pushes) could
+        // otherwise both enqueue the same upload before either's journal
+        // row exists.
+        const ENQUEUED_DEDUPE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+        let completed_urls: std::collections::HashSet<String> = all_jobs
+            .iter()
+            .filter(|j| {
+                matches!(
+                    j.state,
+                    crate::recording::job::RecordingState::Finished
+                        | crate::recording::job::RecordingState::Failed
+                )
+            })
+            .filter_map(|j| j.source_url.clone())
+            .collect();
+        let now = std::time::Instant::now();
+        self.enqueued_uploads.retain(|url, enqueued_at| {
+            !completed_urls.contains(url) && now.duration_since(*enqueued_at) < ENQUEUED_DEDUPE_TTL
+        });
+
+        let channels_checked = opted_in.len();
+        let mut new_uploads_found = 0usize;
+        let mut enqueued = 0usize;
+        let mut skipped_in_flight = 0usize;
+        let mut skipped_already_recorded = 0usize;
 
         for ch in opted_in {
             let key = uploads::watermark_key(ch.platform, &ch.id);
@@ -632,16 +698,25 @@ impl ChannelMonitor {
             }
             let Some(vods) = vods else { continue };
 
-            let picked = uploads::select_new_uploads(&vods, watermark, ch.auto_record);
+            let captured_starts = captured_by_channel
+                .get(&(ch.platform, ch.id.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let picked = uploads::select_new_uploads(&vods, watermark, &captured_starts);
+            new_uploads_found += picked.len();
             for vod in &picked {
-                if in_flight.contains(&vod.url) {
+                if in_flight.contains(&vod.url) || self.enqueued_uploads.contains_key(&vod.url) {
+                    skipped_in_flight += 1;
                     continue;
                 }
                 match persist
                     .is_vod_recorded(vod.platform, &vod.channel_id, &vod.id)
                     .await
                 {
-                    Ok(true) => continue,
+                    Ok(true) => {
+                        skipped_already_recorded += 1;
+                        continue;
+                    }
                     Ok(false) => {}
                     Err(e) => {
                         tracing::warn!("upload check: dedupe lookup failed: {e}");
@@ -651,7 +726,7 @@ impl ChannelMonitor {
                 if let Err(e) = persist.upsert_catalog_entry(vod).await {
                     tracing::warn!("upload check: catalog upsert failed: {e}");
                 }
-                tracing::info!("auto-download upload: {} - {}", ch.display_name, vod.title);
+                tracing::debug!("auto-download upload: {} - {}", ch.display_name, vod.title);
                 let spec = crate::intents::DownloadVodSpec {
                     url: vod.url.clone(),
                     channel_name: ch.display_name.clone(),
@@ -659,10 +734,14 @@ impl ChannelMonitor {
                     post_title: Some(vod.title.clone()),
                     cookies: crate::intents::CookieSource::FromConfig,
                     output_policy: crate::intents::OutputPathPolicy::Fresh,
+                    channel_id: Some(ch.id.clone()),
                 };
                 let _ = self
                     .recording_tx
                     .send(crate::intents::download_vod(spec, &self.config));
+                self.enqueued_uploads
+                    .insert(vod.url.clone(), std::time::Instant::now());
+                enqueued += 1;
             }
 
             // Advance to the newest publish time actually observed, never to
@@ -676,6 +755,18 @@ impl ChannelMonitor {
                 dirty = true;
             }
         }
+
+        // One summary line per check at info level so "nothing happened" is
+        // visible in the daemon log without turning on debug; per-upload
+        // detail stays at debug (see the `tracing::debug!` above).
+        tracing::info!(
+            channels_checked,
+            new_uploads_found,
+            enqueued,
+            skipped_in_flight,
+            skipped_already_recorded,
+            "upload check completed"
+        );
 
         if dirty {
             if let Err(e) =

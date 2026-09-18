@@ -46,6 +46,10 @@ pub struct DownloadVodSpec {
     pub post_title: Option<String>,
     pub cookies: CookieSource,
     pub output_policy: OutputPathPolicy,
+    /// Platform channel id, when known. `None` for callers (Patreon pulls,
+    /// legacy sites) that don't carry one; threaded through to
+    /// `RecordingJob::channel_id`.
+    pub channel_id: Option<String>,
 }
 
 /// Where the downloaded file ends up on disk.

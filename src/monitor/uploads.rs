@@ -29,19 +29,29 @@
 //! (vs. 100 for `search.list`), so even a dense follow list checked every
 //! 15 minutes stays cheap against the default 10,000/day project quota.
 //!
-//! ## Twitch past-broadcast rule
+//! ## Twitch/YouTube past-broadcast rule
 //!
-//! A Twitch channel with `auto_record` on already gets its live broadcasts
+//! A channel with `auto_record` on already gets its live broadcasts
 //! captured directly (and optionally VOD-backfilled — see
 //! `RecordingConfig::auto_vod_backfill`). When that channel's past
-//! broadcast later shows up in `fetch_channel_vods` as a `VodKind::LiveBroadcast`,
-//! it is not a new upload — it is the same stream StriVo already has (or is
-//! already capturing) under a different code path. `select_new_uploads`
-//! therefore skips `VodKind::LiveBroadcast` entries for any channel with
-//! `auto_record` enabled. `VodKind::Upload` (regular uploads, highlights)
-//! is never skipped by this rule. YouTube channels get the same treatment
-//! for the same reason — `fetch_channel_vods` flips a video's kind to
-//! `LiveBroadcast` there too (`annotate_live` in `platform/youtube.rs`).
+//! broadcast later shows up in `fetch_channel_vods` as a
+//! `VodKind::LiveBroadcast`, it usually isn't a new upload — it's the same
+//! stream StriVo already captured under a different code path.
+//!
+//! `auto_record` being *on* is only ever a hint, not proof: the live
+//! recorder can miss a broadcast (daemon restart mid-stream, a capture
+//! failure, or the channel going live before monitoring was ever turned
+//! on for it). Blanket-skipping every `LiveBroadcast` VOD whenever
+//! `auto_record` is on would silently lose those. `select_new_uploads`
+//! therefore only skips a `LiveBroadcast` VOD when the journal actually
+//! holds a live-capture recording (one with no `source_url` — that's what
+//! distinguishes a live capture from a VOD/upload pull, see
+//! `RecordingJob::source_url`) for that channel whose `started_at` falls
+//! inside the broadcast's own window: `published_at - 30min` through
+//! `published_at + duration + 30min`. The ±30 minutes covers scheduling
+//! slop between when yt-dlp/ffmpeg actually attached and when the
+//! platform stamps the VOD's publish time. `VodKind::Upload` (regular
+//! uploads, highlights) is never skipped by this rule.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +59,32 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use crate::platform::{VodEntry, VodKind};
+
+/// Padding on either side of a broadcast's `published_at`..`published_at +
+/// duration` window when checking whether a live-capture recording's
+/// `started_at` falls inside it. See the module doc's past-broadcast rule.
+const BROADCAST_MATCH_PAD_MINS: i64 = 30;
+
+/// True if `captured_starts` (the `started_at` of this channel's live-capture
+/// recordings — see the module doc) contains one that falls inside `vod`'s
+/// own broadcast window, padded by `BROADCAST_MATCH_PAD_MINS` on each side.
+/// A VOD with no `published_at` can't be windowed, so it's never considered
+/// captured by this check.
+fn broadcast_was_captured(vod: &VodEntry, captured_starts: &[DateTime<Utc>]) -> bool {
+    let Some(published) = vod.published_at else {
+        return false;
+    };
+    let pad = chrono::Duration::minutes(BROADCAST_MATCH_PAD_MINS);
+    let duration = vod
+        .duration
+        .and_then(|d| chrono::Duration::from_std(d).ok())
+        .unwrap_or_default();
+    let window_start = published - pad;
+    let window_end = published + duration + pad;
+    captured_starts
+        .iter()
+        .any(|started| *started >= window_start && *started <= window_end)
+}
 
 /// How often (seconds) opted-in channels are checked for new uploads.
 /// See the module doc for the cost rationale.
@@ -66,19 +102,24 @@ pub fn watermark_key(platform: crate::platform::PlatformKind, channel_id: &str) 
 /// client. `watermark` is `None` on a channel's first-ever check: in that
 /// case nothing is "new" (a fresh opt-in must not trigger a back-catalog
 /// stampede — the caller establishes the watermark from this call and
-/// downloads begin on the next check). `auto_record_enabled` implements the
-/// Twitch/YouTube past-broadcast rule described in the module doc.
+/// downloads begin on the next check). `captured_broadcast_starts` (the
+/// channel's live-capture recordings' `started_at`s) drives the past-
+/// broadcast rule described in the module doc — a `LiveBroadcast` VOD is
+/// only skipped when one of them actually falls inside its window.
 pub fn select_new_uploads(
     vods: &[VodEntry],
     watermark: Option<DateTime<Utc>>,
-    auto_record_enabled: bool,
+    captured_broadcast_starts: &[DateTime<Utc>],
 ) -> Vec<VodEntry> {
     let Some(watermark) = watermark else {
         return Vec::new();
     };
     vods.iter()
         .filter(|v| v.published_at.is_some_and(|p| p > watermark))
-        .filter(|v| !(auto_record_enabled && v.kind == VodKind::LiveBroadcast))
+        .filter(|v| {
+            !(v.kind == VodKind::LiveBroadcast
+                && broadcast_was_captured(v, captured_broadcast_starts))
+        })
         .cloned()
         .collect()
 }
@@ -122,13 +163,22 @@ mod tests {
     use crate::platform::PlatformKind;
 
     fn vod(id: &str, published_secs_ago: i64, kind: VodKind) -> VodEntry {
+        vod_with_duration(id, published_secs_ago, kind, None)
+    }
+
+    fn vod_with_duration(
+        id: &str,
+        published_secs_ago: i64,
+        kind: VodKind,
+        duration: Option<std::time::Duration>,
+    ) -> VodEntry {
         VodEntry {
             id: id.into(),
             platform: PlatformKind::Twitch,
             channel_id: "ch1".into(),
             title: id.into(),
             published_at: Some(Utc::now() - chrono::Duration::seconds(published_secs_ago)),
-            duration: None,
+            duration,
             url: format!("https://example/{id}"),
             thumbnail_url: None,
             kind,
@@ -156,7 +206,7 @@ mod tests {
     #[test]
     fn first_check_downloads_nothing() {
         let vods = vec![vod("a", 10, VodKind::Upload)];
-        let picked = select_new_uploads(&vods, None, false);
+        let picked = select_new_uploads(&vods, None, &[]);
         assert!(
             picked.is_empty(),
             "first poll must only establish a watermark"
@@ -170,33 +220,92 @@ mod tests {
             vod("new", 10, VodKind::Upload),
             vod("old", 7200, VodKind::Upload),
         ];
-        let picked = select_new_uploads(&vods, Some(watermark), false);
+        let picked = select_new_uploads(&vods, Some(watermark), &[]);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].id, "new");
     }
 
     #[test]
-    fn live_broadcast_skipped_when_auto_record_on() {
+    fn live_broadcast_skipped_when_a_capture_falls_in_its_window() {
         let watermark = Utc::now() - chrono::Duration::seconds(3600);
-        let vods = vec![vod("stream-vod", 10, VodKind::LiveBroadcast)];
-        let picked = select_new_uploads(&vods, Some(watermark), true);
+        let v = vod("stream-vod", 10, VodKind::LiveBroadcast);
+        // A live capture that started 5 minutes after publish is well
+        // inside the padded window.
+        let captured = [v.published_at.unwrap() + chrono::Duration::minutes(5)];
+        let picked = select_new_uploads(&[v], Some(watermark), &captured);
         assert!(picked.is_empty());
     }
 
     #[test]
-    fn live_broadcast_kept_when_auto_record_off() {
+    fn live_broadcast_kept_when_no_capture_exists() {
         let watermark = Utc::now() - chrono::Duration::seconds(3600);
         let vods = vec![vod("stream-vod", 10, VodKind::LiveBroadcast)];
-        let picked = select_new_uploads(&vods, Some(watermark), false);
+        // No captured starts at all — e.g. auto_record was off, or the
+        // live recorder missed this broadcast despite being on.
+        let picked = select_new_uploads(&vods, Some(watermark), &[]);
         assert_eq!(picked.len(), 1);
     }
 
     #[test]
-    fn upload_kind_never_skipped_by_auto_record_rule() {
+    fn live_broadcast_kept_when_capture_falls_outside_the_window() {
         let watermark = Utc::now() - chrono::Duration::seconds(3600);
-        let vods = vec![vod("clip", 10, VodKind::Upload)];
-        let picked = select_new_uploads(&vods, Some(watermark), true);
+        let v = vod("stream-vod", 10, VodKind::LiveBroadcast);
+        // A capture 2 hours away from publish is nowhere near this
+        // broadcast — some other recording, not this one.
+        let captured = [v.published_at.unwrap() - chrono::Duration::hours(2)];
+        let picked = select_new_uploads(&[v], Some(watermark), &captured);
+        assert_eq!(
+            picked.len(),
+            1,
+            "an unrelated capture must not suppress a real miss"
+        );
+    }
+
+    #[test]
+    fn upload_kind_never_skipped_by_the_broadcast_rule() {
+        let watermark = Utc::now() - chrono::Duration::seconds(3600);
+        let v = vod("clip", 10, VodKind::Upload);
+        let captured = [v.published_at.unwrap()];
+        let picked = select_new_uploads(&[v], Some(watermark), &captured);
         assert_eq!(picked.len(), 1);
+    }
+
+    #[test]
+    fn broadcast_capture_window_padding() {
+        let published = Utc::now();
+        let v = VodEntry {
+            duration: Some(std::time::Duration::from_secs(3600)),
+            ..vod_with_duration("live", 0, VodKind::LiveBroadcast, None)
+        };
+        let v = VodEntry {
+            published_at: Some(published),
+            ..v
+        };
+        // Just inside the padded start (published - 29min).
+        assert!(broadcast_was_captured(
+            &v,
+            &[published - chrono::Duration::minutes(29)]
+        ));
+        // Just inside the padded end (published + 1h duration + 29min).
+        assert!(broadcast_was_captured(
+            &v,
+            &[published + chrono::Duration::minutes(60 + 29)]
+        ));
+        // Outside on both sides.
+        assert!(!broadcast_was_captured(
+            &v,
+            &[published - chrono::Duration::minutes(31)]
+        ));
+        assert!(!broadcast_was_captured(
+            &v,
+            &[published + chrono::Duration::minutes(60 + 31)]
+        ));
+        // No published_at at all — can't be windowed, never "captured".
+        let undated = VodEntry {
+            published_at: None,
+            ..v
+        };
+        assert!(!broadcast_was_captured(&undated, &[published]));
     }
 
     #[test]

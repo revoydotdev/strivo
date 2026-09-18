@@ -647,6 +647,11 @@ th[data-sort]:hover {
   color: var(--fg);
   border-left: 3px solid transparent;
   font-size: 0.875rem;
+  /* Not an <a> — see 012-pvr.js: an href made every hover paint a URL
+     preview in the browser's status bar, which read as broken chrome for
+     what is really a row-select action. cursor: pointer restores the
+     affordance a real link would have given for free. */
+  cursor: pointer;
 }
 .ch-row:hover {
   background: var(--overlay);
@@ -888,6 +893,9 @@ th[data-sort]:hover {
   overflow: hidden;
   background: var(--surface);
   transition: transform 0.12s ease, border-color 0.12s ease;
+  /* Not an <a> (item 4) — restore the pointer affordance a real link
+     would give for free. */
+  cursor: pointer;
 }
 .live-card:hover { transform: translateY(-2px); border-color: var(--accent, #b07cff); }
 /* C20: when a tile inside a transformed ancestor enters fullscreen, the

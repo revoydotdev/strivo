@@ -246,21 +246,25 @@ function recordingsDashboardHtml(compact) {
     </div>`;
 
   // Live-now card: thumbnail + channel name + viewer count + LIVE
-  // chip. Whole card is a hash link to /watch?focus=<id>.
+  // chip. Whole card opens /watch?focus=<id> — but not via a real <a>
+  // (item 4): an href here painted the destination in the browser's
+  // status bar on hover, same defect as the channel rail (012-pvr.js).
+  // role=link + tabindex + Enter/Space activation (wired below) keep the
+  // link semantics without the URL preview.
   const liveCardEl = (c) => {
     const thumb = liveThumbUrl(c);
     const focus = `${c.platform}:${c.id}`;
-    const href = `#/watch?mode=focus&focus=${encodeURIComponent(focus)}`;
+    const dest = `#/watch?mode=focus&focus=${encodeURIComponent(focus)}`;
     const viewers = c.viewer_count != null ? formatCount(c.viewer_count) : "";
     return `
-      <a class="live-card" href="${href}" data-live-focus="${htmlEscape(focus)}"
+      <div class="live-card" role="link" tabindex="0" data-live-focus="${htmlEscape(focus)}" data-dest="${htmlEscape(dest)}"
          title="Open ${htmlEscape(c.display_name || c.name)} in the multi-stream viewer">
         <div class="live-card-thumb">${thumb ? `<img loading="lazy" decoding="async" src="${htmlEscape(thumb)}" alt=""/>` : ""}<span class="live-card-badge micro">LIVE</span></div>
         <div class="live-card-meta">
           <span class="live-card-name">${htmlEscape(c.display_name || c.name)}</span>
           <span class="live-card-sub pg-cap-hint">${htmlEscape(c.platform)}${viewers ? ` · ${viewers}` : ""}</span>
         </div>
-      </a>`;
+      </div>`;
   };
 
   const rowEl = (title, count, html, empty, klass = "") => `
@@ -384,6 +388,17 @@ function wireDashboard() {
       open();
     });
     pill.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  });
+  // Live-now cards (item 4): not real <a>s, so wire activation explicitly.
+  document.querySelectorAll(".live-card").forEach((card) => {
+    const open = () => {
+      const dest = card.dataset.dest;
+      if (dest) window.location.hash = dest;
+    };
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
     });
   });

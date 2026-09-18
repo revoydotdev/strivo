@@ -429,25 +429,25 @@ function paintChannelList() {
     const tier = isPatreon && c.stream_title
       ? `<span class="ch-tier micro" title="pledged tier">${htmlEscape(c.stream_title)}</span>`
       : "";
-    // Filter Recordings + History by this channel when clicked. Live
-    // channels link to the recording dashboard so you can spot the
-    // active capture quickly; offline rows go straight to the filtered
-    // Recordings page (audit B7/M2).
-    const href = c.is_live
-      ? "#/library"
-      : `#/recordings?channel=${encodeURIComponent(c.display_name || c.name || "")}`;
     // Live rows expose a drag handle to the player stage. The id shape
     // here must match the backend's stream_id format (`PlatformKind:id`)
     // so dropping onto a tile resolves to a known stream.
     const liveStreamId = c.is_live ? `${c.platform}:${c.id}` : "";
+    // Item 4: NOT an <a>. Any href here makes hovering a channel paint its
+    // destination in the browser's bottom-left status bar — misleading
+    // chrome for what is a row-select action, not a page navigation. A
+    // plain element with link semantics (role, tabindex, Enter/Space
+    // activation in the wiring below) gets the same keyboard/AT behaviour
+    // without the URL preview. See wireChannelRail below for activation.
     return `
-      <a class="ch-row ${c.is_live ? "live" : ""} ${isPatreon ? "patreon" : ""} ${sel}"
+      <div class="ch-row ${c.is_live ? "live" : ""} ${isPatreon ? "patreon" : ""} ${sel}"
+         role="link" tabindex="0" ${c.is_live ? 'draggable="true"' : ""}
          data-channel-key="${key}" data-channel-id="${c.id}"
-         data-platform="${c.platform}" data-live-stream-id="${htmlEscape(liveStreamId)}" href="${href}">
+         data-platform="${c.platform}" data-live-stream-id="${htmlEscape(liveStreamId)}">
         <span class="ch-plat micro ${c.platform.toLowerCase()}" aria-hidden="true">${platformGlyph(c.platform)}</span>
         <span class="ch-name">${htmlEscape(c.display_name || c.name)}</span>
         ${tier}${viewers}${rec}${unseen ? `<span class="ch-unwatched" title="Unwatched uploads">${unseen}</span>` : ""}
-      </a>`;
+      </div>`;
   };
 
   // Section headers are buttons so they can be collapsed; the open/closed
@@ -482,6 +482,12 @@ function paintChannelList() {
 
   rail.querySelectorAll(".ch-row").forEach((el) => {
     el.addEventListener("click", (e) => {
+      selectChannel(el.dataset.channelKey, e);
+    });
+    // Enter/Space activation — the row-select equivalent of following a
+    // link, now that it isn't one (see the `row` template above).
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
       selectChannel(el.dataset.channelKey, e);
     });

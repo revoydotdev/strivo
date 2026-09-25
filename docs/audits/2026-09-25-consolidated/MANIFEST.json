@@ -1,0 +1,874 @@
+{
+  "schema_version": 1,
+  "register": "consolidated-reverification",
+  "review_date": "2026-09-25",
+  "head": "a8d4f2b535eca7a6fef93713557727ad568f412a",
+  "supersedes": null,
+  "scope": "Every item from the three prior audits, re-checked against the working tree as it is on this date. This register establishes truth and takes no action on any finding.",
+  "sources": [
+    {
+      "ns": "PHASE0",
+      "path": "docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md",
+      "locator": "findings table, lines 60-95",
+      "count": 34,
+      "id_form": "F-nn, gapped (17, 21, 23, 24, 31 never issued)"
+    },
+    {
+      "ns": "WS",
+      "path": "docs/audits/2026-09-06-web-surface/MANIFEST.json",
+      "locator": "issues[] array",
+      "count": 41,
+      "id_form": "S01-S17, R01-R06, V01-V12, CE01-CE06"
+    },
+    {
+      "ns": "CE",
+      "path": "docs/audits/2026-09-08-performance-ux/REPORT.md",
+      "locator": "numbered findings 1-9",
+      "count": 9,
+      "id_form": "1-9, section headings"
+    },
+    {
+      "ns": "DRV",
+      "path": "(this register)",
+      "locator": "derived[] below",
+      "count": 6,
+      "id_form": "DRV-nn, appended fresh"
+    }
+  ],
+  "verdict_vocabulary": {
+    "closed": "Re-checked. The defect no longer exists in current source; the remediation is present and locatable.",
+    "still-open": "Re-checked. The defect still exists, and no prior remediation was ever recorded against it. Carry forward unchanged.",
+    "open": "Re-checked. The defect still exists AND its state changed since the original audit wrote it (partly remediated, cited file moved or deleted, or a new doc/code disagreement found). Needs re-prioritising, not blind re-fixing.",
+    "superseded": "Re-checked. The finding's premise was decided against by a later authoritative decision. Do not action the original text."
+  },
+  "maintenance": "Append-only. Never renumber, reorder, or delete an existing ID. Close an item by recording closure evidence. New findings append with fresh IDs in a fresh namespace.",
+  "namespace_note": "The 2026-09-06 web-surface audit issues S01-S17, R01-R06, V01-V12 and CE01-CE06. The 2026-09-08 performance/UX audit issues 1-9 and its own R01-R07 in its own prose. The two namespaces collided on R01-R07, so every ID here is namespaced: PHASE0/F-nn, WS/Snn, WS/Rnn, WS/Vnn, WS/CEnn, CE/nn, DRV-nn. WS/CE01 is the web-surface Creator-Edition item; CE/01 is the performance/UX finding 1. They are different things.",
+  "prior_item_counts": {
+    "PHASE0": 34,
+    "WS": 41,
+    "CE": 9
+  },
+  "derived_item_count": 6,
+  "total_rows": 90,
+  "verdict_histogram": {
+    "open": 12,
+    "still-open": 8,
+    "closed": 69,
+    "superseded": 1
+  },
+  "open_count": 12,
+  "still_open_count": 8,
+  "unacted_remaining": 20,
+  "issues": [
+    {
+      "id": "PHASE0/F-01",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012e-pvr.js",
+      "line": 134,
+      "loc": "crates/strivo-web/assets/spa/012e-pvr.js:134",
+      "changed": "Original cited spa.js:2552 (a monolithic file that no longer exists). A recordings Load-more control is now wired to the existing cursor param.",
+      "evidence": "012e-pvr.js:134 renders `#rec-load-more` when recNextCursor != null; :220 binds its click handler. Sibling regression spec at e2e/tests/spa-ux-remediation.spec.ts:14."
+    },
+    {
+      "id": "PHASE0/F-02",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/018a-pvr.js",
+      "line": 188,
+      "loc": "crates/strivo-web/assets/spa/018a-pvr.js:188",
+      "changed": "The watch-route/multistream tile previously had no error listener at all; the lightbox had a single catch-all string. That string no longer exists anywhere in the SPA.",
+      "evidence": "018a-pvr.js:188 attaches an `error` listener that maps MediaError.code 1-4 to distinct aborted/network/decode/unsupported messages; :196 adds a metadata watchdog for the truncated-file case the error event never fires for."
+    },
+    {
+      "id": "PHASE0/F-03",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012b-pvr.js",
+      "line": 32,
+      "loc": "crates/strivo-web/assets/spa/012b-pvr.js:32",
+      "changed": "First-run step 1 no longer tells the user to open a terminal for device-code login.",
+      "evidence": "012b-pvr.js:32-33 render step 1 as `1 · Connect a platform` with a direct link to `#/settings/platforms`."
+    },
+    {
+      "id": "PHASE0/F-04",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/034-pvr.js",
+      "line": 427,
+      "loc": "crates/strivo-web/assets/spa/034-pvr.js:427",
+      "changed": "The Settings->Notifications webhook group the audit said was missing now exists. The ROADMAP row that recorded the gap was not updated in the same change — see DRV-01.",
+      "evidence": "034-pvr.js:427 renders the `Enable webhook` toggle and :437 the validated webhook URL input, both under `notifications.webhook.*`; validation and round-trip tests at src/routes/settings.rs:1676-1684 and :2293-2314."
+    },
+    {
+      "id": "PHASE0/F-05",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/034-pvr.js",
+      "line": 477,
+      "loc": "crates/strivo-web/assets/spa/034-pvr.js:477",
+      "changed": "`recording_dir` is no longer display-only; it is an editable Settings->Recording field.",
+      "evidence": "034-pvr.js:477 `restartTextInput(\"recording_dir\", s.recording_dir, \"/absolute/path\")`; :115 rejects control characters; first-run links to the editor at 012b-pvr.js:41."
+    },
+    {
+      "id": "PHASE0/F-06",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/034-pvr.js",
+      "line": 359,
+      "loc": "crates/strivo-web/assets/spa/034-pvr.js:359",
+      "changed": "The read-only Settings->General row no longer duplicates the editor silently; it links to the System page control.",
+      "evidence": "034-pvr.js:359 (inside `case \"general\"`, confirmed by the enclosing case markers at :337 and :386) renders a `#/system` link; the editor lives at 034d-pvr.js:234 with its save toast at :285."
+    },
+    {
+      "id": "PHASE0/F-07",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/034-pvr.js",
+      "line": 498,
+      "loc": "crates/strivo-web/assets/spa/034-pvr.js:498",
+      "changed": "The advanced recording tier the audit called TOML-only is now exposed, including the yt-dlp format selector.",
+      "evidence": "034-pvr.js:498 bitrate_kbps num-input, :501 video_codec, :504 audio_codec, all under `case \"recording\"`; shape validation at :120."
+    },
+    {
+      "id": "PHASE0/F-08",
+      "verdict": "closed",
+      "file": "docs/SETTINGS-COVERAGE.md",
+      "line": 1,
+      "loc": "docs/SETTINGS-COVERAGE.md:1",
+      "changed": "The document that audited the removed TUI has been re-run against the SPA.",
+      "evidence": "docs/SETTINGS-COVERAGE.md:1-9 is headed `# PVR web settings coverage`, `Reviewed 2026-09-08 against the SPA modules and Rust configuration/update handlers`, and the old TUI audit is demoted to docs/archive/SETTINGS-COVERAGE-M2.md."
+    },
+    {
+      "id": "PHASE0/F-09",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/034d-pvr.js",
+      "line": 221,
+      "loc": "crates/strivo-web/assets/spa/034d-pvr.js:221",
+      "changed": "The restore warning now links the manual restart steps instead of being an unlinked instruction.",
+      "evidence": "034d-pvr.js:221 links to docs/DAEMON.md#lifecycle; the settings-save path also surfaces `restart_required` (src/routes/settings.rs:1614, returned at :1772)."
+    },
+    {
+      "id": "PHASE0/F-10",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012f-pvr.js",
+      "line": 244,
+      "loc": "crates/strivo-web/assets/spa/012f-pvr.js:244",
+      "changed": "Sortable column headers are now keyboard-operable, closing the WS audit's R04 as well.",
+      "evidence": "012f-pvr.js:244 emits `tabindex=\"0\" role=\"button\" aria-sort=\"...\"` on th[data-sort]; :200 binds the handlers; comment at :238 names R04."
+    },
+    {
+      "id": "PHASE0/F-11",
+      "verdict": "open",
+      "file": "crates/strivo-web/assets/spa/021-creator.js",
+      "line": 693,
+      "loc": "crates/strivo-web/assets/spa/021-creator.js:693",
+      "changed": "CLAIM REFUTED IN THE OTHER DIRECTION. The 2026-09-06 web-surface audit listed F-11 under `Supersession map` as `confirmed implemented` and said the SPA reads `licence.implemented` at spa.js:8526-8553 and :9231-9252. In the current tree `implemented` appears ZERO times in every creator SPA module. The original defect still stands.",
+      "evidence": "grep -rn 'implemented' crates/strivo-web/assets/spa/*-creator.js returns no matches. renderUpgradeCard is 021-creator.js:693 and renderProUpsell is 021-creator.js:15; neither reads the flag the backend computes. The backend still computes it — see src/routes/licence.rs backend_url() gating. This is the one place where a prior audit's own closure claim is refuted by source."
+    },
+    {
+      "id": "PHASE0/F-12",
+      "verdict": "open",
+      "file": "crates/strivo-web/assets/spa/021-creator.js",
+      "line": 64,
+      "loc": "crates/strivo-web/assets/spa/021-creator.js:64",
+      "changed": "PARTIALLY REMEDIATED. Each signpost tab now carries a description that is honest about where the real control lives, but the deep-link half of the recommendation did not land: 14 of 20 tabs are still `route: null`.",
+      "evidence": "021-creator.js:64 PRO_PANES. Studio 2/4 routed (:69 editor, :71 scenes, :72 ab, :73 submix), Analytics 3/6 routed, Publish 1/10 routed. Every null-route tab now has a prose description naming the real trigger, which is the `honest about indirection` half of the audit's own either/or remedy."
+    },
+    {
+      "id": "PHASE0/F-13",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/029-creator.js",
+      "line": 151,
+      "loc": "crates/strivo-web/assets/spa/029-creator.js:151",
+      "changed": "The B-roll finder is no longer an unreachable catalogued endpoint.",
+      "evidence": "029-creator.js:151 binds the Info-modal trigger, :176 POSTs via API.brollSuggest, :37-creator.js renders the button; API method defined at 005-creator.js:35."
+    },
+    {
+      "id": "PHASE0/F-14",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/017-creator.js",
+      "line": 29,
+      "loc": "crates/strivo-web/assets/spa/017-creator.js:29",
+      "changed": "The audit's premise (`11 research-kernel endpoints ... have zero SPA callers`) no longer holds: the Archive surface landed.",
+      "evidence": "017-creator.js:29 `projects = (await API.researchProjects()).projects || []`; the API surface is defined at 007-creator.js:136-139. This is the CE-Fusion F4 work the audit said had not started."
+    },
+    {
+      "id": "PHASE0/F-15",
+      "verdict": "closed",
+      "file": "crates/multitrack/src/lib.rs",
+      "line": 19,
+      "loc": "crates/multitrack/src/lib.rs:19",
+      "changed": "PREMISE REFUTED. The audit's evidence was `grep -rln \"demucs\" crates/` returning nothing. Demucs-style separation code now exists.",
+      "evidence": "crates/multitrack/src/lib.rs:19 `//! Demucs-style source separation on a single mixed stereo`. Residual: docs/STRATEGY-NVIVO-RIVERSIDE.md:114 still says `Multitrack and Demucs plugins` (plural), and there is no separate Demucs crate — only the multitrack crate describes itself that way. The wording is imprecise but no longer a false existence claim."
+    },
+    {
+      "id": "PHASE0/F-16",
+      "verdict": "still-open",
+      "file": "crates/strivo-web/assets/spa/005-creator.js",
+      "line": 2,
+      "loc": "crates/strivo-web/assets/spa/005-creator.js:2",
+      "changed": "UNCHANGED. Headless auto-transcribe is still gated on config-only lists or a marker file with no SPA control.",
+      "evidence": "005-creator.js:2 is the only tandem/auto-download API method. grep for `crunchr-auto` / `crunchr_auto` across all SPA modules returns nothing. The channel-row toggle the audit pointed at as the pattern to copy exists for Archiver tandem (039-pvr.js:198) but not for auto-transcribe."
+    },
+    {
+      "id": "PHASE0/F-18",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012-pvr.js",
+      "line": 48,
+      "loc": "crates/strivo-web/assets/spa/012-pvr.js:48",
+      "changed": "`ui.reduce_motion` is now wired end to end; the setting is no longer inert.",
+      "evidence": "012-pvr.js:36-48 derives REDUCE_MOTION_SETTING from the OS signal OR the setting and toggles `reduce-motion` on <html>; :73 reads it back from settings; the toggle is rendered at 034b-pvr.js:30 and handled at 034-pvr.js:133."
+    },
+    {
+      "id": "PHASE0/F-19",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa-css/000-pvr.css",
+      "line": 1439,
+      "loc": "crates/strivo-web/assets/spa-css/000-pvr.css:1439",
+      "changed": "The REC dot is now covered by reduced-motion suppression. spa.css is gone; the rule moved into the first CSS module.",
+      "evidence": "000-pvr.css:1439 lists `.live-now h2 .rec-dot` under `prefers-reduced-motion: reduce`, and :1446 repeats it under `html.reduce-motion`, alongside .boot-glyph, .ch-rec and the state-pill pulses. The 1.2s-vs-2s DESIGN.md discrepancy in the secondary claim was not independently re-checked."
+    },
+    {
+      "id": "PHASE0/F-20",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012-pvr.js",
+      "line": 143,
+      "loc": "crates/strivo-web/assets/spa/012-pvr.js:143",
+      "changed": "A skip link now exists as the first focusable element.",
+      "evidence": "012-pvr.js:143 `<a class=\"skip-link\" href=\"#content\">Skip to content</a>`; styles at 000-pvr.css:395 and :405; the landing target carries tabindex=\"-1\" at 012-pvr.js:165. Named R03 in the 2026-09-06 audit."
+    },
+    {
+      "id": "PHASE0/F-22",
+      "verdict": "open",
+      "file": "crates/strivo-web/assets/spa-css/000-pvr.css",
+      "line": 1028,
+      "loc": "crates/strivo-web/assets/spa-css/000-pvr.css:1028",
+      "changed": "PARTIALLY ADDRESSED, count not zeroed. The mechanical token pass did not happen; the file it cited is now 26 modules.",
+      "evidence": "85 hex literals across crates/strivo-web/assets/spa-css/*.css, of which 30 sit inside `var(--x, #fallback)` custom-property fallbacks (the audit's own 'not real deviations' class), leaving roughly 55 genuine hardcodes against the 77 originally counted. 000-pvr.css holds 20 of them; :1028 is a representative `.live-now h2 .rec-dot` block."
+    },
+    {
+      "id": "PHASE0/F-25",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/server.rs",
+      "line": 61,
+      "loc": "crates/strivo-web/src/server.rs:61",
+      "changed": "The probe cache is real and the ROADMAP row has been flipped to the verdict the audit asked for.",
+      "evidence": "server.rs:61 `pub probe_cache: Arc<RwLock<HashMap<PathBuf, ProbeCacheEntry>>>`; read-through at src/routes/settings.rs:316 and :333, insert at :475. ROADMAP.md:249 now reads `ffprobe results uncached ... | ✅`. The audit's original api.rs:204-374 citation is dead (the handler moved to settings.rs)."
+    },
+    {
+      "id": "PHASE0/F-26",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/server.rs",
+      "line": 78,
+      "loc": "crates/strivo-web/src/server.rs:78",
+      "changed": "AppState now carries a shared, lazily-initialised jobs.db handle instead of opening one per request.",
+      "evidence": "server.rs:78 `pub jobs_db: Arc<OnceCell<PersistDb>>` with the accessor at :147. Closure is executed, not just wired: tests/routes.rs:991 drives a real route and asserts the cell is initialised (WS/V08)."
+    },
+    {
+      "id": "PHASE0/F-27",
+      "verdict": "still-open",
+      "file": "src/recording/persist.rs",
+      "line": 608,
+      "loc": "src/recording/persist.rs:608",
+      "changed": "UNCHANGED in substance. `cursor` is still an integer offset, and a separate COUNT(*) still runs per page.",
+      "evidence": "persist.rs:608 `LIMIT ?1 OFFSET ?2` paired with the page COUNT(*) at :600. The documentation half of the remedy landed (the 2026-09-06 audit records the terminology correction); the pagination-shape half did not. High-offset latency remains unmeasured."
+    },
+    {
+      "id": "PHASE0/F-28",
+      "verdict": "still-open",
+      "file": "src/recording/persist.rs",
+      "line": 644,
+      "loc": "src/recording/persist.rs:644",
+      "changed": "UNCHANGED. Still a per-row `json_extract` with no covering index.",
+      "evidence": "persist.rs:644-657 `count_finished_recordings` filters on `json_extract(payload, '$.channel_id') = ?1` with no index supporting it. Still needs EXPLAIN QUERY PLAN + timing before anyone optimises it; that measurement has not been done."
+    },
+    {
+      "id": "PHASE0/F-29",
+      "verdict": "open",
+      "file": "crates/strivo-web/build.rs",
+      "line": 43,
+      "loc": "crates/strivo-web/build.rs:43",
+      "changed": "SHAPE CHANGED, DEFECT NOT ADDRESSED. The single monolithic file is gone, but the served bundle is still one concatenation with no route chunking.",
+      "evidence": "build.rs:43 assembles spa.js by concatenating every module in filename order (:170-186); there is no chunk, split, or dynamic-import emission anywhere in the 202-line build script. Source modules under assets/spa/ and assets/spa-css/ total 1,085,680 bytes. The original compressed-size measurement against docs/PERFORMANCE.md's 250 KiB threshold is still not taken."
+    },
+    {
+      "id": "PHASE0/F-30",
+      "verdict": "still-open",
+      "file": "crates/strivo-web/src/routes/events.rs",
+      "line": 1,
+      "loc": "crates/strivo-web/src/routes/events.rs:1",
+      "changed": "UNCHANGED. One IPC connection per browser tab, no server-side fanout.",
+      "evidence": "events.rs is 79 lines and still relays DaemonEvent deltas straight through; no broadcast structure was introduced. Recorded as a scaling note only; the audit itself said this is fine at home-user tab counts."
+    },
+    {
+      "id": "PHASE0/F-32",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/plugins.rs",
+      "line": 592,
+      "loc": "crates/strivo-web/src/routes/plugins.rs:592",
+      "changed": "All four named synchronous-Command-in-async sites are now wrapped.",
+      "evidence": "plugins.rs:592 `probe_duration_async` wraps the blocking probe; clipper extract at :245, :327; editor render at :1833; ab-render at :2606. The remaining raw `std::process::Command` calls at :546/:564/:2549 are sync helpers reached only through a spawn_blocking wrapper."
+    },
+    {
+      "id": "PHASE0/F-33",
+      "verdict": "still-open",
+      "file": "crates/editor/src/lib.rs",
+      "line": 299,
+      "loc": "crates/editor/src/lib.rs:299",
+      "changed": "UNCHANGED. The EDL render is still one ffmpeg subprocess per cut plus a final concat pass.",
+      "evidence": "editor/src/lib.rs:299 and :314 are the per-cut passes, :335 the concat. The audit's actual recommendation was only that no 'single ffmpeg pass' claim be documented for the full EDL render; no such claim was found in the docs it named, so nothing needed changing and the multi-pass shape remains."
+    },
+    {
+      "id": "PHASE0/F-34",
+      "verdict": "still-open",
+      "file": "crates/strivo-web/src/routes/plugins.rs",
+      "line": 4781,
+      "loc": "crates/strivo-web/src/routes/plugins.rs:4781",
+      "changed": "UNCHANGED IN KIND, WORSENED IN COUNT: 12 per-request opens became 27, and the endpoints now have real traffic.",
+      "evidence": "grep -c 'ResearchStore::open' routes/plugins.rs = 27 (first at :4781). The audit's escape hatch was that the endpoints had no SPA callers; F-14's closure means the Archive surface now calls them."
+    },
+    {
+      "id": "PHASE0/F-35",
+      "verdict": "still-open",
+      "file": "src/pipeline/executor.rs",
+      "line": 238,
+      "loc": "src/pipeline/executor.rs:238",
+      "changed": "UNCHANGED. ready_stages is still a full registry rescan on every wake.",
+      "evidence": "executor.rs:238 `pub fn ready_stages(&self)` still iterates every non-terminal pipeline. Still bounded by MAX_PIPELINE_HISTORY = 500 at :22. No live measurement has been taken."
+    },
+    {
+      "id": "PHASE0/F-36",
+      "verdict": "open",
+      "file": "src/pipeline/stage.rs",
+      "line": 88,
+      "loc": "src/pipeline/stage.rs:88",
+      "changed": "THE CITED FILE NO LONGER EXISTS. src/pipeline/templates.rs was removed; the lock enum moved. The underlying question (one global Gpu permit, no transcription-specific cap) is still unanswered.",
+      "evidence": "src/pipeline/ now holds only executor.rs, mod.rs, runtime.rs and stage.rs. ResourceLock is declared at stage.rs:85 with `Gpu` at :88 (a bare unit variant, capacity 1) against `Cpu { cap: usize }` at :91 which does take a cap. Gpu consumers are at edl/render.rs:105,:122 and the tests at runtime.rs:365,:368. No transcription-specific cap exists."
+    },
+    {
+      "id": "PHASE0/F-37",
+      "verdict": "closed",
+      "file": "src/pipeline/executor.rs",
+      "line": 811,
+      "loc": "src/pipeline/executor.rs:811",
+      "changed": "Resource acquisition is now bounded by a timeout.",
+      "evidence": "executor.rs:811 `tokio::time::timeout(self.acquire_timeout, sem.acquire_owned())`; the field is at :740 and the constructor at :757/:772."
+    },
+    {
+      "id": "PHASE0/F-38",
+      "verdict": "still-open",
+      "file": "src/pipeline/runtime.rs",
+      "line": 347,
+      "loc": "src/pipeline/runtime.rs:347",
+      "changed": "UNCHANGED. The pipeline event channel is still unbounded.",
+      "evidence": "runtime.rs:347 `mpsc::unbounded_channel()`. No capacity, no documented overflow policy. No load test has been run in either direction."
+    },
+    {
+      "id": "PHASE0/F-39",
+      "verdict": "closed",
+      "file": "crates/editor/src/lib.rs",
+      "line": 41,
+      "loc": "crates/editor/src/lib.rs:41",
+      "changed": "Scratch cleanup is now an RAII guard covering every exit path including panics.",
+      "evidence": "editor/src/lib.rs:41 `struct TempDirGuard(PathBuf)` with `Drop` at :50 calling remove_dir_all; constructed at :276. WS/V01's residual is also closed: :566 `failed_render_after_partial_success_leaves_no_scratch_directory` exercises the multi-cut case the original closure test missed."
+    },
+    {
+      "id": "WS/S01",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/api.rs",
+      "line": 472,
+      "loc": "crates/strivo-web/src/routes/api.rs:472",
+      "changed": "The P0 delete route now authenticates.",
+      "evidence": "pipelines_chains_delete (api.rs:467) takes HeaderMap + State and calls check_key at :472 before reaching remove_file at :479."
+    },
+    {
+      "id": "WS/S02",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/recordings.rs",
+      "line": 226,
+      "loc": "crates/strivo-web/src/routes/recordings.rs:226",
+      "changed": "The download/play byte-stream route now authenticates.",
+      "evidence": "download (recordings.rs:226) calls check_dual at :231 before resolving a job; `play` at :374 redirects into it, so it inherits the gate."
+    },
+    {
+      "id": "WS/S03",
+      "verdict": "closed",
+      "file": "crates/strivo-web/tests/routes.rs",
+      "line": 493,
+      "loc": "crates/strivo-web/tests/routes.rs:493",
+      "changed": "The test file no longer builds an empty router.",
+      "evidence": "routes.rs:20 imports the real `build_router`; :493 ALWAYS_ROUTES and :570 CREATOR_ROUTES are the sweep's per-edition tables."
+    },
+    {
+      "id": "WS/S04",
+      "verdict": "closed",
+      "file": ".github/workflows/ci.yml",
+      "line": 225,
+      "loc": ".github/workflows/ci.yml:225",
+      "changed": "A real-server lane runs in CI against the compiled binary.",
+      "evidence": "ci.yml:225 `- name: Web UI real-server e2e`, :229 `run: npm run test:real`; :161 preserves the PVR executable for it."
+    },
+    {
+      "id": "WS/S05",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/auth.rs",
+      "line": 59,
+      "loc": "crates/strivo-web/src/auth.rs:59",
+      "changed": "Session HMAC comparison is constant-time by construction.",
+      "evidence": "auth.rs:59 `mac.verify_slice(&actual_sig).ok()?` replaces the short-circuiting slice compare. No timing measurement is claimed, matching the manifest's own closure requirement."
+    },
+    {
+      "id": "WS/S06",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/licence.rs",
+      "line": 131,
+      "loc": "crates/strivo-web/src/routes/licence.rs:131",
+      "changed": "The trial route now authenticates.",
+      "evidence": "licence.rs:131 check_dual before any backend POST at :136."
+    },
+    {
+      "id": "WS/S07",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/api.rs",
+      "line": 490,
+      "loc": "crates/strivo-web/src/routes/api.rs:490",
+      "changed": "Both disclosure routes are now gated.",
+      "evidence": "pipelines_dag (api.rs:489) calls check_key at :490. plugin_capabilities moved out of api.rs entirely to import_export.rs:219, routed at :304 under the guarded router and absent from server.rs:395 PUBLIC_ROUTES."
+    },
+    {
+      "id": "WS/S08",
+      "verdict": "closed",
+      "file": "crates/strivo-web/tests/routes.rs",
+      "line": 776,
+      "loc": "crates/strivo-web/tests/routes.rs:776",
+      "changed": "The default-deny route-auth invariant is enforced by a test on both editions.",
+      "evidence": "routes.rs:776 s08_always_routes_require_auth, :794 s08_creator_routes_require_auth; the middleware itself is server.rs:338 route_layer(require_auth)."
+    },
+    {
+      "id": "WS/S09",
+      "verdict": "closed",
+      "file": "README.md",
+      "line": 1,
+      "loc": "README.md:1",
+      "changed": "The 185-insertion/337-deletion uncommitted README rewrite is committed.",
+      "evidence": "`git status --porcelain README.md` returns empty at this HEAD (a8d4f2b), so the tree is clean for this path."
+    },
+    {
+      "id": "WS/S10",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/020-creator.js",
+      "line": 15,
+      "loc": "crates/strivo-web/assets/spa/020-creator.js:15",
+      "changed": "The dangling-call-site break is gone. The plugin catalog now lives in a Creator-only module, so a PVR build never contains it.",
+      "evidence": "020-creator.js exists and is a `-creator.js` module, excluded from PVR by build.rs:170-186. build.rs:43-44 assemble both bundles by INCLUDING modules; the line-stripping mechanism the finding was written against no longer exists in the 202-line script."
+    },
+    {
+      "id": "WS/S11",
+      "verdict": "closed",
+      "file": "DESIGN.md",
+      "line": 1,
+      "loc": "DESIGN.md:1",
+      "changed": "DESIGN.md is now tracked by git, so the normative references resolve.",
+      "evidence": "`git ls-files --error-unmatch DESIGN.md` succeeds. The tracked ROADMAP.md citation of DESIGN.md as normative is gone (ROADMAP.md:126-128 now names a different, also-stale path — see DRV-02); CLAUDE.md:43 and :46 still reference DESIGN.md and now resolve."
+    },
+    {
+      "id": "WS/S12",
+      "verdict": "closed",
+      "file": "crates/strivo-web/e2e/tests/player-controller.spec.ts",
+      "line": 21,
+      "loc": "crates/strivo-web/e2e/tests/player-controller.spec.ts:21",
+      "changed": "The two named flaky tests now run in a serial describe block.",
+      "evidence": "player-controller.spec.ts:21 `test.describe.configure({ mode: \"serial\" })`; the file header at :15 records why. Also closes WS/V09, whose test lives in the same file at :105."
+    },
+    {
+      "id": "WS/S13",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/api.rs",
+      "line": 442,
+      "loc": "crates/strivo-web/src/routes/api.rs:442",
+      "changed": "The pipeline-chain CRUD write path now authenticates.",
+      "evidence": "pipelines_chains_save (api.rs:437) now takes HeaderMap + State and calls check_key at :442 before validating and writing. The audit's structural claim (structurally incapable of authenticating) no longer holds."
+    },
+    {
+      "id": "WS/S14",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/licence.rs",
+      "line": 48,
+      "loc": "crates/strivo-web/src/routes/licence.rs:48",
+      "changed": "All four licence routes authenticate.",
+      "evidence": "licence.rs check_dual at :48 (status), :108 (activate), :131 (trial), :154 (refresh)."
+    },
+    {
+      "id": "WS/S15",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/server.rs",
+      "line": 395,
+      "loc": "crates/strivo-web/src/server.rs:395",
+      "changed": "logout and marketplace_catalog are outside the public allowlist and therefore gated by the route_layer.",
+      "evidence": "server.rs:395-403 PUBLIC_ROUTES lists only health, /, /app, /assets/{*path}, and the two yt-websub + login entries. `/api/v1/auth/logout` (login.rs:240) and `/api/v1/marketplace/catalog` (api.rs:788) are absent, so require_auth (server.rs:423) rejects them."
+    },
+    {
+      "id": "WS/S16",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/server.rs",
+      "line": 338,
+      "loc": "crates/strivo-web/src/server.rs:338",
+      "changed": "Auth moved ahead of body/query extraction.",
+      "evidence": "server.rs:338 `.route_layer(middleware::from_fn_with_state(state.clone(), require_auth))`, with the rationale at :327 and the gate itself at :423. The 49 body-shape 'inconclusive' results the sweep reported are structurally impossible now; routes.rs:462-470 keeps a zero-tolerance assertion for it."
+    },
+    {
+      "id": "WS/S17",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/chat.rs",
+      "line": 57,
+      "loc": "crates/strivo-web/src/routes/chat.rs:57",
+      "changed": "The two Creator-only routes PVR code called now live in the edition-agnostic chat router, with auth.",
+      "evidence": "chat.rs:49 routes GET /api/v1/plugins/chat/rooms and :57 `async fn chat_rooms(headers: HeaderMap, State(state): State<AppState>)` authenticates. plugins.rs:4340 records that these routes used to live there."
+    },
+    {
+      "id": "WS/R01",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012e-pvr.js",
+      "line": 134,
+      "loc": "crates/strivo-web/assets/spa/012e-pvr.js:134",
+      "changed": "Recordings pagination control shipped; this is the same code PHASE0/F-01 points at.",
+      "evidence": "012e-pvr.js:134 + :220. E2E coverage at e2e/tests/spa-ux-remediation.spec.ts:14 seeds 502 recordings and asserts the second page is reachable."
+    },
+    {
+      "id": "WS/R02",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/029-creator.js",
+      "line": 176,
+      "loc": "crates/strivo-web/assets/spa/029-creator.js:176",
+      "changed": "The B-roll endpoint is now reachable through the UI.",
+      "evidence": "029-creator.js:176 `const resp = await API.brollSuggest(jobId, { library, top_k: 12 })`; trigger at :151, button at 037-creator.js:49. The manifest recorded the localStorage-scoped library as an operator product decision, not a stub."
+    },
+    {
+      "id": "WS/R03",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012-pvr.js",
+      "line": 143,
+      "loc": "crates/strivo-web/assets/spa/012-pvr.js:143",
+      "changed": "The skip link shipped; same code as PHASE0/F-20.",
+      "evidence": "012-pvr.js:143 skip-link; 008-pvr.js:364-371 records that the target is the in-page anchor `#content` so the link's own hashchange cannot be mistaken for a route change."
+    },
+    {
+      "id": "WS/R04",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012f-pvr.js",
+      "line": 244,
+      "loc": "crates/strivo-web/assets/spa/012f-pvr.js:244",
+      "changed": "Sortable headers are keyboard-operable; same code as PHASE0/F-10.",
+      "evidence": "012f-pvr.js:244 `tabindex=\"0\" role=\"button\" aria-sort=\"${ariaSort}\"`."
+    },
+    {
+      "id": "WS/R05",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/server.rs",
+      "line": 78,
+      "loc": "crates/strivo-web/src/server.rs:78",
+      "changed": "The shared jobs.db handle landed and was later hardened into a pool; same code as PHASE0/F-26.",
+      "evidence": "server.rs:78 OnceCell<PersistDb>, accessor :147. Closure evidence is executed, not asserted: tests/routes.rs:991 drives a real route and asserts the cell is initialised, which is exactly what WS/V08 said the original accessor-only test failed to prove."
+    },
+    {
+      "id": "WS/R06",
+      "verdict": "closed",
+      "file": "crates/editor/src/lib.rs",
+      "line": 276,
+      "loc": "crates/editor/src/lib.rs:276",
+      "changed": "Scratch cleanup is an RAII guard; same code as PHASE0/F-39.",
+      "evidence": "editor/src/lib.rs:276 `let temp_dir = TempDirGuard(edl_dir.join(\".edl-temp\"))`, Drop at :50."
+    },
+    {
+      "id": "WS/V01",
+      "verdict": "closed",
+      "file": "crates/editor/src/lib.rs",
+      "line": 566,
+      "loc": "crates/editor/src/lib.rs:566",
+      "changed": "The multi-cut scratch-leak case the original closure test missed now has its own test.",
+      "evidence": "editor/src/lib.rs:566 `failed_render_after_partial_success_leaves_no_scratch_directory`, alongside the original single-cut test at :514."
+    },
+    {
+      "id": "WS/V02",
+      "verdict": "closed",
+      "file": "crates/strivo-web/tests/routes.rs",
+      "line": 479,
+      "loc": "crates/strivo-web/tests/routes.rs:479",
+      "changed": "The two hand-maintained public-route lists are now one list, alias-checked by a test.",
+      "evidence": "routes.rs:20 imports `PUBLIC_ROUTES` from strivo_web::server; :479 `const KNOWN_PUBLIC: &[(&str, &str)] = PUBLIC_ROUTES;`; :487-488 a test asserts the two have not diverged. The canonical list is server.rs:395."
+    },
+    {
+      "id": "WS/V03",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/ipc_client.rs",
+      "line": 70,
+      "loc": "crates/strivo-web/src/ipc_client.rs:70",
+      "changed": "The constructor was returned to crate-private rather than doc-hidden.",
+      "evidence": "ipc_client.rs:70 `pub(crate) fn disconnected() -> Self`; the rationale is at :67-69."
+    },
+    {
+      "id": "WS/V04",
+      "verdict": "closed",
+      "file": "crates/strivo-web/build.rs",
+      "line": 1,
+      "loc": "crates/strivo-web/build.rs:1",
+      "changed": "The inert build-script test module is gone entirely rather than fixed.",
+      "evidence": "build.rs (202 lines) contains no `#[cfg(test)]` and no `mod tests`. The S10 regression guard that module duplicated is now enforced by the e2e pretest, check-pvr-bundle.mjs, per CLAUDE.md."
+    },
+    {
+      "id": "WS/V05",
+      "verdict": "open",
+      "file": "crates/strivo-web/e2e/tests/spa-ux-remediation.spec.ts",
+      "line": 1,
+      "loc": "crates/strivo-web/e2e/tests/spa-ux-remediation.spec.ts:1",
+      "changed": "NO SOURCE-LEVEL FIX IS VISIBLE for the skip-link flake, unlike its sibling WS/S12.",
+      "evidence": "The spec file has no `test.describe.configure({ mode: \"serial\" })` (contrast player-controller.spec.ts:21, which S12 did fix) and playwright.config.ts:15-17 still sets fullyParallel true with retries only in CI. Whether the flake is gone is a runtime property; this todo ran no browser suite, so the recorded `closed` status is NOT confirmed here. Carried as open pending a suite run."
+    },
+    {
+      "id": "WS/V06",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/plugins.rs",
+      "line": 1,
+      "loc": "crates/strivo-web/src/routes/plugins.rs:1",
+      "changed": "The four stray PersistDb::open sites in plugins.rs are gone; the file now has zero.",
+      "evidence": "`grep -c 'PersistDb::open' routes/plugins.rs` = 0. Every path goes through AppState::jobs_db (server.rs:147)."
+    },
+    {
+      "id": "WS/V07",
+      "verdict": "closed",
+      "file": "src/recording/persist.rs",
+      "line": 71,
+      "loc": "src/recording/persist.rs:71",
+      "changed": "The single process-wide Mutex<Connection> was replaced by a hand-rolled pool, as the 2026-09-06 revision 13 recorded.",
+      "evidence": "persist.rs:71 `struct ConnPool`, with the module doc at :3-35 stating the serialisation finding and why r2d2 was ruled out. The 50,000-row A/B the manifest describes is prior evidence, not re-measured here."
+    },
+    {
+      "id": "WS/V08",
+      "verdict": "closed",
+      "file": "crates/strivo-web/tests/routes.rs",
+      "line": 991,
+      "loc": "crates/strivo-web/tests/routes.rs:991",
+      "changed": "A route-level test now proves a real handler initialises the shared handle.",
+      "evidence": "routes.rs:991 `shared_jobs_db_handle_is_initialised_by_a_real_route`, with the comment at :966 explaining why the prior accessor-only test proved nothing."
+    },
+    {
+      "id": "WS/V09",
+      "verdict": "closed",
+      "file": "crates/strivo-web/e2e/tests/player-controller.spec.ts",
+      "line": 105,
+      "loc": "crates/strivo-web/e2e/tests/player-controller.spec.ts:105",
+      "changed": "The flake class is addressed by making the whole file serial; this test lives in it.",
+      "evidence": "player-controller.spec.ts:105 is the named test, inside the :21 serial describe."
+    },
+    {
+      "id": "WS/V10",
+      "verdict": "closed",
+      "file": "crates/strivo-web/e2e/mock-server.mjs",
+      "line": 424,
+      "loc": "crates/strivo-web/e2e/mock-server.mjs:424",
+      "changed": "Module-level mock state is now resettable through a test-only endpoint.",
+      "evidence": "mock-server.mjs:424 `if (path === \"/__test__/reset\" && req.method === \"POST\")` clearing every module-level mutable store (:212-213 abRenderStore/submixStore). playwright.config.ts:27 still sets reuseExistingServer outside CI, but a reused server can now be reset."
+    },
+    {
+      "id": "WS/V11",
+      "verdict": "closed",
+      "file": "crates/strivo-bin/src/main.rs",
+      "line": 1266,
+      "loc": "crates/strivo-bin/src/main.rs:1266",
+      "changed": "`strivo enable` is split per platform instead of rendering a systemd unit on every unix target.",
+      "evidence": "main.rs:1266 `#[cfg(target_os = \"linux\")] async fn handle_enable` and :1418 `#[cfg(target_os = \"macos\")] async fn handle_enable`; the launchd renderer is :1361 and the defect is described at :1336-1342."
+    },
+    {
+      "id": "WS/V12",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/icons/candy/ATTRIBUTION.md",
+      "line": 3,
+      "loc": "crates/strivo-web/assets/icons/candy/ATTRIBUTION.md:3",
+      "changed": "The false attribution is corrected and the two non-upstream icons are gone.",
+      "evidence": "ATTRIBUTION.md:3 now says `The ten SVGs in this directory` (was twelve) and the directory holds exactly ten .svg files: chat, history, logout, logs, pipelines, plugins, schedule, settings, system, watch. home.svg and recordings.svg no longer exist."
+    },
+    {
+      "id": "WS/CE01",
+      "verdict": "closed",
+      "file": "src/recording/catalog.rs",
+      "line": 50,
+      "loc": "src/recording/catalog.rs:50",
+      "changed": "The plugin-named core field is a generic marker list; core no longer names a Creator concept.",
+      "evidence": "catalog.rs:50 `pub post_pull_markers: Vec<String>`; the single place that knows the name is config/mod.rs:840 `post_pull_markers()`. RESIDUAL: the manifest's literal acceptance grep `grep -ri crunchr\\|archiver src/` still returns ONE hit — a doc comment at src/config/mod.rs:48 — so the code-level acceptance is met and the literal string-level one is not."
+    },
+    {
+      "id": "WS/CE02",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/mod.rs",
+      "line": 35,
+      "loc": "crates/strivo-web/src/routes/mod.rs:35",
+      "changed": "routes::plugins is gated at the module declaration, so it is unreachable in a PVR build by construction.",
+      "evidence": "routes/mod.rs:35-36 `#[cfg(feature = \"creator\")] pub mod plugins;`. The per-route cfg enumeration this audit performed is no longer the mechanism; the 2026-09-06 revision 13 already re-scoped acceptance to exactly this."
+    },
+    {
+      "id": "WS/CE03",
+      "verdict": "closed",
+      "file": "crates/strivo-web/build.rs",
+      "line": 44,
+      "loc": "crates/strivo-web/build.rs:44",
+      "changed": "THE spa.css REMAINDER LANDED. The 2026-09-06 manifest left CE03 open solely on the CSS half; assets/spa-css/ is now 26 edition-split modules and both bundles are assembled by inclusion.",
+      "evidence": "build.rs:43 assembles spa.js and :44 assembles spa.css through the same `assemble_modules`, which skips `-creator` modules for PVR (:170-186). `ls assets/spa-css | wc -l` = 26. The manifest's stated blocker (no marker signal, no visual coverage) no longer applies."
+    },
+    {
+      "id": "WS/CE04",
+      "verdict": "superseded",
+      "file": "docs/adr/0002-monorepo-boundary.md",
+      "line": 1,
+      "loc": "docs/adr/0002-monorepo-boundary.md:1",
+      "changed": "The premise (a second repository) was decided against. Nothing should be actioned as the original text says.",
+      "evidence": "ADR 0002 `Stay a monorepo; enforce the edition boundary in-tree` supersedes ADR 0001. The observed facts remain true — strivo-plugins/Cargo.toml:13 still sets `publish = false` — but the recommended action cannot and should not happen."
+    },
+    {
+      "id": "WS/CE05",
+      "verdict": "closed",
+      "file": "crates/strivo-plugins/Cargo.toml",
+      "line": 28,
+      "loc": "crates/strivo-plugins/Cargo.toml:28",
+      "changed": "The `creator` feature on strivo-core is gone, which was this item's stated resolution.",
+      "evidence": "strivo-plugins/Cargo.toml:28 `strivo-core carries no \"creator\" feature (see ADR 0001 CE01/CE05)`. The manifest's alternative (state the scope limitation) is not needed."
+    },
+    {
+      "id": "WS/CE06",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/mod.rs",
+      "line": 25,
+      "loc": "crates/strivo-web/src/routes/mod.rs:25",
+      "changed": "routes::licence is gated at the module declaration, and the licence refresh loop no longer spawns unconditionally.",
+      "evidence": "routes/mod.rs:25-26 `#[cfg(feature = \"creator\")] pub mod licence;`. The daemon calls spawn_refresh_loop at daemon.rs:340 but treats the handle as optional, with the rationale at :331-339: a default install with the env var unset spawns no task and makes no network call."
+    },
+    {
+      "id": "CE/01",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/routes/settings.rs",
+      "line": 115,
+      "loc": "crates/strivo-web/src/routes/settings.rs:115",
+      "changed": "Playback lookup no longer resolves from the snapshot alone; it overlays the live snapshot onto the durable journal.",
+      "evidence": "settings.rs:115 `resolve_recording` tries `state.snapshot()` first, then falls through to `db.load_recording_job(id)` on the shared jobs.db at :124-125. recordings.rs:27-32 `lookup_job` now delegates to it, and :1178-1180 states the same for thumbnails. The audit's own acceptance (old recordings still list, seek and play after eviction) is a behaviour the code now supports; it was NOT re-exercised against a live daemon here."
+    },
+    {
+      "id": "CE/02",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/008-pvr.js",
+      "line": 400,
+      "loc": "crates/strivo-web/assets/spa/008-pvr.js:400",
+      "changed": "Each navigation now carries a generation and every async DOM commit checks it.",
+      "evidence": "008-pvr.js:400 `let routeGeneration = 0`, :401 captureRouteContext, :408 isRouteCurrent, :454 ensureRouteHydration guards at :463/:466/:473. The finding's warning that guarding only the router is insufficient is addressed: renderers take the context themselves (e.g. 012b-pvr.js:65 `renderHome(context = captureRouteContext())` and 008-pvr.js:454 `ensureRouteHydration(route, context = captureRouteContext())`)."
+    },
+    {
+      "id": "CE/03",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/036-pvr.js",
+      "line": 1190,
+      "loc": "crates/strivo-web/assets/spa/036-pvr.js:1190",
+      "changed": "Progress events now patch in place instead of rebuilding the table.",
+      "evidence": "036-pvr.js:1190 `if (event.RecordingProgress && recCache.length)`; the handler mutates the cached job and calls updateVodProgressDom / patchHistPillProgress / updateRecInfoModalProgress / updateLiveCount, with the intent stated at :1188-1189 (`update the in-memory job + the dashboard subtree in place. No rail/detail rebuild.`). The comment at :1193-1194 explains why in-flight reads are deliberately NOT retired on every tick."
+    },
+    {
+      "id": "CE/04",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012b-pvr.js",
+      "line": 65,
+      "loc": "crates/strivo-web/assets/spa/012b-pvr.js:65",
+      "changed": "The Home waterfall is gone; independent sources start together and the chrome mounts first.",
+      "evidence": "012b-pvr.js:65 renderHome, :66 `mountRouteShell(context)`, :68-70 the comment naming the old settings -> channels/recordings -> Patreon -> schedule waterfall, :71-72 patreonTask and scheduleTask started together, :75-85 each hydrates its own section with an isRouteCurrent guard so a slow endpoint cannot block Home."
+    },
+    {
+      "id": "CE/05",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/002-pvr.js",
+      "line": 10,
+      "loc": "crates/strivo-web/assets/spa/002-pvr.js:10",
+      "changed": "The request cache is generation-aware, so an invalidation cannot be undone by an older in-flight read.",
+      "evidence": "002-pvr.js:10 `_generationFor(path)`, :26 a cache hit requires `cached.generation === generation`, :35 the pre-population re-check, :109 `invalidate(prefix = \"\")` with prefix-scoped invalidation. Non-GET invalidation is at :106."
+    },
+    {
+      "id": "CE/06",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/012e-pvr.js",
+      "line": 28,
+      "loc": "crates/strivo-web/assets/spa/012e-pvr.js:28",
+      "changed": "Page membership is now merged, not replaced.",
+      "evidence": "012e-pvr.js:28-37 merges the incoming page into the existing recCache (`const merged = recCache.map(...)` then `recCache = [...additions, ...merged]`) instead of overwriting it, so a 502-record library no longer shrinks to 500 on a finish event. The SSE side applies changes by id without a refetch at 036-pvr.js:1276-1286."
+    },
+    {
+      "id": "CE/07",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/018a-pvr.js",
+      "line": 60,
+      "loc": "crates/strivo-web/assets/spa/018a-pvr.js:60",
+      "changed": "The 15s watchdog no longer runs against an idle, never-started tile.",
+      "evidence": "018a-pvr.js:60 `el.preload = playing ? \"metadata\" : \"none\"`; the watchdog is created only inside the load path (:69 declaration, :84-85 cancel, :95 arm), :204-206 disarms the stall watchdog on pause/seek so a healthy paused video never trips it, and :198 `clearFailure()` runs on loadedmetadata/playing. Error states are now distinguished (see PHASE0/F-02)."
+    },
+    {
+      "id": "CE/08",
+      "verdict": "closed",
+      "file": "crates/strivo-web/src/server.rs",
+      "line": 68,
+      "loc": "crates/strivo-web/src/server.rs:68",
+      "changed": "Cold thumbnail extraction is now bounded, coalesced per id, and uses a unique temp name.",
+      "evidence": "server.rs:68 `thumbnail_slots: Arc<Semaphore>` (constructed with capacity 1 at :177), :69-70 `thumbnail_locks` for per-id coalescing, :71 `thumbnail_failures` for the brief failure cache. settings.rs:1160-1177 uses the failure cache before falling through, :1252 and :1278 the unique temp name."
+    },
+    {
+      "id": "CE/09",
+      "verdict": "closed",
+      "file": "crates/strivo-web/assets/spa/008-pvr.js",
+      "line": 455,
+      "loc": "crates/strivo-web/assets/spa/008-pvr.js:455",
+      "changed": "Shell dependencies now hydrate at shell ownership level, independent of route data.",
+      "evidence": "008-pvr.js:427 ROUTE_HYDRATION, :455 `const wants = new Set([\"channels\", \"recordings\", ...(ROUTE_HYDRATION[route] || [])])` — channels is unconditional, so a direct entry to Recordings or Schedule populates the rail without waiting for an SSE event."
+    },
+    {
+      "id": "DRV-01",
+      "verdict": "open",
+      "file": "ROADMAP.md",
+      "line": 120,
+      "loc": "ROADMAP.md:120",
+      "changed": "NEW. Found while re-verifying PHASE0/F-04: the ROADMAP row is now stale in the OPPOSITE direction from the one the 2026-07-30 audit recorded.",
+      "evidence": "ROADMAP.md:120 reads `Outbound webhook / notification connectors | 🟡 | backend works ... but TOML-only — no SPA settings UI, a DoD gap (audit F-04)`. The SPA control the row says is missing exists at 034-pvr.js:427. The row was downgraded to 🟡 at some point and never re-upgraded. Code is truth: this row is wrong."
+    },
+    {
+      "id": "DRV-02",
+      "verdict": "open",
+      "file": "ROADMAP.md",
+      "line": 127,
+      "loc": "ROADMAP.md:127",
+      "changed": "NEW. ROADMAP names a source file that does not exist as the canonical CSS source of truth.",
+      "evidence": "ROADMAP.md:127 `The SPA theme is JellySkin-derived and **crates/strivo-web/assets/spa.css** is the canonical, in-tree source of truth for it.` No such file: `assets/spa.js` and `assets/spa.css` were both deleted when the bundle was split into modules. The canonical source is now the 26 modules under `crates/strivo-web/assets/spa-css/`, assembled by build.rs:44."
+    },
+    {
+      "id": "DRV-03",
+      "verdict": "open",
+      "file": "ROADMAP.md",
+      "line": 316,
+      "loc": "ROADMAP.md:316",
+      "changed": "NEW. A revoy-ledger todo asserts the absence of files that exist.",
+      "evidence": "ROADMAP.md:316 `Ship a Docker image — no Dockerfile or compose file exists`. Dockerfile (113 lines) and docker-compose.yml (1,635 bytes) are both in the tree, and README.md documents `docker run ghcr.io/revoydotdev/strivo:latest`. The ledger block itself spans ROADMAP.md:306-340, not 310-338."
+    },
+    {
+      "id": "DRV-04",
+      "verdict": "open",
+      "file": "ROADMAP.md",
+      "line": 321,
+      "loc": "ROADMAP.md:321",
+      "changed": "NEW. A revoy-ledger todo asserts zero Rust callers that exist, and cites a file that does not exist.",
+      "evidence": "ROADMAP.md:321 `Wire or delete ab-render and submix: both have zero Rust callers yet spa.js:7074 routes #/studio/ab and #/studio/submix`. plugins.rs contains 7 `strivo_ab_render` references and 17 submix references; `spa.js` no longer exists (021-creator.js:72-73 carries the Studio ab/submix tabs)."
+    },
+    {
+      "id": "DRV-05",
+      "verdict": "open",
+      "file": "ROADMAP.md",
+      "line": 336,
+      "loc": "ROADMAP.md:336",
+      "changed": "NEW. A revoy-ledger todo asks for a guard that is already in place.",
+      "evidence": "ROADMAP.md:336 `Guard STRIVO_DEV_UNLOCK_ALL behind debug_assertions so a release build cannot ship fully unlocked`. src/licence/gate.rs:50 is `cfg!(debug_assertions) && std::env::var(\"STRIVO_DEV_UNLOCK_ALL\")...` inside `fn dev_unlock()` — the guard is exactly what the todo asks for."
+    },
+    {
+      "id": "DRV-06",
+      "verdict": "open",
+      "file": "docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md",
+      "line": 97,
+      "loc": "docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md:97",
+      "changed": "NEW. The 2026-07-30 audit's own severity tally disagrees with its own table by one.",
+      "evidence": "docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md:97 `Severity totals: P0: 0 · P1: 6 (F-11, F-12, F-18, F-32, F-37, F-04) · P2: 13 (...) · P3: 13 (...) · Informational: 1 (F-14). Total: 33 findings.` The table above it has 34 rows: F-19 is marked P2 in the table but appears in no severity bucket, so the buckets sum to 33. This register counts 34. No ID is renumbered or removed to reconcile the two; the audit is left as written."
+    }
+  ]
+}

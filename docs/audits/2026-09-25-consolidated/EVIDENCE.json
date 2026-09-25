@@ -1,0 +1,363 @@
+{
+  "schema_version": 1,
+  "index": "evidence",
+  "register": "docs/audits/2026-09-25-consolidated/MANIFEST.json",
+  "review_date": "2026-09-25",
+  "head": "a8d4f2b535eca7a6fef93713557727ad568f412a",
+  "method": "Static re-read of the working tree at the head above. No build, no test suite, no browser, no live daemon, no measurement. Verdicts are code- or doc-read facts, not executed behaviours; rows whose original closure rested on a test or a benchmark say so in their evidence field and are marked accordingly.",
+  "source_audits": [
+    {
+      "ns": "PHASE0",
+      "path": "docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md",
+      "sha256": "63eb42fa24cd9d3808e61aa9bc60f1c6a02b8f1d14d9848330828aec522f2e18",
+      "bytes": 34320,
+      "items": 34
+    },
+    {
+      "ns": "WS",
+      "path": "docs/audits/2026-09-06-web-surface/MANIFEST.json",
+      "sha256": "ceb70cddd65911a2af442bbce567efd48bc5e3dce7e70231d39d35908c02560c",
+      "bytes": 172409,
+      "items": 41
+    },
+    {
+      "ns": "WS-narrative",
+      "path": "docs/audits/2026-09-06-web-surface/MANIFEST.md",
+      "sha256": "fbcb2f286a3646f0c001a1c447ab16134560a2fc9113e2b137f23727e8499a35",
+      "bytes": 64936
+    },
+    {
+      "ns": "CE",
+      "path": "docs/audits/2026-09-08-performance-ux/REPORT.md",
+      "sha256": "1f99e49126591b953e58eb62efe3b161377433898fddc1af90aa144d10cbb3d5",
+      "bytes": 16508,
+      "items": 9
+    }
+  ],
+  "cited_source_fingerprints": {
+    ".github/workflows/ci.yml": {
+      "sha256": "531387a11eec1e2227b46f384024f4fbf34aebaa2322ebc7d7f89ac7e2ff22fc",
+      "bytes": 10114
+    },
+    "DESIGN.md": {
+      "sha256": "2e8cd645a60164dec7d5bb7f2d933ba33d2ba4c96700af2a0b23a2a10a1b4203",
+      "bytes": 12962
+    },
+    "README.md": {
+      "sha256": "41c28d13fccf4e520256d6c4fbdd3f243056522eb6e13a31117a92b9c38b876d",
+      "bytes": 10889
+    },
+    "ROADMAP.md": {
+      "sha256": "450db096969f5fbe67d2f7bc3ed73637f7d5d20cc84772dad70621c21364812d",
+      "bytes": 22849
+    },
+    "crates/editor/src/lib.rs": {
+      "sha256": "55e70de136ed2646d54ad49c76d687b0fa1745e84aea3e10bcef1c33c0616360",
+      "bytes": 25398
+    },
+    "crates/multitrack/src/lib.rs": {
+      "sha256": "423af11289b82300a3a1f7549748e29f173404529e98671ac0f1b167590223e4",
+      "bytes": 9962
+    },
+    "crates/strivo-bin/src/main.rs": {
+      "sha256": "66122bda63bdd83da3461601b0dace9339fd65da6a4257b8437bbcae9fa4dcdc",
+      "bytes": 84140
+    },
+    "crates/strivo-plugins/Cargo.toml": {
+      "sha256": "0d2191003facf3bc8f86d7b238b41be4957ff15b95ca294332cea3b5151985e8",
+      "bytes": 2192
+    },
+    "crates/strivo-web/assets/icons/candy/ATTRIBUTION.md": {
+      "sha256": "b0a82fa04c50535aa96b3747872c6c9744f7600a97217f1e532575be32096fb9",
+      "bytes": 2789
+    },
+    "crates/strivo-web/assets/spa-css/000-pvr.css": {
+      "sha256": "cdab66bff53ca6fbcdff05aeb3dc1c86399385878a9b161846d94d088293a53d",
+      "bytes": 60939
+    },
+    "crates/strivo-web/assets/spa/002-pvr.js": {
+      "sha256": "b319e093de58c5ffbbcc1fdae6e4076eca88758c2294d8b119aa80ffac1ff1d0",
+      "bytes": 8637
+    },
+    "crates/strivo-web/assets/spa/005-creator.js": {
+      "sha256": "1e989e6d94b58466f8ceb32b6e874b6d828c1b480968f570058df6a0422a0ae9",
+      "bytes": 4383
+    },
+    "crates/strivo-web/assets/spa/008-pvr.js": {
+      "sha256": "aaba43bd5cafdb81c41c160c5d3ae099ab45cb47759095fb5d822cab2a666603",
+      "bytes": 26593
+    },
+    "crates/strivo-web/assets/spa/012-pvr.js": {
+      "sha256": "08b0c3645670e844a19907ab174c6377514ff531d1d14be23bf50b130ec6274f",
+      "bytes": 24848
+    },
+    "crates/strivo-web/assets/spa/012b-pvr.js": {
+      "sha256": "a0cc98f3cbfda6c747a0b4e68f834917e925bc3a8bf9a4db0e79472c00ed9143",
+      "bytes": 19540
+    },
+    "crates/strivo-web/assets/spa/012e-pvr.js": {
+      "sha256": "c9b56664f75e6603d7ccc16b137f8e25eea3b4f1578e9dccb0e99cdfb6d2417e",
+      "bytes": 10820
+    },
+    "crates/strivo-web/assets/spa/012f-pvr.js": {
+      "sha256": "966f8f4d57460335d219232b06e645cfdf488fd5fbc7adff02804af872f0c19b",
+      "bytes": 46955
+    },
+    "crates/strivo-web/assets/spa/017-creator.js": {
+      "sha256": "a55d850b8ef63a43b4cff461586a17fc33ba9832fcd5fea5402881a533448064",
+      "bytes": 26428
+    },
+    "crates/strivo-web/assets/spa/018a-pvr.js": {
+      "sha256": "cdfe8ffb05df756fc31dba84b49cbcb17c5a0055d5e6dc73c2b41833a0e5acbd",
+      "bytes": 14456
+    },
+    "crates/strivo-web/assets/spa/020-creator.js": {
+      "sha256": "4d31853723acb9f4e03aa597c7d7e5995dd72c9158dfe850700eccf5cabb552c",
+      "bytes": 6987
+    },
+    "crates/strivo-web/assets/spa/021-creator.js": {
+      "sha256": "855c809aa5eb8f0f42eff19801dd364b80856885a3fc304f264597ac4ecd4b81",
+      "bytes": 36767
+    },
+    "crates/strivo-web/assets/spa/029-creator.js": {
+      "sha256": "bfa6802a4845e9da100a200bc4f7ae01365d5c73d956b86ea2f2f6072e3e4810",
+      "bytes": 74132
+    },
+    "crates/strivo-web/assets/spa/034-pvr.js": {
+      "sha256": "04808214a9ec77a1ee09f8e51f788ab0127a671365b53891859d38abc89da478",
+      "bytes": 27752
+    },
+    "crates/strivo-web/assets/spa/034d-pvr.js": {
+      "sha256": "fe973ca17d6ebc959182f8351cc2e94c25a890a78018c2ea06de1dfc1a5def2d",
+      "bytes": 44979
+    },
+    "crates/strivo-web/assets/spa/036-pvr.js": {
+      "sha256": "99976921e7619016cf8616b9430e3f4c08f55907c09cb63bc945d821aa956c6f",
+      "bytes": 60183
+    },
+    "crates/strivo-web/build.rs": {
+      "sha256": "74673c736bf4384e36ac0f47656b497318d6f0dafeac42da65ad715965421529",
+      "bytes": 8435
+    },
+    "crates/strivo-web/e2e/mock-server.mjs": {
+      "sha256": "00d9d77b508431db8d9e859407673858734bbfec0c808017f0f46577ad44a025",
+      "bytes": 42583
+    },
+    "crates/strivo-web/e2e/tests/player-controller.spec.ts": {
+      "sha256": "ae5ed32fbe5d36593bd958a7353ecec8654dd8424c6464d0e128898dd77b01bd",
+      "bytes": 28585
+    },
+    "crates/strivo-web/e2e/tests/spa-ux-remediation.spec.ts": {
+      "sha256": "f851bd17fab5b3f5c90cfbd61c359f90dfe085fe6e30ca802fb4c967ac7878f5",
+      "bytes": 4560
+    },
+    "crates/strivo-web/src/auth.rs": {
+      "sha256": "a959cf03f7b0f28cba95a4061b95e90f5612c8b1efa2ee67e91647d7dd44865c",
+      "bytes": 6964
+    },
+    "crates/strivo-web/src/ipc_client.rs": {
+      "sha256": "64818a0e3c481038616d5485793a2ad55ff5399f745164484e94a67e9c018c83",
+      "bytes": 5068
+    },
+    "crates/strivo-web/src/routes/api.rs": {
+      "sha256": "f38ea8c3b00cce22a07685e127bec8584c7bffcebdb8d939e6c78c95b7cd4d4f",
+      "bytes": 30789
+    },
+    "crates/strivo-web/src/routes/chat.rs": {
+      "sha256": "dd7d48785022398587af5dc2a72da42a4631053976ed76776aab42af696a4821",
+      "bytes": 7419
+    },
+    "crates/strivo-web/src/routes/events.rs": {
+      "sha256": "c4bf47ebc091bfba31501197de9512515c6fea5051d4ff531162d30c9a69f153",
+      "bytes": 3443
+    },
+    "crates/strivo-web/src/routes/licence.rs": {
+      "sha256": "ad2b8fa2ed3c5293a2561517abd073cb7724933e7e4b1491aac945b1fd712fe2",
+      "bytes": 9199
+    },
+    "crates/strivo-web/src/routes/mod.rs": {
+      "sha256": "ed04b24ef66d4880ca10ff0948f047ca6a091538d04117bec18ee5bb5f47e582",
+      "bytes": 2287
+    },
+    "crates/strivo-web/src/routes/plugins.rs": {
+      "sha256": "ea6b2de58d56b8edf2805abf5d3d7dd43b9177784e182930a78a7bf8a52461c2",
+      "bytes": 216461
+    },
+    "crates/strivo-web/src/routes/recordings.rs": {
+      "sha256": "b81834bff7832922a0e7ff1151e182736fa5ab6245ee2728fda858e4a6309ec5",
+      "bytes": 21433
+    },
+    "crates/strivo-web/src/routes/settings.rs": {
+      "sha256": "5442db19be93eb4a2f2a8035e97f38481da7111c19c2f0b871dc78c6065646d5",
+      "bytes": 95130
+    },
+    "crates/strivo-web/src/server.rs": {
+      "sha256": "70581aa26b23442630f90ed277f903c210860b0799cec97da41be22d261d9b65",
+      "bytes": 22773
+    },
+    "crates/strivo-web/tests/routes.rs": {
+      "sha256": "0553b14a3b212f7537b85a927e8758662f90ff4f4e07dadadc814ca0fb6aa7cf",
+      "bytes": 53481
+    },
+    "docs/SETTINGS-COVERAGE.md": {
+      "sha256": "af2571681fcae6e61ef785fe58c1353cd8e6df757e21c0d8970ac648b0cdb7f7",
+      "bytes": 6379
+    },
+    "docs/adr/0002-monorepo-boundary.md": {
+      "sha256": "dc9318f8291b3ec3f18dcecb5fa06dfcc5c95193af8600a6f6a27d7ef8790486",
+      "bytes": 12952
+    },
+    "docs/audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md": {
+      "sha256": "63eb42fa24cd9d3808e61aa9bc60f1c6a02b8f1d14d9848330828aec522f2e18",
+      "bytes": 34320
+    },
+    "src/pipeline/executor.rs": {
+      "sha256": "128817b03e6fe05494f3f489478eeb9ed5a33f4e77478b18be134a67938b24a5",
+      "bytes": 48890
+    },
+    "src/pipeline/runtime.rs": {
+      "sha256": "f7ea0da090241ba511549a80006e529bbd3d5d8f3482047079d1810271672476",
+      "bytes": 21508
+    },
+    "src/pipeline/stage.rs": {
+      "sha256": "0eb77f056a237cd8da65e15f3b7eb5114bb31ea67f3aa61fa643f1f09fbbcacc",
+      "bytes": 11313
+    },
+    "src/recording/catalog.rs": {
+      "sha256": "7451cd7226ef74ac9f541dd72a1caf56cac7246020b0dd8f069568f3f9aaef77",
+      "bytes": 10526
+    },
+    "src/recording/persist.rs": {
+      "sha256": "7e7d382bf5c095f3645aea2914cd6458637d5b48bdee3fd16f7c94944833ad78",
+      "bytes": 41526
+    }
+  },
+  "evidence_classes": {
+    "code-read": "The cited line exists in the current tree and says what the row claims it says. This is the class every row in this register carries unless noted below.",
+    "code-read-refuted-claim": "The row's verdict rests on refuting a PRIOR audit's claim by reading current source (PHASE0/F-11, PHASE0/F-15). Stronger than code-read: it contradicts an earlier register.",
+    "code-read-residual": "The substance is fixed but a stated acceptance criterion is not literally met (WS/CE01: one doc comment still matches the acceptance grep).",
+    "code-read-unexercised": "The fix is present in source but its behavioural acceptance was NOT re-run here (CE/01 explicitly; WS/CE04's ADR basis is documentary).",
+    "code-read-unmeasurable": "The row's own claim requires a benchmark or a live session that this todo did not perform, so `closed` reflects the source shape only (WS/V07).",
+    "code-read-unproven": "No source-level evidence of remediation exists and none can exist without running a suite this todo did not run (WS/V05, the only such row)."
+  },
+  "per_item_evidence_class": {
+    "PHASE0/F-01": "code-read",
+    "PHASE0/F-02": "code-read",
+    "PHASE0/F-03": "code-read",
+    "PHASE0/F-04": "code-read",
+    "PHASE0/F-05": "code-read",
+    "PHASE0/F-06": "code-read",
+    "PHASE0/F-07": "code-read",
+    "PHASE0/F-08": "code-read",
+    "PHASE0/F-09": "code-read",
+    "PHASE0/F-10": "code-read",
+    "PHASE0/F-11": "code-read-refuted-claim",
+    "PHASE0/F-12": "code-read",
+    "PHASE0/F-13": "code-read",
+    "PHASE0/F-14": "code-read",
+    "PHASE0/F-15": "code-read-refuted-claim",
+    "PHASE0/F-16": "code-read",
+    "PHASE0/F-18": "code-read",
+    "PHASE0/F-19": "code-read",
+    "PHASE0/F-20": "code-read",
+    "PHASE0/F-22": "code-read",
+    "PHASE0/F-25": "code-read",
+    "PHASE0/F-26": "code-read",
+    "PHASE0/F-27": "code-read",
+    "PHASE0/F-28": "code-read",
+    "PHASE0/F-29": "code-read",
+    "PHASE0/F-30": "code-read",
+    "PHASE0/F-32": "code-read",
+    "PHASE0/F-33": "code-read",
+    "PHASE0/F-34": "code-read",
+    "PHASE0/F-35": "code-read",
+    "PHASE0/F-36": "code-read",
+    "PHASE0/F-37": "code-read",
+    "PHASE0/F-38": "code-read",
+    "PHASE0/F-39": "code-read",
+    "WS/S01": "code-read",
+    "WS/S02": "code-read",
+    "WS/S03": "code-read",
+    "WS/S04": "code-read",
+    "WS/S05": "code-read",
+    "WS/S06": "code-read",
+    "WS/S07": "code-read",
+    "WS/S08": "code-read",
+    "WS/S09": "code-read",
+    "WS/S10": "code-read",
+    "WS/S11": "code-read",
+    "WS/S12": "code-read",
+    "WS/S13": "code-read",
+    "WS/S14": "code-read",
+    "WS/S15": "code-read",
+    "WS/S16": "code-read",
+    "WS/S17": "code-read",
+    "WS/R01": "code-read",
+    "WS/R02": "code-read",
+    "WS/R03": "code-read",
+    "WS/R04": "code-read",
+    "WS/R05": "code-read",
+    "WS/R06": "code-read",
+    "WS/V01": "code-read",
+    "WS/V02": "code-read",
+    "WS/V03": "code-read",
+    "WS/V04": "code-read",
+    "WS/V05": "code-read-unproven",
+    "WS/V06": "code-read",
+    "WS/V07": "code-read-unmeasurable",
+    "WS/V08": "code-read",
+    "WS/V09": "code-read",
+    "WS/V10": "code-read",
+    "WS/V11": "code-read",
+    "WS/V12": "code-read",
+    "WS/CE01": "code-read-residual",
+    "WS/CE02": "code-read",
+    "WS/CE03": "code-read",
+    "WS/CE04": "code-read",
+    "WS/CE05": "code-read",
+    "WS/CE06": "code-read",
+    "CE/01": "code-read-unexercised",
+    "CE/02": "code-read",
+    "CE/03": "code-read",
+    "CE/04": "code-read",
+    "CE/05": "code-read",
+    "CE/06": "code-read",
+    "CE/07": "code-read",
+    "CE/08": "code-read",
+    "CE/09": "code-read",
+    "DRV-01": "code-read",
+    "DRV-02": "code-read",
+    "DRV-03": "code-read",
+    "DRV-04": "code-read",
+    "DRV-05": "code-read",
+    "DRV-06": "code-read"
+  },
+  "unperformed_checks": [
+    "cargo test / cargo clippy / cargo fmt — not run. This todo changed no code, so the Rust gate is todo-1 orthogonal and belongs to the implementing waves.",
+    "Playwright mock lane and real-server lane — not run. WS/V05's flake status therefore stays unproven.",
+    "licence-backend `npm test` — not run; no licence-backend source was touched.",
+    "Compressed (br/gzip) bundle size — not measured, so PHASE0/F-29's 250 KiB threshold question stays unanswered.",
+    "50,000-row jobs.db A/B behind WS/V07 — not re-run; the pool's measured advantage is prior evidence carried forward, not re-earned here.",
+    "Live daemon, live playback, and the 500-row-offset latency question behind PHASE0/F-27 — not exercised.",
+    "EXPLAIN QUERY PLAN + timing for PHASE0/F-28's json_extract predicate — not run.",
+    "No `cargo build` was run, so no built-artifact claim is made anywhere in this register. Every verdict is judged against source, per CLAUDE.md's rule that a build artifact under target/ is output, not truth."
+  ],
+  "validator": {
+    "script": "docs/audits/2026-09-25-consolidated/validate.mjs",
+    "command": "node docs/audits/2026-09-25-consolidated/validate.mjs",
+    "asserts": [
+      "every prior item exactly once",
+      "every file:line resolves within its file's length",
+      "verdict vocabulary is closed",
+      "id namespaces do not collide"
+    ],
+    "non_vacuity_probe": "A row with id PHASE0/F-17 and line 99999 against a 564-line file was injected, the validator was re-run, and it exited 1 with 5 failures across A1, A2, A3 and A4; the row was then removed and the validator returned to exit 0. Both outputs are recorded in artifacts/w1-01/consolidated-audit.json."
+  },
+  "dirty_worktree_at_entry": {
+    "observed": [
+      " M Cargo.lock",
+      "?? artifacts/"
+    ],
+    "handling": "Pre-existing before this todo started. Neither was modified, staged, or swept. The commit stages only docs/audits/2026-09-25-consolidated/."
+  }
+}

@@ -1,0 +1,36 @@
+# Gate rule for scripts/check-no-blocking-command.sh.
+#
+# Flags `std::process::Command` (both the fully-qualified form and the
+# `use std::process::Command;` + `Command::new` form) written *lexically
+# inside an `async fn` body* and NOT inside a `spawn_blocking` closure —
+# i.e. a construction that actually executes on a Tokio worker thread.
+#
+# Two deliberately separate patterns, verified non-overlapping: the bare
+# `Command::new($$$ARGS)` pattern does not match a `tokio::process::Command::new`
+# call, so this rule never fires on the async process API.
+#
+# The `spawn_blocking` exclusion is a `kind` + `regex` relational rule, not
+# `inside: {pattern: ...}`: ast-grep 0.44.1 silently ignores a `pattern`
+# sub-rule inside a relational clause, so that spelling returns *zero*
+# exclusions and would make this gate fire on correctly-wrapped closures.
+id: std-command-on-reactor
+language: Rust
+severity: error
+message: >-
+  std::process::Command built directly in an async fn body and not inside a
+  spawn_blocking closure: this runs on a Tokio worker thread and blocks it for
+  the child's whole lifetime. Wrap the whole blocking sequence in
+  tokio::task::spawn_blocking, or use tokio::process::Command.
+rule:
+  any:
+    - pattern: std::process::Command::new($$$ARGS)
+    - pattern: Command::new($$$ARGS)
+  inside:
+    kind: function_item
+    regex: 'async fn '
+    stopBy: end
+  not:
+    inside:
+      kind: call_expression
+      regex: 'spawn_blocking'
+      stopBy: end

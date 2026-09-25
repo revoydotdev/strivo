@@ -1,0 +1,24 @@
+# Classification rule for scripts/check-no-blocking-command.sh — NOT the gate.
+#
+# Every `std::process::Command` construction that is lexically inside an
+# `async fn` body, *including* the ones correctly wrapped in a
+# `spawn_blocking` closure. The gate is
+# `scripts/ast-grep/std-command-on-reactor.yml`; this rule exists so the
+# runner can report the two counts separately:
+#
+#   this rule's hits  MINUS  the gate's hits  ==  closures correctly moved
+#                                                    off the reactor
+#
+# Severity is `info` so an `ast-grep scan` of this rule alone never fails.
+id: std-command-in-async-fn
+language: Rust
+severity: info
+message: std::process::Command constructed lexically inside an async fn body
+rule:
+  any:
+    - pattern: std::process::Command::new($$$ARGS)
+    - pattern: Command::new($$$ARGS)
+  inside:
+    kind: function_item
+    regex: 'async fn '
+    stopBy: end

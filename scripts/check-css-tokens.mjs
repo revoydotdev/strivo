@@ -55,6 +55,22 @@ const GLOBAL_SELECTOR = /^(:root|:host|html|body|\*)\b/;
  * literals DESIGN.md:56 exempts. Matching the closing paren by hand is what
  * keeps `var(--x, color-mix(in srgb, var(--y) 8%, transparent))` honest.
  */
+/**
+ * Index of the `)` closing the `(` at `open`. Counting by hand is what keeps a
+ * nested `var(--x, …)` from ending the scan early.
+ */
+function balancedParenEnd(css, open) {
+  let depth = 0;
+  for (let i = open; i < css.length; i += 1) {
+    if (css[i] === "(") depth += 1;
+    else if (css[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return css.length - 1;
+}
+
 function fallbackSpans(css) {
   const spans = [];
   for (const m of css.matchAll(/var\(/g)) {
@@ -184,8 +200,27 @@ function collect(css) {
   for (const m of css.matchAll(COLOUR_RE)) {
     if (!ix.keep[m.index] || ix.inRoot[m.index]) continue;
     if (fallbacks.some(([a, b]) => m.index >= a && m.index <= b)) continue;
+    // `color-mix(in srgb, var(--x) 40%, transparent)` is token-derived, not a
+    // hardcoded colour: the whole point of the mix is to reuse --x. Only a mix
+    // that carries a literal of its own is a deviation. Without this the
+    // census counted its own token hygiene as an offence.
+    //
+    // COLOUR_RE stops the mix at its FIRST `)`, i.e. inside the nested
+    // `var(--x)`, so both the literal test and the reported value have to use
+    // the balanced body — otherwise `color-mix(in srgb, var(--a) 50%, #f00)`
+    // is judged on `color-mix(in srgb, var(--a)` and slips through, and a real
+    // finding is printed without the literal that caused it.
+    let value = m[0];
+    if (m[0].startsWith("color-mix(")) {
+      const open = m.index + "color-mix".length;
+      const end = balancedParenEnd(css, open);
+      const body = css.slice(open, end + 1);
+      if (!/#[0-9a-fA-F]{3,8}\b|hsla?\(/.test(body)) continue;
+      // `body` starts at the `(` itself, so do not re-add it.
+      value = `color-mix${body}`;
+    }
     colours.push({
-      value: m[0].replace(/\s+/g, " "),
+      value: value.replace(/\s+/g, " "),
       line: ix.lineAt[m.index] - ix.moduleFirstLine[ix.moduleAt[m.index]],
       module: ix.moduleNames[ix.moduleAt[m.index]],
       selector: ix.selectorAt[m.index] ?? "",

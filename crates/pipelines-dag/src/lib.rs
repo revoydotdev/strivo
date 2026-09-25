@@ -34,9 +34,6 @@ pub struct Node {
     pub consumes: Vec<String>,
     /// One-line description for the SPA chip tooltip.
     pub blurb: String,
-    /// Shipping status — "available" for plugins that exist today,
-    /// "roadmap" for slots the DAW-vision plan reserves.
-    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,21 +64,13 @@ pub fn default_pipelines() -> Vec<Pipeline> {
     ]
 }
 
-fn n(
-    id: &str,
-    label: &str,
-    produces: &[&str],
-    consumes: &[&str],
-    blurb: &str,
-    status: &str,
-) -> Node {
+fn n(id: &str, label: &str, produces: &[&str], consumes: &[&str], blurb: &str) -> Node {
     Node {
         id: id.into(),
         label: label.into(),
         produces: produces.iter().map(|s| s.to_string()).collect(),
         consumes: consumes.iter().map(|s| s.to_string()).collect(),
         blurb: blurb.into(),
-        status: status.into(),
     }
 }
 
@@ -102,16 +91,16 @@ fn clip_mining_pipeline() -> Pipeline {
         nodes: vec![
             n("recording", "Recording",
               &["recording"], &[],
-              "Source VOD captured by StriVo core.", "available"),
+              "Source VOD captured by StriVo core."),
             n("cuepoints", "Cuepoints",
               &["scene_detection"], &["recording"],
-              "ffmpeg scene-change cuepoints.", "available"),
+              "ffmpeg scene-change cuepoints."),
             n("clipper", "Clipper",
               &["highlight_detection", "clip_extraction"], &["scene_detection"],
-              "Highlight scoring + clip cuts (lossless).", "available"),
+              "Highlight scoring + clip cuts (lossless)."),
             n("thumbnails", "Thumbnails",
               &["thumbnail_ranking"], &["highlight_detection"],
-              "Frame-saliency ranking + 9:16 facecam crops.", "available"),
+              "Frame-saliency ranking + 9:16 facecam crops."),
         ],
         edges: vec![
             e("recording", "cuepoints", "recording"),
@@ -130,19 +119,19 @@ fn publish_prep_pipeline() -> Pipeline {
         nodes: vec![
             n("crunchr", "Crunchr",
               &["transcription", "diarisation", "word_timestamps", "topic_segmentation"], &["recording"],
-              "Whisper-driven transcript + topic segmentation.", "available"),
+              "Whisper-driven transcript + topic segmentation."),
             n("chapters", "Chapters",
               &["chapters"], &["transcription", "topic_segmentation"],
-              "Heuristic YouTube/Twitch chapter markers.", "available"),
+              "Heuristic YouTube/Twitch chapter markers."),
             n("brandsafe", "Brandsafe",
               &["brand_safety"], &["transcription"],
-              "Slur / profanity / restricted-game / music-mention scan.", "available"),
+              "Slur / profanity / restricted-game / music-mention scan."),
             n("reuse", "Reuse",
               &["publish_queue"], &["transcription", "chapters", "highlight_detection"],
-              "Cross-format draft set (YT long / Shorts / TikTok / Patreon / podcast / blog).", "available"),
+              "Cross-format draft set (YT long / Shorts / TikTok / Patreon / podcast / blog)."),
             n("casebook", "Casebook",
               &["reporting"], &["transcription", "chapters", "highlight_detection", "brand_safety", "fraud_detection"],
-              "Markdown briefing fusing every upstream signal.", "available"),
+              "Markdown briefing fusing every upstream signal."),
         ],
         edges: vec![
             e("crunchr", "chapters", "transcription"),
@@ -165,13 +154,13 @@ fn analytics_pipeline() -> Pipeline {
         nodes: vec![
             n("insights", "Insights",
               &["stream_comparison", "audience_retention"], &["transcription"],
-              "Word freq + topics + stream comparison + per-recording retention proxy.", "available"),
+              "Word freq + topics + stream comparison + per-recording retention proxy."),
             n("heatmap", "Heatmap",
               &["audience_retention"], &["transcription", "scene_detection", "highlight_detection", "brand_safety"],
-              "Multi-signal retention overlay (talk + action + highlight − brandsafe).", "available"),
+              "Multi-signal retention overlay (talk + action + highlight − brandsafe)."),
             n("viewguard", "Viewguard",
               &["fraud_detection"], &[],
-              "Per-stream viewbot verdicts + cross-stream trend dashboard.", "available"),
+              "Per-stream viewbot verdicts + cross-stream trend dashboard."),
         ],
         edges: vec![],
     }
@@ -191,7 +180,6 @@ fn captions_pipeline() -> Pipeline {
                 &["transcription"],
                 &["recording"],
                 "Transcript source.",
-                "available",
             ),
             n(
                 "captions",
@@ -199,7 +187,6 @@ fn captions_pipeline() -> Pipeline {
                 &["captions", "translation"],
                 &["transcription"],
                 "SRT / VTT / TXT export + pluggable translator (identity today, NLLB next).",
-                "available",
             ),
         ],
         edges: vec![e("crunchr_c", "captions", "transcription")],
@@ -345,8 +332,8 @@ mod tests {
             name: "Synth".into(),
             description: "".into(),
             nodes: vec![
-                n("a", "A", &["transcription"], &[], "", "available"),
-                n("b", "B", &[], &["scene_detection"], "", "available"),
+                n("a", "A", &["transcription"], &[], ""),
+                n("b", "B", &[], &["scene_detection"], ""),
             ],
             edges: vec![e("a", "b", "transcription")],
         };
@@ -361,22 +348,8 @@ mod tests {
             name: "Cycle".into(),
             description: "".into(),
             nodes: vec![
-                n(
-                    "a",
-                    "A",
-                    &["transcription"],
-                    &["recording"],
-                    "",
-                    "available",
-                ),
-                n(
-                    "b",
-                    "B",
-                    &["recording"],
-                    &["transcription"],
-                    "",
-                    "available",
-                ),
+                n("a", "A", &["transcription"], &["recording"], ""),
+                n("b", "B", &["recording"], &["transcription"], ""),
             ],
             edges: vec![e("a", "b", "transcription"), e("b", "a", "recording")],
         };
@@ -396,18 +369,6 @@ mod tests {
             casebook_predecessors.len() >= 3,
             "got {casebook_predecessors:?}"
         );
-    }
-
-    #[test]
-    fn clip_mining_pipeline_only_uses_available_status() {
-        let p = clip_mining_pipeline();
-        for node in &p.nodes {
-            assert_eq!(
-                node.status, "available",
-                "node {} expected available",
-                node.id
-            );
-        }
     }
 
     // ── Zapier/n8n-style recipe chains ───────────────────────────────

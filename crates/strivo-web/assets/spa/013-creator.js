@@ -38,7 +38,14 @@ async function renderPipelines() {
     for (let i = 0; i < order.length; i++) {
       const node = nodeById.get(order[i]);
       if (!node) continue;
-      const statusClass = node.status === "available" ? "is-avail" : "is-roadmap";
+      const runnable = node.runnable === true;
+      const statusClass = runnable ? "is-avail" : "is-roadmap";
+      // A blueprint node is labelled by what it actually is, and the
+      // tooltip names the capabilities with no executor behind them.
+      const missing = node.missing || [];
+      const verdict = runnable
+        ? "runnable"
+        : `blueprint — no executor for ${missing.join(", ")}`;
       const produces = (node.produces || [])
         .map((c) => `<span class="pl-cap pl-cap-produces">${htmlEscape(c.replace(/_/g, " "))}</span>`)
         .join("");
@@ -53,11 +60,11 @@ async function renderPipelines() {
         ? `#/plugins/${node.id}`
         : `#/plugins`;
       cells.push(`<a class="pl-node ${statusClass}" href="${htmlEscape(href)}"
-          title="${htmlEscape(node.blurb)} · click to open ${htmlEscape(node.label)}"
+          title="${htmlEscape(node.blurb)} · ${htmlEscape(verdict)}"
           data-plugin="${htmlEscape(node.id)}">
           <div class="pl-node-head">
             <span class="pl-node-label">${htmlEscape(node.label)}</span>
-            <span class="pl-node-status">${htmlEscape(node.status)}</span>
+            <span class="pl-node-status">${htmlEscape(runnable ? "runnable" : "blueprint")}</span>
           </div>
           <div class="pl-node-caps">${consumes}${produces}</div>
         </a>`);
@@ -78,16 +85,16 @@ async function renderPipelines() {
   const cards = pipelines
     .map((p, idx) => {
       const totalNodes = (p.nodes || []).length;
-      const availNodes = (p.nodes || []).filter((n) => n.status === "available").length;
-      const pct = totalNodes === 0 ? 0 : Math.round((availNodes / totalNodes) * 100);
+      const runnableNodes = (p.nodes || []).filter((n) => n.runnable === true).length;
+      const pct = totalNodes === 0 ? 0 : Math.round((runnableNodes / totalNodes) * 100);
       return `
     <section class="cfg-card pl-pipe-card">
       <header class="pl-pipe-head">
         <h2 class="cfg-title">${htmlEscape(p.name)} <span class="pg-cap-hint">${htmlEscape(p.description)}</span></h2>
         <div class="pl-pipe-actions">
-          <span class="pl-pipe-readiness ${pct === 100 ? "complete" : "partial"}"
-                title="${availNodes} of ${totalNodes} stages available">
-            ${availNodes}/${totalNodes} ready
+          <span class="pl-pipe-readiness ${p.runnable ? "complete" : "partial"}"
+                title="${runnableNodes} of ${totalNodes} nodes have an executor for every capability they produce">
+            ${runnableNodes}/${totalNodes} runnable
           </span>
           <span class="pg-cap-hint">Blueprint</span>
         </div>

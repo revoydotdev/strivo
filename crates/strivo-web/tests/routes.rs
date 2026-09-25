@@ -13,6 +13,8 @@
 use axum::body::to_bytes;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
+#[cfg(feature = "creator")]
+use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -443,6 +445,114 @@ async fn s07_pipelines_dag_rejects_bogus_key() {
         status,
         StatusCode::UNAUTHORIZED,
         "GET /api/v1/pipelines/dag must reject a bogus X-Api-Key with 401, got {status}"
+    );
+}
+
+/// The blueprint surface must tell a runnable topology from a roadmap
+/// one, and the verdict must come from the executor's own capability
+/// registry — not from a hardcoded per-node `status` string.
+///
+/// The `recording` node of `clip_mining` produces the pseudo-capability
+/// `recording`. No plugin implements it, so it can never be executed and
+/// the route must say so. Before the fix every node shipped
+/// `status: "available"` regardless, so `runnable` was absent and the
+/// pipeline claimed 4/4 ready.
+#[cfg(feature = "creator")]
+#[tokio::test]
+async fn pipelines_dag_reports_runnability_from_the_capability_registry() {
+    let api_key = "dag-runnability-test-key";
+    let router = build_router(AppState::test_state(api_key));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/pipelines/dag")
+                .header("x-api-key", api_key)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    let pipelines = body["pipelines"].as_array().expect("pipelines array");
+    assert!(!pipelines.is_empty(), "no blueprints returned");
+
+    let mut seen_not_runnable = 0;
+    let mut seen_runnable = 0;
+    for pipeline in pipelines {
+        for node in pipeline["nodes"].as_array().expect("nodes array") {
+            let runnable = node["runnable"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("node {} carries no `runnable` verdict", node["id"]));
+            let missing: Vec<&str> = node["missing"]
+                .as_array()
+                .unwrap_or_else(|| panic!("node {} carries no `missing` list", node["id"]))
+                .iter()
+                .map(|v| v.as_str().expect("capability tag is a string"))
+                .collect();
+            // The verdict must be a pure function of the registry lookup,
+            // never of anything hardcoded per node.
+            assert_eq!(
+                runnable,
+                missing.is_empty(),
+                "node {}: runnable={runnable} but missing={missing:?}",
+                node["id"]
+            );
+            if missing.is_empty() {
+                seen_runnable += 1;
+                assert!(
+                    !node["providers"].as_array().expect("providers array").is_empty(),
+                    "node {} claims runnable with no executor behind it",
+                    node["id"]
+                );
+            } else {
+                seen_not_runnable += 1;
+                assert!(
+                    node["providers"].as_array().expect("providers array").len() < missing.len()
+                        || !missing.is_empty(),
+                    "node {}: inconsistent provider/missing accounting",
+                    node["id"]
+                );
+            }
+        }
+        // A blueprint is runnable only when every one of its nodes is.
+        let all_nodes_runnable = pipeline["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .iter()
+            .all(|n| n["runnable"] == json!(true));
+        assert_eq!(pipeline["runnable"], json!(all_nodes_runnable));
+    }
+    // Non-vacuity: both verdicts must actually occur, or the test would
+    // pass against a surface that reports everything runnable.
+    assert!(
+        seen_runnable > 0,
+        "no blueprint node has an executor; the check is vacuous"
+    );
+    assert!(
+        seen_not_runnable > 0,
+        "every blueprint node claims an executor; the check is vacuous"
+    );
+
+    // The `recording` node has no executor anywhere in the registry, so it
+    // must never be reported as runnable.
+    let recording_node = pipelines
+        .iter()
+        .flat_map(|p| p["nodes"].as_array().unwrap_or(&vec![]).clone())
+        .find(|n| n["id"] == "recording")
+        .expect("clip_mining still declares its `recording` source node");
+    assert_eq!(
+        recording_node["runnable"],
+        json!(false),
+        "the `recording` node has no executor but is reported runnable"
+    );
+    assert_eq!(
+        recording_node["missing"],
+        json!(["recording"]),
+        "the unexecutable capability must be named, not hidden"
     );
 }
 

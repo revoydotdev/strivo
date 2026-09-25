@@ -148,6 +148,26 @@ impl Plugin for ArtifactPlugin {
         None
     }
 
+    /// One capability per executor verb in `execute_stage` below, so
+    /// `PluginRegistry::providers_of` reports exactly the capabilities
+    /// this plugin can actually run. A tag with no verb arm must not be
+    /// listed here — that is what makes the Pipelines blueprint surface
+    /// able to tell a runnable topology from a roadmap one.
+    fn capabilities(&self) -> Vec<&'static str> {
+        use strivo_core::plugin::capability as cap;
+        vec![
+            cap::CHAPTERS,            // "chapters"
+            cap::CAPTIONS,            // "captions"
+            cap::BRAND_SAFETY,        // "brandsafe"
+            cap::SCENE_DETECTION,     // "cuepoints"
+            cap::HIGHLIGHT_DETECTION, // "highlights"
+            cap::CLIP_EXTRACTION,     // "clips"
+            cap::THUMBNAIL_RANKING,   // "thumbnails"
+            cap::PUBLISH_QUEUE,       // "reuse"
+            cap::REPORTING,           // "casebook"
+        ]
+    }
+
     fn status_slot(&self) -> StatusSlot {
         StatusSlot::None
     }

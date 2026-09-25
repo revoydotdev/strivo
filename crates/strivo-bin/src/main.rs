@@ -2087,18 +2087,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// with an empty registry and the plugin RPC/event paths are no-ops.
 #[cfg(feature = "creator")]
 fn register_first_party_plugins(host: &mut daemon::DaemonPluginHost) {
-    host.registry
-        .register(Box::new(strivo_plugins::crunchr::CrunchrPlugin::new()));
-    host.registry
-        .register(Box::new(strivo_plugins::artifacts::ArtifactPlugin::new()));
-    host.registry
-        .register(Box::new(strivo_plugins::archiver::ArchiverPlugin::new()));
-    host.registry
-        .register(Box::new(strivo_plugins::insights::InsightsPlugin::new()));
-    host.registry
-        .register(Box::new(strivo_plugins::editor::EditorPlugin::new()));
-    host.registry
-        .register(Box::new(strivo_plugins::viewguard::ViewguardPlugin::new()));
+    strivo_plugins::register_all(&mut host.registry);
     // Tell core's generic `post_pull_markers` what Crunchr's tandem
     // auto-trigger marker looks like, without core naming the plugin.
     let (section, marker) = strivo_plugins::crunchr::POST_PULL_MARKER;

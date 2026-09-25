@@ -243,6 +243,20 @@ impl Plugin for CrunchrPlugin {
     fn status_line(&self) -> Option<String> {
         None
     }
+
+    /// The four transcript capabilities `runner::process_recording`
+    /// produces, which is exactly the surface the `transcribe` /
+    /// `retranscribe` stage executors above deliver.
+    fn capabilities(&self) -> Vec<&'static str> {
+        use strivo_core::plugin::capability as cap;
+        vec![
+            cap::TRANSCRIPTION,
+            cap::WORD_TIMESTAMPS,
+            cap::DIARISATION,
+            cap::TOPIC_SEGMENTATION,
+        ]
+    }
+
     fn status_slot(&self) -> StatusSlot {
         StatusSlot::None
     }

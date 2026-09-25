@@ -490,25 +490,86 @@ async fn pipelines_dag(headers: HeaderMap, State(state): State<AppState>) -> imp
     if check_key(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    let pipelines = strivo_pipelines_dag::default_pipelines();
-    // Bundle each pipeline with its topological order so the SPA can
-    // lay nodes left-to-right deterministically.
+    Json(dag_payload(
+        strivo_pipelines_dag::default_pipelines(),
+        &registered_plugins(),
+    ))
+    .into_response()
+}
+
+/// The executor registry, built from the same
+/// [`strivo_plugins::register_all`] the daemon uses so a capability is
+/// never reported runnable here and unrunnable there. Plugin constructors
+/// only initialise fields — `init` is what touches disk and is never
+/// called — so this answers the capability question for free.
+#[cfg(feature = "creator")]
+fn registered_plugins() -> strivo_core::plugin::registry::PluginRegistry {
+    let mut registry = strivo_core::plugin::registry::PluginRegistry::new();
+    strivo_plugins::register_all(&mut registry);
+    registry
+}
+
+/// Serialise blueprints, annotating every node with the executor verdict
+/// `docs/PIPELINE.md` promises: a blueprint is not presented as runnable
+/// until every capability it needs has an executor. A node is runnable
+/// when each capability it *produces* resolves to at least one registered
+/// provider — the same lookup `PluginRegistry::execute_stage` gates on.
+#[cfg(feature = "creator")]
+fn dag_payload(
+    pipelines: Vec<strivo_pipelines_dag::Pipeline>,
+    registry: &strivo_core::plugin::registry::PluginRegistry,
+) -> serde_json::Value {
+    use strivo_pipelines_dag::Pipeline;
     let payload: Vec<serde_json::Value> = pipelines
         .into_iter()
-        .map(|p| {
+        .map(|p: Pipeline| {
             let order = strivo_pipelines_dag::topo_order(&p).unwrap_or_default();
+            let nodes: Vec<serde_json::Value> = p
+                .nodes
+                .into_iter()
+                .map(|node| {
+                    let mut providers: Vec<serde_json::Value> = Vec::new();
+                    let mut missing: Vec<serde_json::Value> = Vec::new();
+                    for capability in &node.produces {
+                        let found = registry.providers_of(capability);
+                        if found.is_empty() {
+                            missing.push(json!(capability));
+                        } else {
+                            for name in found {
+                                providers.push(json!({ "capability": capability, "plugin": name }));
+                            }
+                        }
+                    }
+                    json!({
+                        "id": node.id,
+                        "label": node.label,
+                        "produces": node.produces,
+                        "consumes": node.consumes,
+                        "blurb": node.blurb,
+                        "runnable": missing.is_empty(),
+                        "providers": providers,
+                        "missing": missing,
+                    })
+                })
+                .collect();
+            let runnable = !nodes.is_empty()
+                && nodes
+                    .iter()
+                    .all(|n| n["runnable"].as_bool() == Some(true));
             json!({
                 "id": p.id,
                 "name": p.name,
                 "description": p.description,
-                "nodes": p.nodes,
+                "nodes": nodes,
                 "edges": p.edges,
                 "order": order,
+                "runnable": runnable,
             })
         })
         .collect();
-    Json(json!({ "pipelines": payload })).into_response()
+    json!({ "pipelines": payload })
 }
+
 
 #[cfg(feature = "creator")]
 async fn pipeline_runs(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
@@ -839,5 +900,60 @@ mod tests {
         assert_eq!(payload.channel_name, "Example creator");
         assert_eq!(payload.platform, PlatformKind::YouTube);
         assert_eq!(payload.post_title.as_deref(), Some("Uploaded video"));
+    }
+
+    /// A fabricated blueprint naming a capability no plugin implements
+    /// must come back as not-runnable, with the gap named. Without a
+    /// fabricated node there is no way to exercise the branch at all: the
+    /// four shipped blueprints happen to contain such nodes by accident.
+    #[cfg(feature = "creator")]
+    #[test]
+    fn dag_payload_reports_a_fabricated_missing_capability_as_not_runnable() {
+        use strivo_pipelines_dag::{Edge, Node, Pipeline};
+        let fabricated = Pipeline {
+            id: "fabricated".into(),
+            name: "Fabricated".into(),
+            description: "test-only".into(),
+            nodes: vec![
+                Node {
+                    id: "real".into(),
+                    label: "Real".into(),
+                    produces: vec!["chapters".into()],
+                    consumes: vec![],
+                    blurb: String::new(),
+                },
+                Node {
+                    id: "imaginary".into(),
+                    label: "Imaginary".into(),
+                    produces: vec!["x.not_a_real_capability".into()],
+                    consumes: vec!["chapters".into()],
+                    blurb: String::new(),
+                },
+            ],
+            edges: vec![Edge {
+                from: "real".into(),
+                to: "imaginary".into(),
+                via: "chapters".into(),
+            }],
+        };
+        let payload = dag_payload(vec![fabricated], &registered_plugins());
+        let pipeline = &payload["pipelines"][0];
+        assert_eq!(pipeline["runnable"], json!(false));
+        assert_eq!(pipeline["nodes"][0]["runnable"], json!(true));
+        assert_eq!(
+            pipeline["nodes"][0]["providers"],
+            json!([{ "capability": "chapters", "plugin": "artifacts" }])
+        );
+        assert_eq!(pipeline["nodes"][1]["runnable"], json!(false));
+        assert_eq!(
+            pipeline["nodes"][1]["missing"],
+            json!(["x.not_a_real_capability"])
+        );
+        assert_eq!(
+            pipeline["nodes"][1]["providers"],
+            json!([]),
+            "a node with one satisfied and one absent capability still resolves \
+             the ones it can, and must not be credited with the absent one"
+        );
     }
 }

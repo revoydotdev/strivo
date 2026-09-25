@@ -1,0 +1,558 @@
+{
+  "schema": "strivo-perf-baseline/1",
+  "captured_at": "2026-09-25T23:16:13.799Z",
+  "host": {
+    "kernel": "7.2.6-zen2-1-zen",
+    "arch": "x64",
+    "cpus": 24,
+    "total_mem_bytes": 67141238784,
+    "loadavg_1m": 10.67,
+    "loadavg_5m": 16.32
+  },
+  "harness": {
+    "script": "scripts/bench_library.sh + scripts/bench_probe.mjs",
+    "probe_invocation": "/home/revelri/src/revoydotdev/public/strivo/scripts/bench_probe.mjs --base-url http://127.0.0.1:8410 --api-key perf-baseline-key --serve-pid 874670 --daemon-pid 874583 --requests 60 --concurrency 1 --offsets 0,1000,5000,10000 --binary-sha 9aa2e641b5b81f4402fc798831a82bfb18becb55cf1fe701e883bd7ecdf1cf16 --library-manifest /tmp/strivo-perf-bench/r.zsAK7K/library-manifest.json --out artifacts/bench-library-runA-n10000.json",
+    "requests_per_workload": 60,
+    "concurrency": 1,
+    "page_limit": 500,
+    "offsets": [
+      0,
+      1000,
+      5000,
+      10000
+    ],
+    "binary_sha256": "9aa2e641b5b81f4402fc798831a82bfb18becb55cf1fe701e883bd7ecdf1cf16",
+    "latency_source": "Server-Timing: app;dur (crates/strivo-web/src/server.rs performance_timing)"
+  },
+  "edition": {
+    "licence_route_status": 404,
+    "recordings_total": 10000,
+    "version": "strivo 0.8.0",
+    "recordings_sample": [
+      {
+        "id": "5b218aae-b30e-4210-9fe4-a647eebc8f90",
+        "state": "Failed",
+        "file_exists": true,
+        "video_codec": "h264",
+        "audio_codec": null,
+        "output_path_tail": "media/silent-0-synthetic-capture.mkv"
+      },
+      {
+        "id": "93b01af7-48a3-4062-bda3-72217c70b84e",
+        "state": "Failed",
+        "file_exists": true,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "output_path_tail": "media/vfr-1-synthetic-capture.mkv"
+      }
+    ],
+    "ok": true,
+    "recordings_status": 200
+  },
+  "library": {
+    "rows": 10000,
+    "requested_rows": 10000,
+    "seed": 9,
+    "missing_path_fraction": 0.05,
+    "classes": {
+      "multi-audio": [
+        "multi-audio-0-synthetic-capture.mkv",
+        "multi-audio-1-synthetic-capture.mkv"
+      ],
+      "silent": [
+        "silent-0-synthetic-capture.mkv",
+        "silent-1-synthetic-capture.mkv"
+      ],
+      "vfr": [
+        "vfr-0-synthetic-capture.mkv",
+        "vfr-1-synthetic-capture.mkv"
+      ],
+      "mixed-codec": [
+        "mixed-codec-0-synthetic-capture.mkv",
+        "mixed-codec-1-synthetic-capture.mkv"
+      ],
+      "long": [
+        "long-0-synthetic-capture.mkv",
+        "long-1-synthetic-capture.mkv"
+      ],
+      "unicode": [
+        "unicode-0-日本語 セッション 🎬.mkv",
+        "unicode-1-Ωμέγα café.mkv"
+      ]
+    },
+    "class_row_counts": {
+      "multi-audio": 1668,
+      "silent": 1668,
+      "vfr": 1666,
+      "mixed-codec": 1666,
+      "long": 1666,
+      "unicode": 1666
+    },
+    "media_files": [
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/multi-audio-0-synthetic-capture.mkv",
+        "class": "multi-audio",
+        "file": "multi-audio-0-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 2,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 51566
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/multi-audio-1-synthetic-capture.mkv",
+        "class": "multi-audio",
+        "file": "multi-audio-1-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 2,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 51566
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/silent-0-synthetic-capture.mkv",
+        "class": "silent",
+        "file": "silent-0-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 0,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": null,
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 30859
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/silent-1-synthetic-capture.mkv",
+        "class": "silent",
+        "file": "silent-1-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 0,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": null,
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 30859
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/vfr-0-synthetic-capture.mkv",
+        "class": "vfr",
+        "file": "vfr-0-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 10,
+          "bytes": 38822
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/vfr-1-synthetic-capture.mkv",
+        "class": "vfr",
+        "file": "vfr-1-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 10,
+          "bytes": 38822
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/mixed-codec-0-synthetic-capture.mkv",
+        "class": "mixed-codec",
+        "file": "mixed-codec-0-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "mpeg4",
+          "audio_codec": "mp3",
+          "duration_secs": 3.02,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 84281
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/mixed-codec-1-synthetic-capture.mkv",
+        "class": "mixed-codec",
+        "file": "mixed-codec-1-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "mpeg4",
+          "audio_codec": "mp3",
+          "duration_secs": 3.02,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 84281
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/long-0-synthetic-capture.mkv",
+        "class": "long",
+        "file": "long-0-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 120,
+          "avg_fps": 10,
+          "video_frames": 1200,
+          "bytes": 1206911
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/long-1-synthetic-capture.mkv",
+        "class": "long",
+        "file": "long-1-synthetic-capture.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 120,
+          "avg_fps": 10,
+          "video_frames": 1200,
+          "bytes": 1206911
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/unicode-0-日本語 セッション 🎬.mkv",
+        "class": "unicode",
+        "file": "unicode-0-日本語 セッション 🎬.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 41670
+        }
+      },
+      {
+        "path": "/tmp/strivo-perf-bench/r.zsAK7K/media/unicode-1-Ωμέγα café.mkv",
+        "class": "unicode",
+        "file": "unicode-1-Ωμέγα café.mkv",
+        "probed": {
+          "audio_streams": 1,
+          "video_streams": 1,
+          "video_codec": "h264",
+          "audio_codec": "vorbis",
+          "duration_secs": 3,
+          "avg_fps": 10,
+          "video_frames": 30,
+          "bytes": 41670
+        }
+      }
+    ],
+    "ffprobe_available": true,
+    "not_captured": []
+  },
+  "api": {
+    "/api/v1/recordings?cursor=0&limit=500": {
+      "endpoint": "/api/v1/recordings",
+      "offset": 0,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 500,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 3.38,
+        "p50": 4.01,
+        "p95": 5.5,
+        "p99": 6.19,
+        "max": 6.19,
+        "mean": 4.17
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 7.79,
+        "p50": 10.15,
+        "p95": 13.05,
+        "p99": 14.75,
+        "max": 14.75,
+        "mean": 10.31
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/recordings?cursor=1000&limit=500": {
+      "endpoint": "/api/v1/recordings",
+      "offset": 1000,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 500,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 3.26,
+        "p50": 3.83,
+        "p95": 5.34,
+        "p99": 6.08,
+        "max": 6.08,
+        "mean": 4.04
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 7.85,
+        "p50": 9.73,
+        "p95": 11.36,
+        "p99": 12.87,
+        "max": 12.87,
+        "mean": 9.76
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/recordings?cursor=5000&limit=500": {
+      "endpoint": "/api/v1/recordings",
+      "offset": 5000,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 500,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 3.39,
+        "p50": 4.01,
+        "p95": 5.56,
+        "p99": 7.11,
+        "max": 7.11,
+        "mean": 4.27
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 7.88,
+        "p50": 9.84,
+        "p95": 12.47,
+        "p99": 14.09,
+        "max": 14.09,
+        "mean": 10.11
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/recordings?cursor=10000&limit=500": {
+      "endpoint": "/api/v1/recordings",
+      "offset": 10000,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 0,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 0.53,
+        "p50": 0.68,
+        "p95": 1.11,
+        "p99": 1.27,
+        "max": 1.27,
+        "mean": 0.75
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 1.98,
+        "p50": 2.38,
+        "p95": 3.09,
+        "p99": 3.56,
+        "max": 3.56,
+        "mean": 2.44
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/history?cursor=0&limit=500": {
+      "endpoint": "/api/v1/history",
+      "offset": 0,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 500,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 1.89,
+        "p50": 2.14,
+        "p95": 3.24,
+        "p99": 3.61,
+        "max": 3.61,
+        "mean": 2.35
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 6.29,
+        "p50": 7.88,
+        "p95": 10.4,
+        "p99": 11.55,
+        "max": 11.55,
+        "mean": 8.24
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/history?cursor=1000&limit=500": {
+      "endpoint": "/api/v1/history",
+      "offset": 1000,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 500,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 1.82,
+        "p50": 2.25,
+        "p95": 3.34,
+        "p99": 3.58,
+        "max": 3.58,
+        "mean": 2.39
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 6.17,
+        "p50": 7.86,
+        "p95": 9.91,
+        "p99": 10.91,
+        "max": 10.91,
+        "mean": 8.08
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/history?cursor=5000&limit=500": {
+      "endpoint": "/api/v1/history",
+      "offset": 5000,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 500,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 2,
+        "p50": 2.17,
+        "p95": 3.28,
+        "p99": 3.82,
+        "max": 3.82,
+        "mean": 2.33
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 6.2,
+        "p50": 7.74,
+        "p95": 9.59,
+        "p99": 12.24,
+        "max": 12.24,
+        "mean": 8.01
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    },
+    "/api/v1/history?cursor=10000&limit=500": {
+      "endpoint": "/api/v1/history",
+      "offset": 10000,
+      "limit": 500,
+      "requests": 60,
+      "library_total": 10000,
+      "rows_returned": 0,
+      "server_app_ms": {
+        "samples": 60,
+        "min": 0.4,
+        "p50": 0.73,
+        "p95": 0.94,
+        "p99": 0.95,
+        "max": 0.95,
+        "mean": 0.7
+      },
+      "client_wall_ms": {
+        "samples": 60,
+        "min": 1.46,
+        "p50": 2.63,
+        "p95": 3.37,
+        "p99": 3.76,
+        "max": 3.76,
+        "mean": 2.67
+      },
+      "responses_without_server_timing": 0,
+      "non_200_responses": 0
+    }
+  },
+  "process": {
+    "serve_rss": {
+      "start": 16797696,
+      "end": 24027136,
+      "peak": 31145984
+    },
+    "daemon_rss": {
+      "start": 23474176,
+      "end": 23498752,
+      "peak": 24125440
+    },
+    "children_max": {
+      "total": 0,
+      "by_name": {}
+    },
+    "children_sampled": 50
+  },
+  "first_render": {
+    "captured": true,
+    "reason": null,
+    "route": "/app#/recordings",
+    "first_row_ms": 211,
+    "rows_in_dom": 200,
+    "nav": {
+      "dom_content_loaded_ms": 117,
+      "load_ms": 725,
+      "fcp_ms": 252
+    }
+  },
+  "snapshots": [
+    {
+      "label": "before-api-workload",
+      "at": "2026-09-25T23:16:08.037Z",
+      "rss_bytes": {
+        "874583": 23474176,
+        "874670": 16797696
+      },
+      "children": {
+        "total": 0,
+        "by_name": {}
+      }
+    },
+    {
+      "label": "after-api-workload",
+      "at": "2026-09-25T23:16:12.377Z",
+      "rss_bytes": {
+        "874583": 23498752,
+        "874670": 24027136
+      },
+      "children": {
+        "total": 0,
+        "by_name": {}
+      }
+    }
+  ],
+  "not_captured": []
+}

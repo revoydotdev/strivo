@@ -80,7 +80,10 @@ measurement caveats for the September 8 remediation are in
 For representative production measurements, run a release binary against a
 copy of a large library and record API latency, resident memory, first-render
 time, and active child-process count. Do not benchmark against a live production
-database.
+database. `scripts/bench_library.sh` does exactly this against a throwaway
+synthetic library and writes the machine-readable baseline; its captured run
+and the caveats that apply to reading it are in
+[docs/perf](perf/README.md).
 
 ## Next profiling thresholds
 

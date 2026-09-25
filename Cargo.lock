@@ -3256,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "strivo-bin"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "strivo-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3648,7 +3648,7 @@ dependencies = [
 
 [[package]]
 name = "strivo-web"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "askama",

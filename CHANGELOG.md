@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Fixed
+- **`scripts/check-plan-deps.mjs` treated a ticked todo as absent.** Its parser
+  matched only the unchecked checkbox, so ticking the first box of a wave
+  removed that todo from the dependency DAG and the run reported 53 false
+  invariant failures.
+- **Documentation described systems that no longer exist.** `routes::recordings`
+  was commented "retained but unmounted" while `server.rs` merges its router;
+  the `strivo-web` README still advertised a TUI companion and an Askama/HTMX
+  stack nothing loads; `licence-backend/README.md` cited a deploy workflow that
+  does not exist. `src/edl/recorder.rs` existed only to snapshot the removed
+  TUI's command log and is deleted.
+- **Every generated crate README reported `Unit tests: 0`.** The generator
+  anchored its test count on `^#\[test\]`, but every `#[test]` in the tree is
+  indented inside `mod tests`, so all 34 counted zero. The same generator also
+  hardcoded "a pure-data Rust crate — no IO, no DOM" prose that is false for
+  crates such as `crates/editor` (SQLite + ffmpeg).
+
+## [0.8.0] — 2026-09-20
+
 ### Added
 - **Auto-download new uploads, Twitch/YouTube/Patreon, both editions.** A
   monitored Twitch/YouTube channel (livestream auto-record on) now also
@@ -494,7 +513,8 @@ changelog entry at the time.
 - Dialog system for confirmations and input.
 - Color theme system for the TUI.
 
-[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/revoydotdev/strivo/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/revoydotdev/strivo/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/revoydotdev/strivo/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/revoydotdev/strivo/compare/v0.4.0...v0.5.0

@@ -112,6 +112,9 @@ jobs:
       - name: CHANGELOG Unreleased is non-empty when feat/fix commits exist
         run: scripts/check-changelog-unreleased.sh
 
+      - name: released version agrees across Cargo.toml, CHANGELOG and README
+        run: scripts/check-version-agreement.sh
+
       # The plan is untracked local state (`.omo/` is excluded), so a clean
       # checkout has none and the checker would exit 1 on ENOENT every run.
       # Assert when the plan is present: that is what fails a --write regression.

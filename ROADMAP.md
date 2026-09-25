@@ -117,16 +117,19 @@ ui-ux, backend) and `research/exemplars/`.
 |---|---|---|
 | Calendar / upcoming-streams grid | ✅ | 7-day strip on the Schedule page off `next_fire`; full EPG later |
 | Per-channel quality/format overrides in the UI | ✅ | Monitor rows expose container/profile selects; `put_auto_record` persists them |
-| Outbound webhook / notification connectors | 🟡 | backend works (`src/webhook.rs` off `DaemonEvent`) but TOML-only — no SPA settings UI, a DoD gap (audit F-04). Discord/ntfy presets later |
+| Outbound webhook / notification connectors | ✅ | full stack now: `src/webhook.rs` off `DaemonEvent`, plus SPA settings UI (`assets/spa/034-pvr.js:427`), URL validation and tests (`src/routes/settings.rs:1907,2293-2314`). Discord/ntfy presets still ⬜ |
 | Storage gauge in the UI | ✅ | three-segment disk bar on the System page from `/api/v1/storage` |
 | Concurrent-slot indicator ("N / M rec") | ✅ | topbar slot pill from `monitor_limits.max_concurrent_recordings` + live count |
 | Quality profiles (tiered) | ✅ | `bd75f9c` + `0fa189e` — `QualityTier` enum in `CaptureProfile`; threaded through streamlink and yt-dlp. |
 | Filename-token browser, JSON channel import/export | ✅ | `bd75f9c` — token browser SPA pane + JSON import/export routes shipped. |
 
 ### SPA theme ✅ (resolved — JellySkin is canonical)
-The SPA theme is JellySkin-derived and **`crates/strivo-web/assets/spa.css` is the
-canonical, in-tree source of truth for it.** An earlier ElegantFin direction was
-dropped; its reference CSS is archived under `docs/archive/`. The settled facts:
+The SPA theme is JellySkin-derived and **`crates/strivo-web/assets/spa-css/` is the
+canonical, in-tree source of truth for it** — ordered `<seq>-<edition>.css`
+modules concatenated at build time by `crates/strivo-web/build.rs:44` into the
+single `spa.css` that the daemon serves. There is no single-file `spa.css` in
+the source tree to edit. An earlier ElegantFin direction was dropped; its
+reference CSS is archived under `docs/archive/`. The settled facts:
 
 - Deep navy gradient ground, purple→cyan accent gradient, heavy frosted glass.
 - Typeface **Montserrat**, served from **Bunny Fonts** rather than Google Fonts so
@@ -305,22 +308,22 @@ to the next phase when these land. Keep in sync with the tables above.
 
 <!-- revoy:begin -->
 ```toml
-phase = "post-0.6.0"
+phase = "post-0.8.0"
+
+# Re-derived 2026-09-25 from docs/audits/2026-09-25-consolidated/MANIFEST.json
+# (90 rows: 69 closed / 12 open / 8 still-open / 1 superseded; 20 unacted).
+# Severity is the 2026-07-30 audit's own; IDs are namespaced as the register
+# requires. Every row below is `open` or `still-open` there. Three todos that
+# were on this list and are now done were removed rather than re-closed:
+# the Docker image (Dockerfile + docker-compose.yml both tracked), the
+# ab-render/submix wiring (7 + 17 references in
+# crates/strivo-web/src/routes/plugins.rs), and the STRIVO_DEV_UNLOCK_ALL guard
+# (src/licence/gate.rs:50 is already `cfg!(debug_assertions) && ...`).
 
 [[todo]]
 line = "Deploy licence-backend to Cloudflare — it is fully written but wrangler.toml still holds REPLACE_WITH_D1_ID and no workflow deploys it, so Pro cannot be sold"
 difficulty = 25
 priority = "HIGH"
-
-[[todo]]
-line = "Ship a Docker image — no Dockerfile or compose file exists, which puts StriVo behind every peer in the self-hosted PVR class"
-difficulty = 25
-priority = "HIGH"
-
-[[todo]]
-line = "Wire or delete ab-render and submix: both have zero Rust callers yet spa.js:7074 routes #/studio/ab and #/studio/submix at them, so the nav leads nowhere"
-difficulty = 20
-priority = "MED"
 
 [[todo]]
 line = "Reconcile /api/v1/pipelines/dag with real run state — it returns four hardcoded templates while actual pipeline state lives elsewhere"
@@ -333,7 +336,72 @@ difficulty = 15
 priority = "MED"
 
 [[todo]]
-line = "Guard STRIVO_DEV_UNLOCK_ALL behind debug_assertions so a release build cannot ship fully unlocked"
+line = "PHASE0/F-11 (P1): the Creator upgrade card reads licence.entitled and never licence.implemented, and the trial button calls licenceTrial() unconditionally, so it cannot show a real entitlement verdict"
+difficulty = 20
+priority = "HIGH"
+
+[[todo]]
+line = "PHASE0/F-12 (P1): 14 of 20 Pro panes are still route: null, so the signpost tabs describe a control the SPA cannot reach"
+difficulty = 25
+priority = "HIGH"
+
+[[todo]]
+line = "PHASE0/F-16 (P2): headless auto-transcribe is still gated on config-only lists or a marker file, with no SPA control to copy the archiver tandem toggle's pattern from"
+difficulty = 20
+priority = "MED"
+
+[[todo]]
+line = "PHASE0/F-33 (P2): the EDL render is still one ffmpeg subprocess per cut plus a final concat pass, so a long timeline is N+1 process spawns"
+difficulty = 30
+priority = "MED"
+
+[[todo]]
+line = "PHASE0/F-36 (P2): the pipeline has one global Gpu permit and no transcription-specific cap, so a long transcribe starves every other stage"
+difficulty = 25
+priority = "MED"
+
+[[todo]]
+line = "PHASE0/F-22 (P3): roughly 55 hardcoded hex values remain in crates/strivo-web/assets/spa-css/ instead of design tokens (000-pvr.css:1028 is representative)"
+difficulty = 25
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-27 (P3): the recordings list paginates with an integer offset plus a per-page COUNT(*), so deep pages degrade linearly"
+difficulty = 20
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-28 (P3): the recordings query still runs a per-row json_extract with no covering index"
+difficulty = 20
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-29 (P3): the served SPA bundle is still one concatenation of 1,085,680 bytes of modules with no route chunking, against docs/PERFORMANCE.md's 250 KiB threshold"
+difficulty = 30
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-30 (P3): the SSE stream is one IPC connection per browser tab with no server-side fanout"
+difficulty = 25
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-34 (P3): the plugin endpoints open per-request resources 27 times per request (was 12) and now carry real traffic"
+difficulty = 20
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-35 (P3): the pipeline executor rescans the whole stage registry on every wake to find ready stages"
+difficulty = 15
+priority = "LOW"
+
+[[todo]]
+line = "PHASE0/F-38 (P3): the pipeline event channel is unbounded, so a stalled consumer grows memory without limit"
+difficulty = 10
+priority = "LOW"
+
+[[todo]]
+line = "WS/V05: the skip-link e2e spec is still flaky — spa-ux-remediation.spec.ts has no serial-mode configure block, unlike its sibling player-controller.spec.ts:21"
 difficulty = 10
 priority = "LOW"
 ```

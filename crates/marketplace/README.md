@@ -8,7 +8,7 @@ Plugin manifest spec + catalog — DAW-vision iter 17
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 15 |
 | **Source** | [`crates/marketplace/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

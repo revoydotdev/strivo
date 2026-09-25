@@ -8,7 +8,7 @@ Chat client primitives — IRC parser, emote tokenizer, filter pipeline, room ri
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 33 |
 | **Source** | [`crates/chat/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

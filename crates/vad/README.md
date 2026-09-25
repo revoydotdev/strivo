@@ -8,7 +8,7 @@ Voice activity detection / noise gate — hysteresis-based VAD intervals from ff
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 12 |
 | **Source** | [`crates/vad/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

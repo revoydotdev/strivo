@@ -8,7 +8,7 @@ Pre-publish brand-safety classifier — DAW-vision iter 10
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 10 |
 | **Source** | [`crates/brandsafe/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

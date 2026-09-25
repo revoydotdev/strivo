@@ -8,7 +8,7 @@ DAW-style volume automation — time-keyed gain points → ffmpeg asendcmd/volum
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 14 |
 | **Source** | [`crates/automation/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

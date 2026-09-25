@@ -8,7 +8,7 @@ Post-stream Casebook report composer — DAW-vision iter 12
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 11 |
 | **Source** | [`crates/casebook/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

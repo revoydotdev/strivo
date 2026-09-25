@@ -8,7 +8,7 @@ Audience-retention proxy from Twitch chat density — DAW-vision iter 19
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 14 |
 | **Source** | [`crates/chat-density/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

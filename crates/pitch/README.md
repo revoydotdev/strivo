@@ -8,7 +8,7 @@ DAW-style independent pitch / time-stretch — fit a recording to a publish slot
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 15 |
 | **Source** | [`crates/pitch/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

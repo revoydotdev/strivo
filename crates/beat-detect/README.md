@@ -8,7 +8,7 @@ Onset detection + BPM estimation from ffmpeg RMS envelopes — DAW-style tempo g
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 12 |
 | **Source** | [`crates/beat-detect/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

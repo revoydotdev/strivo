@@ -8,7 +8,7 @@ DAW-style ordered insert effects chain — voice bus, game bus, master bus. Each
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 14 |
 | **Source** | [`crates/insert-fx/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

@@ -8,7 +8,7 @@ Cross-stream Viewguard trend analyzer — DAW-vision iter 15
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 13 |
 | **Source** | [`crates/viewguard-trend/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

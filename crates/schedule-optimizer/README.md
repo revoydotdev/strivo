@@ -8,7 +8,7 @@ Publish-slot recommender — engagement samples → 7×24 grid → top weekly pu
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 13 |
 | **Source** | [`crates/schedule-optimizer/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

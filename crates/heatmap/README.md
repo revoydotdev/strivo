@@ -8,7 +8,7 @@ Multi-signal audience-retention heatmap — DAW-vision iter 13
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 10 |
 | **Source** | [`crates/heatmap/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

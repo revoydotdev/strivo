@@ -8,7 +8,7 @@ Section labeler — intro/gameplay/break/outro classification from chapters + ch
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 12 |
 | **Source** | [`crates/structure/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

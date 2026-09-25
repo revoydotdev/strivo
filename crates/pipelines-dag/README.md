@@ -8,7 +8,7 @@ Cross-plugin pipeline DAG composer — DAW-vision iter 16
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 14 |
 | **Source** | [`crates/pipelines-dag/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

@@ -8,7 +8,7 @@ Multi-track audio enumeration + extraction — DAW-vision iter 9
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 8 |
 | **Source** | [`crates/multitrack/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

@@ -8,7 +8,7 @@ Caption file generation (SRT / VTT) + translation interface — DAW-vision iter 
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 18 |
 | **Source** | [`crates/captions/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

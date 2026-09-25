@@ -8,7 +8,7 @@ Branding overlay spec (watermark + intro/outro banners) → ffmpeg filter graph
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 16 |
 | **Source** | [`crates/branding/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

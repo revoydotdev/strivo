@@ -8,7 +8,7 @@ EBU R128 loudness normalisation — ffmpeg loudnorm two-pass parser + filter bui
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 12 |
 | **Source** | [`crates/loudness/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

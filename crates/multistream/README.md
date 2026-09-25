@@ -8,7 +8,7 @@ Multi-stream viewer — tile layout calculator + embed URL spec
 |---|---|
 | **Version** | `0.1.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 27 |
 | **Source** | [`crates/multistream/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

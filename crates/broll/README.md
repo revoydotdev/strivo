@@ -8,7 +8,7 @@ B-roll asset suggestion from transcript topics — DAW-vision iter 18
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 11 |
 | **Source** | [`crates/broll/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

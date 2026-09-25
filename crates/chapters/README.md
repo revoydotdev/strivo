@@ -8,25 +8,21 @@ Chapter-marker generator for StriVo recordings — DAW-vision iter 3
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 5 |
 | **Source** | [`crates/chapters/src/lib.rs`](src/lib.rs) |
 
 ## Architecture
 
-`strivo-chapters` is a pure-data Rust crate — no IO, no DOM. The host
-(`crates/strivo-web/`) wires it to a Pro-gated HTTP endpoint and
-surfaces the result on the SPA.
+`strivo-chapters` is not a pure-data crate. Its `[dependencies]` link it
+directly to an embedded SQLite database. The list is read from `Cargo.toml`, so it tracks the
+manifest rather than a hardcoded claim.
 
 The crate's responsibility is:
 
-1. Provide typed model(s) that describe what the plugin produces or
-   consumes (see `src/lib.rs` for the public surface).
-2. Compose pure transformations on those models — filter builders,
-   parsers, geometry, scoring, ranking — that can be unit-tested
-   without any external runtime.
-3. Stay decoupled from ffmpeg, SQLite, IPC, HTTP — those live in the
-   host. The crate's signature surface is just types + functions
-   over them.
+1. Expose typed models and functions that a caller — the host, a
+   sibling plugin, or the CLI — can drive directly (see `src/lib.rs`).
+2. Keep the integration points above in one place, so the remaining logic
+   stays unit-testable without a live runtime.
 
 ## Testing
 

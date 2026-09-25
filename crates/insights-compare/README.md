@@ -8,7 +8,7 @@ Stream comparison + audience-retention proxy — DAW-vision iter 7
 |---|---|
 | **Version** | `0.3.0` |
 | **License** | `MIT` |
-| **Unit tests** | 0 |
+| **Unit tests** | 10 |
 | **Source** | [`crates/insights-compare/src/lib.rs`](src/lib.rs) |
 
 ## Architecture

@@ -112,6 +112,17 @@ jobs:
       - name: CHANGELOG Unreleased is non-empty when feat/fix commits exist
         run: scripts/check-changelog-unreleased.sh
 
+      # The plan is untracked local state (`.omo/` is excluded), so a clean
+      # checkout has none and the checker would exit 1 on ENOENT every run.
+      # Assert when the plan is present: that is what fails a --write regression.
+      - name: plan dependency bookkeeping is self-consistent
+        run: |
+          if [ ! -f .omo/plans/strivo-review-and-pro-edition.md ]; then
+            echo "::notice::no plan at .omo/plans/strivo-review-and-pro-edition.md; nothing to assert"
+            exit 0
+          fi
+          node scripts/check-plan-deps.mjs
+
   check:
     name: fmt + clippy + test
     # Public fork PRs must never execute on local infrastructure.

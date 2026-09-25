@@ -51,6 +51,15 @@ const GENERATED_BLOCKS = [
 ];
 const EMPTY = '—';
 
+// Checkbox state is orthogonal to dependency bookkeeping: the invariants below
+// describe the plan, not progress, so a completed todo is parsed and asserted
+// exactly like an open one. The block-start match and the block-end scan are
+// both built from this one source -- deriving only one mis-bounds blocks.
+// `[X]` is accepted because GitHub renders it checked.
+const TODO_HEAD_SRC = String.raw`^- \[(?: |x|X)\] `;
+const TODO_OPEN = new RegExp(TODO_HEAD_SRC + String.raw`([0-9]+|F[0-9]+)\.`);
+const TODO_HEAD = new RegExp(TODO_HEAD_SRC);
+
 // ---------------------------------------------------------------- parsing ---
 
 /**
@@ -136,10 +145,10 @@ function parse(text) {
   const todos = new Map();
   const allBlocks = [];
   for (let i = tStart; i < tEnd; i++) {
-    const cb = lines[i].match(/^- \[ \] ([0-9]+|F[0-9]+)\./);
+    const cb = lines[i].match(TODO_OPEN);
     if (!cb) continue;
     let end = tEnd;
-    for (let k = i + 1; k < tEnd; k++) if (/^- \[ \] /.test(lines[k])) { end = k; break; }
+    for (let k = i + 1; k < tEnd; k++) if (TODO_HEAD.test(lines[k])) { end = k; break; }
     const body = lines.slice(i, end);
     const find = (re) => {
       for (let k = 0; k < body.length; k++) { const m = body[k].match(re); if (m) return { m, line: i + k, text: body[k] }; }

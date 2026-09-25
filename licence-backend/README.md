@@ -82,9 +82,12 @@ npm test
 npx wrangler deploy
 ```
 
-CI does the same three steps automatically on push to `licence-backend/**`
-via `.github/workflows/deploy-licence.yml`, gated on the
-`CLOUDFLARE_API_TOKEN` repo secret.
+Deployment is manual. CI does not deploy this Worker: there is no
+deploy workflow in `.github/workflows/`. The `Licence backend typecheck
++ tests` step in `ci.yml` runs `npm ci && npm run typecheck && npm test`
+here on every push, and that is the extent of the automation — `npx
+wrangler deploy` is a deliberate operator step needing
+`CLOUDFLARE_API_TOKEN` in the local environment.
 
 ## Key generation
 

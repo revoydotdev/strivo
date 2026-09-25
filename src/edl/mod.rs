@@ -7,12 +7,11 @@
 //! Three kinds:
 //! - `batch` — list of vods + pipeline ops applied to each.
 //! - `edit` — clip/concat ops on one or more vods.
-//! - `preset` — reusable op chain with no inputs bound; replayed via
-//!   `:run-preset <name>` once D4's command palette ships.
+//! - `preset` — reusable op chain with no inputs bound; turned into a
+//!   runnable graph by `render::pipeline_from_edl` / `render::pipeline_from_preset_stages`.
 //!
 //! See plan Part 6 X2.
 
-pub mod recorder;
 pub mod render;
 pub mod schema;
 

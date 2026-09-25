@@ -16,11 +16,11 @@
   border: 1px solid transparent;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-.pro-tab:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+.pro-tab:hover { background: rgba(255,255,255,0.04); color: var(--fg); }
 .pro-tab.is-active {
   background: rgba(176,124,255,0.12);
   border-color: var(--accent, #b07cff);
-  color: var(--text);
+  color: var(--fg);
 }
 .pro-pane-card { padding: 1rem 1.25rem; }
 .pro-tab-body p { margin: 0.5rem 0; }

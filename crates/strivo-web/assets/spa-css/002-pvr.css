@@ -382,9 +382,9 @@ body.modal-open { overflow: hidden; }
   border-left: 2px solid transparent;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.stg-rail-item:hover { color: var(--text); background: rgba(255, 255, 255, 0.03); }
+.stg-rail-item:hover { color: var(--fg); background: rgba(255, 255, 255, 0.03); }
 .stg-rail-item.is-active {
-  color: var(--text);
+  color: var(--fg);
   background: rgba(0, 188, 212, 0.08);
   border-left-color: var(--accent2);
   font-weight: 600;
@@ -417,7 +417,7 @@ body.modal-open { overflow: hidden; }
   align-items: center;
 }
 .stg-row:last-child { border-bottom: 0; }
-.stg-row-label { display: flex; align-items: center; gap: 0.35rem; color: var(--text); font-size: 0.9rem; }
+.stg-row-label { display: flex; align-items: center; gap: 0.35rem; color: var(--fg); font-size: 0.9rem; }
 .stg-row-value { color: var(--muted); font-size: 0.9rem; word-break: break-word; }
 .stg-row-value code {
   background: rgba(0, 0, 0, 0.25);
@@ -481,7 +481,7 @@ body.modal-open { overflow: hidden; }
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--text);
+  background: var(--fg);
   transition: transform 0.18s, background 0.18s;
 }
 .stg-toggle input:checked + .stg-toggle-track {
@@ -502,7 +502,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.9rem;
   font-variant-numeric: tabular-nums;
@@ -516,7 +516,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.88rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -537,7 +537,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.88rem;
 }
@@ -549,7 +549,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.85rem;
 }
@@ -579,7 +579,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   padding: 0.4rem 0.6rem;
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.88rem;
 }
@@ -614,7 +614,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   padding: 0.35rem 0.5rem;
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.85rem;
   width: 100%;
@@ -634,7 +634,7 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border-light);
   border-radius: 6px;
   padding: 0.4rem 0.55rem;
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.88rem;
 }
@@ -661,7 +661,7 @@ body.modal-open { overflow: hidden; }
   border-radius: 12px;
   padding: 0.7rem 1rem;
 }
-.pg-cap-matrix summary { cursor: pointer; padding: 0.2rem 0; color: var(--text); }
+.pg-cap-matrix summary { cursor: pointer; padding: 0.2rem 0; color: var(--fg); }
 .pg-cap-hint { color: var(--muted); font-size: var(--text-xs, 12px); font-weight: 400; }
 .pg-cap-grid { display: grid; gap: 0.35rem; margin-top: 0.7rem; }
 .pg-cap-row {
@@ -675,7 +675,7 @@ body.modal-open { overflow: hidden; }
 .pg-cap-row:last-child { border-bottom: 0; }
 .pg-cap-label {
   font-size: 0.85rem;
-  color: var(--text);
+  color: var(--fg);
   text-transform: capitalize;
 }
 .pg-cap-providers { display: flex; flex-wrap: wrap; gap: 0.3rem; }
@@ -688,7 +688,7 @@ body.modal-open { overflow: hidden; }
   border-radius: 999px;
   text-decoration: none;
   background: rgba(0, 188, 212, 0.1);
-  color: var(--text);
+  color: var(--fg);
   border: 1px solid rgba(0, 188, 212, 0.3);
 }
 .pg-cap-chip.pg-cap-roadmap {

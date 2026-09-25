@@ -130,7 +130,7 @@
 }
 .mon-disk-fill {
   height: 100%;
-  background: linear-gradient(90deg, hsl(150,60%,50%), hsl(35,80%,55%), hsl(0,70%,55%));
+  background: linear-gradient(90deg, var(--live), hsl(35,80%,55%), hsl(0,70%,55%));
   transition: width 0.2s ease;
 }
 .mon-disk-meta { font-size: 0.78em; opacity: 0.7; }

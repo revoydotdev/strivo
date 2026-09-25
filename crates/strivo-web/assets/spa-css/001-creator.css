@@ -39,7 +39,7 @@
   border-radius: 0 6px 6px 0;
   margin: 0.4rem 0 0.5rem;
 }
-.pg-getstarted strong { color: var(--text); margin-right: 0.25rem; }
+.pg-getstarted strong { color: var(--fg); margin-right: 0.25rem; }
 .pg-verbs { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0 0.4rem; }
 .pg-verb-chip {
   font-size: 0.74rem;

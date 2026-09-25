@@ -32,7 +32,7 @@
   background-clip: text;
   color: transparent;
 }
-.upgrade-tagline { margin: 0 0 0.6rem; color: var(--text); font-size: 0.95rem; }
+.upgrade-tagline { margin: 0 0 0.6rem; color: var(--fg); font-size: 0.95rem; }
 .upgrade-bullets {
   list-style: none;
   padding: 0;
@@ -43,7 +43,7 @@
   font-size: 0.85rem;
 }
 .upgrade-bullets li::before { content: "✓  "; color: var(--accent2); font-weight: 700; }
-.upgrade-bullets strong { color: var(--text); font-weight: 700; }
+.upgrade-bullets strong { color: var(--fg); font-weight: 700; }
 .upgrade-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 .upgrade-trial,
 .upgrade-activate {
@@ -63,7 +63,7 @@
 .upgrade-activate {
   background: transparent;
   border: 1px solid var(--border-light);
-  color: var(--text);
+  color: var(--fg);
 }
 .upgrade-activate:hover:not(:disabled) { border-color: var(--accent2); }
 .upgrade-trial:disabled,

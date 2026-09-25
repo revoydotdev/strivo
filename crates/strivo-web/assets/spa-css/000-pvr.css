@@ -2035,7 +2035,7 @@ a.media-pill:hover,
   border: 1px solid var(--border-light);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
-  color: var(--text);
+  color: var(--fg);
   font: inherit;
   font-size: 0.85rem;
 }
@@ -2055,8 +2055,8 @@ a.media-pill:hover,
   cursor: pointer;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.logs-chip:hover { color: var(--text); border-color: var(--accent2); }
-.logs-chip.is-active { background: rgba(0, 188, 212, 0.18); color: var(--text); border-color: var(--accent2); }
+.logs-chip:hover { color: var(--fg); border-color: var(--accent2); }
+.logs-chip.is-active { background: rgba(0, 188, 212, 0.18); color: var(--fg); border-color: var(--accent2); }
 .logs-output {
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid var(--border-light);
@@ -2134,7 +2134,7 @@ a.media-pill:hover,
   cursor: pointer;
   flex: 0 0 auto;
 }
-.rec-copy:hover { color: var(--text); border-color: var(--accent2); }
+.rec-copy:hover { color: var(--fg); border-color: var(--accent2); }
 .mp-source {
   font-size: var(--text-micro, 11px);
   letter-spacing: 0.08em;

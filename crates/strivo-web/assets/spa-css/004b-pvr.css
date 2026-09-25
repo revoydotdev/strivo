@@ -196,10 +196,10 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  background: hsla(208, 60%, 13%, .5);
+  background: var(--surface);
   backdrop-filter: blur(20px) saturate(110%);
   -webkit-backdrop-filter: blur(20px) saturate(110%);
-  border: 1px solid hsla(0, 0%, 100%, .12);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.5rem;
   overflow: hidden;
@@ -226,7 +226,7 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   font-size: 0.68rem;
   text-transform: uppercase;
   letter-spacing: .06em;
-  color: hsl(208, 16%, 55%);
+  color: var(--dim);
   padding: 0.3rem 0.3rem 0.1rem;
 }
 .ms-pick {
@@ -247,12 +247,12 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
 }
 .ms-pick:hover, .ms-pick:focus-visible {
   background: hsla(0, 0%, 100%, .08);
-  border-color: hsla(0, 0%, 100%, .18);
+  border-color: var(--border-light);
   outline: none;
 }
 .ms-pick-dot { flex: none; font-size: 0.6rem; }
-.ms-pick-dot.live { color: hsl(150, 60%, 50%); }
-.ms-pick-dot.rec { color: hsl(0, 70%, 60%); }
+.ms-pick-dot.live { color: var(--live); }
+.ms-pick-dot.rec { color: var(--recording); }
 .ms-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ms-pick-meta { color: hsl(208, 22%, 72%); font-size: 0.72rem; flex: none; }
+.ms-pick-meta { color: var(--muted); font-size: 0.72rem; flex: none; }
 .ms-picker-empty { padding: 0.4rem; }

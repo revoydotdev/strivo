@@ -8,7 +8,7 @@
   .sch-form { grid-template-columns: 1fr; }
 }
 .rec-th-sortable { cursor: pointer; user-select: none; }
-.rec-th-sortable:hover { color: var(--text); }
+.rec-th-sortable:hover { color: var(--fg); }
 .rec-th-sortable:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
@@ -66,7 +66,7 @@
   cursor: pointer;
   padding: 0 0.3rem;
 }
-.modal-close:hover { color: var(--text); }
+.modal-close:hover { color: var(--fg); }
 .modal-body {
   padding: 1rem 1.1rem;
   overflow-y: auto;
@@ -83,7 +83,7 @@
   padding: 0.5rem 0.7rem;
   font: inherit;
   font-size: 0.9rem;
-  color: var(--text);
+  color: var(--fg);
 }
 .modal-input:focus { outline: 0; border-color: var(--accent2); }
 .modal-notes { margin: 0; font-size: 0.8rem; color: var(--muted); line-height: 1.4; }

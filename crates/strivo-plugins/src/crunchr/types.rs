@@ -176,46 +176,6 @@ pub struct CrunchrStageIds {
     pub analyze: Option<uuid::Uuid>,
 }
 
-/// Search backend selector. Semantic search (fastembed-rs + sqlite-vss)
-/// is on the M1/M5 wedge list; until that backend is real, the variant
-/// is gated behind a `semantic-search` feature flag so the toggle UI
-/// can't expose a stub to users.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchMode {
-    FullText,
-    #[cfg(feature = "semantic-search")]
-    Semantic,
-}
-
-impl SearchMode {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::FullText => "FTS",
-            #[cfg(feature = "semantic-search")]
-            Self::Semantic => "SEM",
-        }
-    }
-
-    /// Cycle through enabled modes. With no semantic feature, this is
-    /// a no-op so a stray toggle key doesn't surprise the user.
-    pub fn toggle(&self) -> Self {
-        match self {
-            Self::FullText => {
-                #[cfg(feature = "semantic-search")]
-                {
-                    Self::Semantic
-                }
-                #[cfg(not(feature = "semantic-search"))]
-                {
-                    Self::FullText
-                }
-            }
-            #[cfg(feature = "semantic-search")]
-            Self::Semantic => Self::FullText,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SearchResult {

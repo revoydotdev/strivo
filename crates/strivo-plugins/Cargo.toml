@@ -16,12 +16,6 @@ rust-version = "1.88"
 [lib]
 path = "src/lib.rs"
 
-[features]
-# Semantic search backend (fastembed-rs + sqlite-vss). The UI mode toggle
-# is gated on this so the stub doesn't surface to users until the backend
-# lands; see ROADMAP.md M1 Phase 1 + M5 wedges.
-semantic-search = []
-
 [dependencies]
 # Host types + Plugin trait. Was a `git = "..."` ref while strivo-plugins
 # lived in its own repo; folded into the workspace, this is a path dep.

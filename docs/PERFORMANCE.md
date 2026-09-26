@@ -85,6 +85,82 @@ synthetic library and writes the machine-readable baseline; its captured run
 and the caveats that apply to reading it are in
 [docs/perf](perf/README.md).
 
+## Bundle measurement
+
+The threshold below is on **compressed** JavaScript, so it can only be answered
+by a request against a running server: the wire size is chosen by the
+`CompressionLayer` in `crates/strivo-web/src/server.rs`, not by anything in the
+build. `scripts/measure_bundle.sh` boots a release `strivo` binary in a
+throwaway XDG sandbox, confirms by content hash which bundle that binary embeds,
+then takes three requests per asset per encoding and asserts the server answered
+with the `Content-Encoding` that was asked for. A "brotli" number that is really
+gzip because the layer ignored `Accept-Encoding` is the failure mode that check
+exists to prevent. `scripts/check-bundle-size.sh` re-measures and fails when a
+recorded figure has drifted more than 5%, so this section cannot go stale.
+
+Raw bytes are the uncompressed response body; gzip and brotli are `size_download`
+read off the wire. They are different quantities, and only the compressed ones
+are compared against the threshold.
+
+| Edition | File | Raw | gzip | brotli | Spread over 3 samples |
+| --- | --- | ---: | ---: | ---: | --- |
+| PVR 0.8.0 | `spa.js` | 386 058 | 102 295 | 100 705 | none (min = median = max) |
+| PVR 0.8.0 | `spa.css` | 92 405 | 17 242 | 18 836 | none (min = median = max) |
+| Creator 0.8.0 | `spa.js` | 584 259 | not measured | not measured | — |
+| Creator 0.8.0 | `spa.css` | 134 197 | not measured | not measured | — |
+
+**PVR threshold result: under.** Compressed `spa.js` is 102 295 bytes as gzip
+and 100 705 as brotli, both below the 256 000-byte (250 KiB) threshold. Whether
+to split the bundle is a separate decision; it is not made here.
+
+Two things a reader must not misread:
+
+- `spa.css` is *smaller* over gzip (17 242) than over brotli (18 836). The
+  server picks an encoding from the request's `q` values rather than from a size
+  comparison, so at the layer's default quality brotli loses on a file this
+  small. Quoting the brotli figure alone for the CSS overstates it.
+- The Creator rows are **not wire-measured**. They are the release, minified
+  Creator assembly on disk, and no Creator-featured 0.8.0 release binary existed
+  on the measuring host — the single 0.8.0 release binary there embeds the PVR
+  bundle, which the script establishes by content hash rather than by name. The
+  compressed Creator figures are therefore recorded as `null` and the Creator
+  threshold verdict is **unmeasured, not "under"**. Deriving a compressed Creator
+  number from the file on disk is the F-29 mistake
+  ([PHASE0-EXPERIENCE-AUDIT](audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md)).
+
+<!-- bundle-measurement:begin -->
+
+```json
+{
+  "threshold_compressed_js_bytes": 256000,
+  "tolerance_pct": 5,
+  "editions": {
+    "PVR": {
+      "wire_measured": true,
+      "note": "measured 2026-09-26 against the strivo 0.8.0 release PVR bundle over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians",
+      "spa.js": { "raw_bytes": 386058, "gzip": 102295, "brotli": 100705 },
+      "spa.css": { "raw_bytes": 92405, "gzip": 17242, "brotli": 18836 }
+    },
+    "Creator": {
+      "wire_measured": false,
+      "note": "no Creator-featured 0.8.0 release binary was available to measure through; raw sizes are the release minified Creator assembly on disk and are NOT wire figures",
+      "spa.js": { "raw_bytes": 584259, "gzip": null, "brotli": null },
+      "spa.css": { "raw_bytes": 134197, "gzip": null, "brotli": null }
+    }
+  }
+}
+```
+
+<!-- bundle-measurement:end -->
+
+Reproduce with a release binary and the `out/assets` directory of the same
+build — the assets directory is what identifies the edition, by content:
+
+```sh
+scripts/measure_bundle.sh <release-strivo> <build>/out/assets PVR
+scripts/check-bundle-size.sh <release-strivo> <build>/out/assets PVR
+```
+
 ## Next profiling thresholds
 
 Profile before adding complexity. Split the SPA into route chunks when compressed

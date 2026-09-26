@@ -186,6 +186,15 @@ jobs:
           shutil.copytree(outputs.pop(), "target/pvr-release/assets", dirs_exist_ok=True)
           PY
 
+      # The recorded bundle figures in docs/PERFORMANCE.md are only meaningful
+      # while they still describe what ships, so re-measure them through the real
+      # server — here, where a release binary and its out/assets directory
+      # actually exist. This deliberately does NOT live in packaging-docs: that
+      # job has no toolchain, no build and no binary, so a step there could only
+      # ever skip, and a check that never runs is not a check.
+      - name: recorded bundle figures still match the PVR release build
+        run: scripts/check-bundle-size.sh target/pvr-release/strivo target/pvr-release/assets PVR
+
       # The default build/test above is the pure PVR (workspace default-members).
       # These steps exercise the Creator Edition feature-gated code paths in
       # strivo-core/strivo-web/strivo-bin, which the default build never compiles.

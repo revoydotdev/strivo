@@ -18,6 +18,10 @@
 //! `src/assets.rs` points `RustEmbed` at `$OUT_DIR/assets` so it always picks
 //! up the assembled tree rather than the source tree.
 
+// `build.rs` gets no implicit `build/` module directory, so the path is explicit.
+#[path = "build/sequence.rs"]
+mod sequence;
+
 use std::{env, fs, io, path::Path};
 
 fn main() {
@@ -33,6 +37,12 @@ fn main() {
 
     let src_assets = Path::new(&manifest_dir).join("assets");
     let dst_assets = Path::new(&out_dir).join("assets");
+
+    // Before anything is copied or concatenated: a mistyped, duplicated or
+    // skipped sequence number otherwise assembles into a bundle that still
+    // parses and simply runs its modules in the wrong order.
+    sequence::assert_sequence_ok(&src_assets.join("spa"));
+    sequence::assert_sequence_ok(&src_assets.join("spa-css"));
 
     copy_dir_all(&src_assets, &dst_assets).expect("failed to copy assets to OUT_DIR");
     // The old 1246px PNG is retained in source for packaging/brand exports,

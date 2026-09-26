@@ -20,6 +20,7 @@ mod jobs_lifecycle;
 mod malformed;
 mod migration;
 mod multitrack;
+mod readiness;
 mod rollback;
 mod time_clock;
 mod time_migration;

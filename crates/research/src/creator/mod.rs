@@ -62,6 +62,7 @@ mod multitrack;
 mod multitrack_align;
 mod multitrack_model;
 mod multitrack_session;
+mod readiness;
 mod relink;
 mod render_plan;
 mod schema;
@@ -102,6 +103,10 @@ pub use multitrack_model::{
 pub use multitrack_session::{
     read_multitrack_session, restore_multitrack_session, GapAttributes, Placement, RestoredSession,
     SessionAttributes, TrackAttributes,
+};
+pub use readiness::{
+    Blocker, FrameTiming, IngestStep, ProbeReport, Readiness, ReadinessError, StepState, Tool,
+    Toolchain, VideoStream,
 };
 pub use relink::{relink, unresolved_sources, RelinkRejection};
 pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};

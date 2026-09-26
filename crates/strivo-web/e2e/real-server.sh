@@ -16,6 +16,14 @@ set -euo pipefail
 STRIVO_BIN="${STRIVO_BIN:?set STRIVO_BIN to the compiled strivo binary path}"
 PORT="${PORT:-8281}"
 API_KEY="${STRIVO_E2E_API_KEY:-strivo-e2e-real-server-test-key}"
+# Readiness budget, in 0.2 s probes of `strivo status`. The default is
+# unchanged, so the PVR lane behaves exactly as it did. It is a knob only
+# because a Creator-featured build needs a bigger one: it initialises a
+# plugin host with six plugins before the IPC listener binds, measured at
+# 12.4 s on this host under load average ~15, against the 10 s the 50-probe
+# default allows. playwright.creator.config.ts raises it; nothing else needs
+# to. Widen-only, so no existing caller can be made to wait less.
+DAEMON_PROBES="${STRIVO_E2E_DAEMON_PROBES:-50}"
 
 SANDBOX_ROOT="${TMPDIR:-/tmp}"
 # Playwright tears this script's process tree down with a plain kill (not
@@ -79,7 +87,7 @@ trap cleanup EXIT INT TERM
 DAEMON_PID=$!
 
 daemon_up=0
-for _ in $(seq 1 50); do
+for _ in $(seq 1 "$DAEMON_PROBES"); do
   if "$STRIVO_BIN" status >/dev/null 2>&1; then
     daemon_up=1
     break

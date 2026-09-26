@@ -13,8 +13,8 @@ pub mod chat;
 // Capture-profile CRUD (quality tiers) — split out of `api`.
 pub mod capture_profiles;
 pub mod events;
-// JSON channel import/export, the Monitor page's unified view, and
-// (Creator Edition) the plugin capability matrix — split out of `api`.
+// JSON channel import/export, the Monitor page's unified view, and the
+// capability matrix + feature-capability descriptor — split out of `api`.
 pub mod import_export;
 // Strivo Pro licence routes (status/activate/trial/refresh) — entitlement is
 // a Creator Edition product concept (ADR 0002, closing CE06); the PVR

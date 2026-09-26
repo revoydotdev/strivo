@@ -6,6 +6,7 @@
 
 pub mod assets;
 pub mod auth;
+pub mod capabilities;
 pub mod csrf;
 pub mod ipc_client;
 pub mod problem;

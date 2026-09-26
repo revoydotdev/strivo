@@ -1,0 +1,24 @@
+# Classifier rule for scripts/check-capability-descriptor.sh.
+#
+# Selects every `enum_variant` declared inside `enum CapabilityKey` — the
+# descriptor's key set. The gate check anchors on the *declaration* rather
+# than on the call sites' argument text, so a refactor that changes how a
+# gate is written cannot empty the search and turn the check into a
+# vacuous pass.
+#
+# `kind` + `regex`, never `pattern`, in the relational clause: ast-grep
+# 0.44.1 silently ignores a `pattern` sub-rule inside a relational clause,
+# which would return zero variants here and make the check pass on an
+# empty set.
+id: capability-key-variant
+language: Rust
+severity: info
+message: >-
+  A declared variant of CapabilityKey, the descriptor's key type. Every
+  variant must have exactly one row in CAPABILITIES.
+rule:
+  kind: enum_variant
+  inside:
+    kind: enum_item
+    regex: 'enum CapabilityKey'
+    stopBy: end

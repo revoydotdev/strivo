@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+use crate::capabilities::CapabilityKey;
 use crate::problem::Problem;
 use crate::server::AppState;
 
@@ -80,7 +81,7 @@ async fn chapters_generate(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("chapters") {
+    if let Err(r) = gate_pro(CapabilityKey::Chapters) {
         return r;
     }
     let crunchr_path = crunchr_db();
@@ -120,7 +121,7 @@ async fn cuepoints_generate(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("cuepoints") {
+    if let Err(r) = gate_pro(CapabilityKey::Cuepoints) {
         return r;
     }
     let id = match uuid::Uuid::parse_str(&recording_id) {
@@ -221,7 +222,7 @@ async fn clipper_analyze(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("clipper") {
+    if let Err(r) = gate_pro(CapabilityKey::Clipper) {
         return r;
     }
     // We need cuepoints to score. If they're not cached we extract
@@ -295,7 +296,7 @@ async fn clipper_extract(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("clipper") {
+    if let Err(r) = gate_pro(CapabilityKey::Clipper) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -362,7 +363,7 @@ async fn clipper_list_clips(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("clipper") {
+    if let Err(r) = gate_pro(CapabilityKey::Clipper) {
         return r;
     }
     let store_path = strivo_core::config::AppConfig::data_dir()
@@ -427,7 +428,7 @@ async fn thumbnails_generate(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("thumbnails") {
+    if let Err(r) = gate_pro(CapabilityKey::Thumbnails) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -605,7 +606,7 @@ async fn thumbnails_list(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("thumbnails") {
+    if let Err(r) = gate_pro(CapabilityKey::Thumbnails) {
         return r;
     }
     let store_path = strivo_core::config::AppConfig::data_dir()
@@ -636,7 +637,7 @@ async fn thumbnails_serve_file(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("thumbnails") {
+    if let Err(r) = gate_pro(CapabilityKey::Thumbnails) {
         return r;
     }
     let root = strivo_core::config::AppConfig::data_dir()
@@ -698,7 +699,7 @@ async fn insights_compare(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insights") {
+    if let Err(r) = gate_pro(CapabilityKey::Insights) {
         return r;
     }
     let ids: Vec<String> = q
@@ -763,7 +764,7 @@ async fn insights_retention(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insights") {
+    if let Err(r) = gate_pro(CapabilityKey::Insights) {
         return r;
     }
     // Pull Crunchr segments.
@@ -854,7 +855,7 @@ async fn captions_export(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("captions") {
+    if let Err(r) = gate_pro(CapabilityKey::Captions) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -962,7 +963,7 @@ async fn multitrack_list(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("multitrack") {
+    if let Err(r) = gate_pro(CapabilityKey::Multitrack) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -1007,7 +1008,7 @@ async fn multitrack_extract(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("multitrack") {
+    if let Err(r) = gate_pro(CapabilityKey::Multitrack) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -1075,7 +1076,7 @@ async fn brandsafe_scan(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("brandsafe") {
+    if let Err(r) = gate_pro(CapabilityKey::Brandsafe) {
         return r;
     }
 
@@ -1127,7 +1128,7 @@ async fn reuse_generate(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("reuse") {
+    if let Err(r) = gate_pro(CapabilityKey::Reuse) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -1232,7 +1233,7 @@ async fn reuse_list(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("reuse") {
+    if let Err(r) = gate_pro(CapabilityKey::Reuse) {
         return r;
     }
     let store_path = strivo_core::config::AppConfig::data_dir()
@@ -1275,7 +1276,7 @@ async fn casebook_generate(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("casebook") {
+    if let Err(r) = gate_pro(CapabilityKey::Casebook) {
         return r;
     }
 
@@ -1495,7 +1496,7 @@ async fn heatmap_compute(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("heatmap") {
+    if let Err(r) = gate_pro(CapabilityKey::Heatmap) {
         return r;
     }
 
@@ -1649,7 +1650,7 @@ async fn editor_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("editor") {
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -1696,7 +1697,7 @@ async fn editor_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("editor") {
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
         return r;
     }
     let mut edl = body;
@@ -1724,7 +1725,7 @@ async fn editor_revisions_list(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("editor") {
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
         return r;
     }
     let store = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
@@ -1750,7 +1751,7 @@ async fn editor_revisions_restore(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("editor") {
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
         return r;
     }
     let store = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
@@ -1785,7 +1786,7 @@ async fn editor_render(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("editor") {
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -1859,7 +1860,7 @@ async fn viewguard_trend(headers: HeaderMap, State(state): State<AppState>) -> i
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("viewguard") {
+    if let Err(r) = gate_pro(CapabilityKey::Viewguard) {
         return r;
     }
     let Some(conn) = viewguard_db().as_deref().and_then(open_ro) else {
@@ -1929,7 +1930,7 @@ async fn broll_suggest(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("broll") {
+    if let Err(r) = gate_pro(CapabilityKey::Broll) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -1994,7 +1995,7 @@ async fn chat_density_compute(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("chat_density") {
+    if let Err(r) = gate_pro(CapabilityKey::ChatDensity) {
         return r;
     }
     let events = if let Some(csv) = &body.csv {
@@ -2041,7 +2042,7 @@ async fn deadair_detect(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("deadair") {
+    if let Err(r) = gate_pro(CapabilityKey::Deadair) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -2088,7 +2089,7 @@ async fn chat_parse(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("chat") {
+    if let Err(r) = gate_pro(CapabilityKey::Chat) {
         return r;
     }
     let mut parsed: Vec<serde_json::Value> = Vec::new();
@@ -2144,7 +2145,7 @@ async fn sidechain_run(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("sidechain") {
+    if let Err(r) = gate_pro(CapabilityKey::Sidechain) {
         return r;
     }
     let knobs = body.knobs.unwrap_or_default();
@@ -2199,7 +2200,7 @@ async fn pitch_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("pitch") {
+    if let Err(r) = gate_pro(CapabilityKey::Pitch) {
         return r;
     }
     let pt: strivo_pitch::PitchTime = std::fs::read_to_string(pitch_path(&recording_id))
@@ -2236,7 +2237,7 @@ async fn pitch_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("pitch") {
+    if let Err(r) = gate_pro(CapabilityKey::Pitch) {
         return r;
     }
     let path = pitch_path(&recording_id);
@@ -2285,7 +2286,7 @@ async fn pitch_fit(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("pitch") {
+    if let Err(r) = gate_pro(CapabilityKey::Pitch) {
         return r;
     }
     if body.source_duration_sec <= 0.0 || body.target_duration_sec <= 0.0 {
@@ -2329,7 +2330,7 @@ async fn insert_fx_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insert-fx") {
+    if let Err(r) = gate_pro(CapabilityKey::InsertFx) {
         return r;
     }
     let chain: strivo_insert_fx::InsertChain =
@@ -2359,7 +2360,7 @@ async fn insert_fx_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insert-fx") {
+    if let Err(r) = gate_pro(CapabilityKey::InsertFx) {
         return r;
     }
     let path = insert_fx_path(&recording_id);
@@ -2396,7 +2397,7 @@ async fn insert_fx_preset(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insert-fx") {
+    if let Err(r) = gate_pro(CapabilityKey::InsertFx) {
         return r;
     }
     let chain = match bus.as_str() {
@@ -2488,7 +2489,7 @@ async fn ab_render_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("ab-render") {
+    if let Err(r) = gate_pro(CapabilityKey::AbRender) {
         return r;
     }
     let ab = ab_render_load_state(&recording_id);
@@ -2507,7 +2508,7 @@ async fn ab_render_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("ab-render") {
+    if let Err(r) = gate_pro(CapabilityKey::AbRender) {
         return r;
     }
     let mut ab = ab_render_load_state(&recording_id);
@@ -2577,7 +2578,7 @@ async fn ab_render_compare(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("ab-render") {
+    if let Err(r) = gate_pro(CapabilityKey::AbRender) {
         return r;
     }
     let ab = ab_render_load_state(&recording_id);
@@ -2659,7 +2660,7 @@ async fn submix_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("submix") {
+    if let Err(r) = gate_pro(CapabilityKey::Submix) {
         return r;
     }
     let mix: strivo_submix::SubMix = std::fs::read_to_string(submix_path(&recording_id))
@@ -2688,7 +2689,7 @@ async fn submix_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("submix") {
+    if let Err(r) = gate_pro(CapabilityKey::Submix) {
         return r;
     }
     let path = submix_path(&recording_id);
@@ -2748,7 +2749,7 @@ async fn vad_run(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("vad") {
+    if let Err(r) = gate_pro(CapabilityKey::Vad) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -2913,7 +2914,7 @@ async fn beat_detect_run(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("beat-detect") {
+    if let Err(r) = gate_pro(CapabilityKey::BeatDetect) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -3034,7 +3035,7 @@ async fn schedule_optimizer_recommend(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("schedule-optimizer") {
+    if let Err(r) = gate_pro(CapabilityKey::ScheduleOptimizer) {
         return r;
     }
     let grid = strivo_schedule_optimizer::aggregate(&body.samples);
@@ -3167,7 +3168,7 @@ async fn scenes_list(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("scenes") {
+    if let Err(r) = gate_pro(CapabilityKey::Scenes) {
         return r;
     }
     let store = match strivo_scenes::SceneStore::open(&scenes_db_path()) {
@@ -3189,7 +3190,7 @@ async fn scenes_capture(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("scenes") {
+    if let Err(r) = gate_pro(CapabilityKey::Scenes) {
         return r;
     }
     let id = uuid::Uuid::new_v4().to_string();
@@ -3230,7 +3231,7 @@ async fn scenes_restore(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("scenes") {
+    if let Err(r) = gate_pro(CapabilityKey::Scenes) {
         return r;
     }
     let store = match strivo_scenes::SceneStore::open(&scenes_db_path()) {
@@ -3262,7 +3263,7 @@ async fn scenes_delete(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("scenes") {
+    if let Err(r) = gate_pro(CapabilityKey::Scenes) {
         return r;
     }
     let store = match strivo_scenes::SceneStore::open(&scenes_db_path()) {
@@ -3290,7 +3291,7 @@ async fn captions_style_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("captions") {
+    if let Err(r) = gate_pro(CapabilityKey::Captions) {
         return r;
     }
     let style: strivo_captions::AssStyle =
@@ -3312,7 +3313,7 @@ async fn captions_style_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("captions") {
+    if let Err(r) = gate_pro(CapabilityKey::Captions) {
         return r;
     }
     let path = captions_style_path(&recording_id);
@@ -3350,7 +3351,7 @@ async fn automation_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("automation") {
+    if let Err(r) = gate_pro(CapabilityKey::Automation) {
         return r;
     }
     let path = automation_path(&recording_id);
@@ -3381,7 +3382,7 @@ async fn automation_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("automation") {
+    if let Err(r) = gate_pro(CapabilityKey::Automation) {
         return r;
     }
     let path = automation_path(&recording_id);
@@ -3434,7 +3435,7 @@ async fn structure_classify(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("structure") {
+    if let Err(r) = gate_pro(CapabilityKey::Structure) {
         return r;
     }
     let inputs = strivo_structure::StructureInputs {
@@ -3494,7 +3495,7 @@ async fn loudness_measure(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("loudness") {
+    if let Err(r) = gate_pro(CapabilityKey::Loudness) {
         return r;
     }
     let input = match resolve_recording_path(&state, &recording_id).await {
@@ -3555,7 +3556,7 @@ async fn branding_load(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("branding") {
+    if let Err(r) = gate_pro(CapabilityKey::Branding) {
         return r;
     }
     let path = branding_path(&recording_id);
@@ -3585,7 +3586,7 @@ async fn branding_save(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("branding") {
+    if let Err(r) = gate_pro(CapabilityKey::Branding) {
         return r;
     }
     let path = branding_path(&recording_id);
@@ -3627,25 +3628,22 @@ fn count(conn: &Connection, sql: &str) -> i64 {
     conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0)
 }
 
-/// Creator Edition's own Pro plugin slugs. Core's entitlement gate has no
-/// opinion on plugin identity (see `strivo_core::licence::gate`'s module
-/// doc / ADR 0001 CE06) — this is the one place in Creator that names
-/// which first-party plugins are paid.
-pub(crate) const PRO_PLUGINS: &[&str] = &["crunchr", "archiver", "viewguard", "insights"];
-
-/// Returns Err(402) when `name` is a Pro plugin and this machine is not
-/// entitled. Free plugins always Ok. The check is centralised here so
-/// every data route shares the same gate without forgetting one.
+/// Returns Err(402) when `key` is a Pro capability and this machine is not
+/// entitled. Included capabilities always Ok. The check is centralised here
+/// so every data route shares the same gate without forgetting one, and the
+/// argument is a [`CapabilityKey`] so a gate can only ever name a capability
+/// the descriptor has a row for — which is also where the Pro set comes from.
 // The Err is an axum `Response` by design (it's `?`-propagated straight into
 // the handler's return); boxing it to satisfy `result_large_err` would only
-// add an indirection at every `gate_pro(name)?` call site.
+// add an indirection at every `gate_pro(key)?` call site.
 #[allow(clippy::result_large_err)]
-fn gate_pro(name: &str) -> Result<(), axum::response::Response> {
-    if strivo_core::licence::gate::is_entitled(name, PRO_PLUGINS) {
+fn gate_pro(key: CapabilityKey) -> Result<(), axum::response::Response> {
+    if key.is_entitled() {
         return Ok(());
     }
     Err(Problem::payment_required(format!(
-        "{name} is a Strivo Pro plugin — activate or start a 3-day trial from the Plugins page."
+        "{} is a Strivo Pro plugin — activate or start a 3-day trial from the Plugins page.",
+        key.as_str()
     ))
     .into_response())
 }
@@ -3663,11 +3661,10 @@ async fn index(headers: HeaderMap, State(state): State<AppState>) -> impl IntoRe
     // unlocks. We still include locked Pro plugins in the response so
     // the SPA can render them with a lock badge + upgrade CTA — hiding
     // them entirely would make the upgrade card feel disconnected.
-    let pro_entitled = |name: &str| strivo_core::licence::gate::is_entitled(name, PRO_PLUGINS);
-    let crunchr_ok = pro_entitled("crunchr");
-    let archiver_ok = pro_entitled("archiver");
-    let viewguard_ok = pro_entitled("viewguard");
-    let insights_ok = pro_entitled("insights");
+    let crunchr_ok = CapabilityKey::Crunchr.is_entitled();
+    let archiver_ok = CapabilityKey::Archiver.is_entitled();
+    let viewguard_ok = CapabilityKey::Viewguard.is_entitled();
+    let insights_ok = CapabilityKey::Insights.is_entitled();
 
     // Per-plugin data_dir surfaces in the response so the SPA can show
     // a "data" hint without the user having to know the layout (M6).
@@ -3805,7 +3802,7 @@ async fn crunchr_recordings(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("crunchr") {
+    if let Err(r) = gate_pro(CapabilityKey::Crunchr) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -3841,7 +3838,7 @@ async fn crunchr_recording(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("crunchr") {
+    if let Err(r) = gate_pro(CapabilityKey::Crunchr) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -3894,7 +3891,7 @@ async fn crunchr_search(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("crunchr") {
+    if let Err(r) = gate_pro(CapabilityKey::Crunchr) {
         return r;
     }
     let query = q.q.trim();
@@ -3934,7 +3931,7 @@ async fn archiver_channels(headers: HeaderMap, State(state): State<AppState>) ->
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("archiver") {
+    if let Err(r) = gate_pro(CapabilityKey::Archiver) {
         return r;
     }
     let Some(conn) = open_ro(&archiver_db()) else {
@@ -3971,7 +3968,7 @@ async fn archiver_videos(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("archiver") {
+    if let Err(r) = gate_pro(CapabilityKey::Archiver) {
         return r;
     }
     let Some(conn) = open_ro(&archiver_db()) else {
@@ -4007,7 +4004,7 @@ async fn viewguard_verdicts(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("viewguard") {
+    if let Err(r) = gate_pro(CapabilityKey::Viewguard) {
         return r;
     }
     let Some(conn) = viewguard_db().as_deref().and_then(open_ro) else {
@@ -4044,7 +4041,7 @@ async fn viewguard_samples(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("viewguard") {
+    if let Err(r) = gate_pro(CapabilityKey::Viewguard) {
         return r;
     }
     let Some(conn) = viewguard_db().as_deref().and_then(open_ro) else {
@@ -4085,7 +4082,7 @@ async fn insights_words(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insights") {
+    if let Err(r) = gate_pro(CapabilityKey::Insights) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -4125,7 +4122,7 @@ async fn insights_topics(headers: HeaderMap, State(state): State<AppState>) -> i
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insights") {
+    if let Err(r) = gate_pro(CapabilityKey::Insights) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -4159,7 +4156,7 @@ async fn insights_speakers(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insights") {
+    if let Err(r) = gate_pro(CapabilityKey::Insights) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -4213,7 +4210,7 @@ async fn insights_export(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(r) = gate_pro("insights") {
+    if let Err(r) = gate_pro(CapabilityKey::Insights) {
         return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
@@ -4774,7 +4771,7 @@ async fn research_projects(headers: HeaderMap, State(state): State<AppState>) ->
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(|| {
@@ -4798,7 +4795,7 @@ async fn research_create_project(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -4825,7 +4822,7 @@ async fn research_project_detail(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -4850,7 +4847,7 @@ async fn research_create_code(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let code = strivo_research::Code {
@@ -4884,7 +4881,7 @@ async fn research_create_source(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let source = strivo_research::NewSource {
@@ -4924,7 +4921,7 @@ async fn research_create_case(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let case = strivo_research::ResearchCase {
@@ -4958,7 +4955,7 @@ async fn research_create_coding(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let coding = strivo_research::NewCoding {
@@ -4998,7 +4995,7 @@ async fn research_create_memo(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let memo = strivo_research::Memo {
@@ -5033,7 +5030,7 @@ async fn research_create_relationship(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let relationship = strivo_research::Relationship {
@@ -5073,7 +5070,7 @@ async fn research_list_codes(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5102,7 +5099,7 @@ async fn research_list_sources(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5131,7 +5128,7 @@ async fn research_list_cases(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5163,7 +5160,7 @@ async fn research_assign_source_case(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let source_id = body.source_id;
@@ -5191,7 +5188,7 @@ async fn research_list_codings(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5220,7 +5217,7 @@ async fn research_list_memos(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5249,7 +5246,7 @@ async fn research_list_relationships(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5280,7 +5277,7 @@ async fn research_agreement(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let Some(author_a) = query.author_a else {
@@ -5317,7 +5314,7 @@ async fn research_export(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match query.format.as_deref() {
@@ -5370,7 +5367,7 @@ async fn research_signals(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5405,7 +5402,7 @@ async fn research_search(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let Some(q) = query.q else {
@@ -5441,7 +5438,7 @@ async fn research_moments(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5476,7 +5473,7 @@ async fn research_create_moment(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     match tokio::task::spawn_blocking(move || {
@@ -5507,7 +5504,7 @@ async fn research_migrate_crunchr(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let path = crunchr_db();
@@ -5535,7 +5532,7 @@ async fn research_migrate_legacy(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    if let Err(response) = gate_pro("crunchr") {
+    if let Err(response) = gate_pro(CapabilityKey::Crunchr) {
         return response;
     }
     let crunchr = crunchr_db();

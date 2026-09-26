@@ -1,5 +1,6 @@
 //! JSON channel import/export (task 4), the Monitor page's unified view, and
-//! (Creator Edition) the plugin capability matrix. Split out of `routes::api`.
+//! the capability matrix + feature-capability descriptor. Split out of
+//! `routes::api`.
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -10,7 +11,6 @@ use serde_json::json;
 #[cfg(feature = "creator")]
 use strivo_plugins::archiver::types::ArchiverConfig;
 
-#[cfg(feature = "creator")]
 use crate::problem::Problem;
 use crate::routes::settings::check_key;
 use crate::server::AppState;
@@ -210,99 +210,47 @@ async fn monitor_state(headers: HeaderMap, State(state): State<AppState>) -> imp
 }
 
 /// `GET /api/v1/plugins/capabilities` — the DAW-vision capability
-/// matrix: which plugins (or roadmap slots) fulfil each capability
-/// tag. First-party providers are hard-coded here today; once the
-/// daemon exposes the registry over IPC we'll switch to that. The
-/// SPA renders this as the cross-plugin pipeline graph and lets
+/// matrix: which plugins (or roadmap slots) fulfil each capability tag.
+/// Every row is projected from [`crate::capabilities`], the one
+/// feature-capability descriptor, so a plugin's `roadmap` marker is a fact
+/// about whether it has an executor rather than a string someone typed
+/// here. The SPA renders this as the cross-plugin pipeline graph and lets
 /// users discover "who does what".
-#[cfg(feature = "creator")]
+///
+/// Mounted in every edition: a PVR build's projection is empty rather than
+/// absent, which is what makes "the PVR descriptor reports zero Pro
+/// capabilities" an observation instead of a 404.
 async fn plugin_capabilities(
     headers: HeaderMap,
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> impl IntoResponse {
-    if check_key(&headers, &state).is_err() {
+    if check_key(&headers, &_state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    use strivo_core::plugin::capability as cap;
-    // (capability, [(plugin, status)]) where status is "available"
-    // if the plugin is shipped or "roadmap" if the slot is reserved
-    // for an upcoming plugin (matches the DAW-vision plan).
-    // Every entry here corresponds to an in-tree, shipped + tested
-    // plugin crate. The `roadmap` status now applies to the one
-    // marketplace entry (`yt-publish`) that still depends on external
-    // work (YouTube OAuth + API creds) — surfaced from the
-    // marketplace catalog below.
-    let matrix = json!([
-        { "capability": cap::TRANSCRIPTION,        "providers": [{"plugin": "crunchr", "status": "available"}] },
-        { "capability": cap::WORD_TIMESTAMPS,      "providers": [{"plugin": "crunchr", "status": "available"}] },
-        { "capability": cap::DIARISATION,          "providers": [{"plugin": "crunchr", "status": "available"}] },
-        { "capability": cap::TOPIC_SEGMENTATION,   "providers": [{"plugin": "crunchr", "status": "available"}] },
-        { "capability": cap::CHAPTERS,             "providers": [{"plugin": "chapters", "status": "available"}] },
-        { "capability": cap::SCENE_DETECTION,      "providers": [{"plugin": "cuepoints", "status": "available"}] },
-        { "capability": cap::THUMBNAIL_RANKING,    "providers": [{"plugin": "thumbnails", "status": "available"}] },
-        { "capability": cap::HIGHLIGHT_DETECTION,  "providers": [{"plugin": "clipper", "status": "available"}] },
-        { "capability": cap::CLIP_EXTRACTION,      "providers": [{"plugin": "clipper", "status": "available"}] },
-        { "capability": cap::TRANSLATION,          "providers": [{"plugin": "captions", "status": "available"}] },
-        { "capability": cap::CAPTIONS,             "providers": [
-            {"plugin": "captions",       "status": "available"},
-            {"plugin": "captions-ass",   "status": "available"}
-        ] },
-        { "capability": cap::AUDIENCE_RETENTION,   "providers": [
-            {"plugin": "heatmap",      "status": "available"},
-            {"plugin": "chat-density", "status": "available"}
-        ] },
-        { "capability": cap::FRAUD_DETECTION,      "providers": [{"plugin": "viewguard", "status": "available"}] },
-        { "capability": cap::STREAM_COMPARISON,    "providers": [
-            {"plugin": "insights",         "status": "available"},
-            {"plugin": "viewguard-trend",  "status": "available"}
-        ] },
-        { "capability": cap::REPORTING,            "providers": [{"plugin": "casebook", "status": "available"}] },
-        { "capability": cap::BRAND_SAFETY,         "providers": [{"plugin": "brandsafe", "status": "available"}] },
-        { "capability": cap::ASSET_CATALOG,        "providers": [{"plugin": "archiver", "status": "available"}] },
-        { "capability": cap::SOURCE_TRACK_SPLIT,   "providers": [
-            {"plugin": "multitrack",    "status": "available"}
-        ] },
-        { "capability": cap::PUBLISH_QUEUE,        "providers": [
-            {"plugin": "reuse",      "status": "available"},
-            {"plugin": "yt-publish", "status": "roadmap"}
-        ] },
-        { "capability": cap::EDL_EDITOR,           "providers": [
-            {"plugin": "editor",   "status": "available"},
-            {"plugin": "deadair",  "status": "available"},
-            {"plugin": "branding", "status": "available"},
-            {"plugin": "broll",    "status": "available"}
-        ] },
-        // Net-new capabilities from iters 23–24. Use `x.`-prefixed tags so
-        // they don't drift from the WELL_KNOWN_CAPABILITIES constant set.
-        { "capability": "x.loudness",        "providers": [{"plugin": "loudness", "status": "available"}] },
-        { "capability": "x.structure",       "providers": [{"plugin": "structure", "status": "available"}] },
-        { "capability": "x.audio_automation", "providers": [{"plugin": "automation", "status": "available"}] },
-        { "capability": "x.scenes",          "providers": [{"plugin": "scenes", "status": "available"}] },
-        { "capability": "x.publish_slots",   "providers": [{"plugin": "schedule-optimizer", "status": "available"}] },
-        { "capability": "x.tempo",           "providers": [{"plugin": "beat-detect", "status": "available"}] },
-        { "capability": "x.voice_gate",      "providers": [{"plugin": "vad", "status": "available"}] },
-        { "capability": "x.sidechain",       "providers": [{"plugin": "sidechain", "status": "available"}] },
-        { "capability": "x.insert_fx",       "providers": [{"plugin": "insert-fx", "status": "available"}] },
-        { "capability": "x.pitch_time",      "providers": [{"plugin": "pitch", "status": "available"}] },
-        { "capability": "x.multistream",     "providers": [{"plugin": "multistream", "status": "available"}] },
-        { "capability": "x.chat",            "providers": [{"plugin": "chat",        "status": "available"}] },
-        { "capability": "x.pipelines_dag",   "providers": [{"plugin": "pipelines-dag", "status": "available"}] },
-        { "capability": "x.marketplace",     "providers": [{"plugin": "marketplace",   "status": "available"}] },
-    ]);
-    Json(matrix).into_response()
+    Json(crate::capabilities::capability_matrix()).into_response()
+}
+
+/// `GET /api/v1/plugins/descriptor` — the feature-capability descriptor
+/// itself: per capability, which edition ships it, what it costs, whether an
+/// executor exists, and which external tools it needs. The SPA reads it for
+/// each plugin's `proGated` / `installed` flags (see
+/// `assets/spa/020-creator.js`), so the badge it renders and the 402 the
+/// server answers with come from the same rows.
+async fn plugin_descriptor(
+    headers: HeaderMap,
+    State(_state): State<AppState>,
+) -> impl IntoResponse {
+    if check_key(&headers, &_state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    Json(crate::capabilities::descriptor_json()).into_response()
 }
 
 pub fn router() -> Router<AppState> {
-    #[allow(unused_mut)]
-    let mut r = Router::new()
+    Router::new()
         .route("/api/v1/channels/export", get(channels_export))
         .route("/api/v1/channels/import", post(channels_import))
-        .route("/api/v1/monitor", get(monitor_state));
-
-    #[cfg(feature = "creator")]
-    {
-        r = r.route("/api/v1/plugins/capabilities", get(plugin_capabilities));
-    }
-
-    r
+        .route("/api/v1/monitor", get(monitor_state))
+        .route("/api/v1/plugins/capabilities", get(plugin_capabilities))
+        .route("/api/v1/plugins/descriptor", get(plugin_descriptor))
 }

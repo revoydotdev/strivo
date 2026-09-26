@@ -1,0 +1,32 @@
+# Gate rule for scripts/check-capability-descriptor.sh.
+#
+# Flags a `gate_pro(...)` call whose argument is a *string literal*. The
+# todo-20 refactor makes `gate_pro` take a `CapabilityKey`, so a literal
+# cannot compile — but a shape check has to be able to *see* the violation
+# on a tree that does not compile, which is exactly the state a developer
+# is in when they add the offending line. This rule is how the check
+# reports it instead of failing on a compiler error it cannot read.
+#
+# WHY AN AST SEARCH AND NOT grep: `grep -n 'gate_pro('` cannot tell a call
+# from the `fn gate_pro` definition, cannot tell a string literal from a
+# `CapabilityKey` path, and reports a doc-comment mention as a call site.
+# A text search over a call whose *argument type* is the whole point
+# answers the wrong question. ast-grep parses, so the classification is by
+# shape.
+#
+# The exclusion is `kind`, not `pattern`, on purpose: ast-grep 0.44.1
+# silently ignores a `pattern` sub-rule inside a relational clause, which
+# would return zero matches here and make this rule pass by not running.
+id: gate-pro-takes-a-string-literal
+language: Rust
+severity: error
+message: >-
+  gate_pro() called with a string literal. The capability argument is a
+  CapabilityKey so it cannot be a name the descriptor has never heard of:
+  use `gate_pro(CapabilityKey::X)`, and add the row to CAPABILITIES in
+  crates/strivo-web/src/capabilities.rs.
+rule:
+  pattern: gate_pro($ARG)
+  has:
+    kind: string_literal
+    stopBy: end

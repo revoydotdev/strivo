@@ -426,6 +426,112 @@ async fn s06_licence_trial_rejects_bogus_key() {
     );
 }
 
+/// The descriptor route is mounted in BOTH editions (the table is
+/// `#[cfg]`-split, not the route), so this runs against a PVR build and a
+/// Creator build and reads what each one actually serves — which is the only
+/// way the "PVR reports zero Pro capabilities" claim is evidence rather than
+/// a cfg-scoped assertion. Runs in the edition under test; no gate.
+#[tokio::test]
+async fn capability_descriptor_reports_this_editions_rows() {
+    let request = Request::builder()
+        .uri("/api/v1/plugins/descriptor")
+        .header("x-api-key", "route-shape-test-key")
+        .body(Body::empty())
+        .unwrap();
+    let response = app().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "descriptor route must serve"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("read body");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("descriptor is JSON");
+    let rows = body["capabilities"]
+        .as_array()
+        .expect("capabilities is an array");
+    let pro: Vec<&str> = rows
+        .iter()
+        .filter(|c| c["entitlement"] == "pro")
+        .map(|c| c["key"].as_str().expect("key is a string"))
+        .collect();
+
+    if cfg!(feature = "creator") {
+        assert_eq!(body["edition"], "creator");
+        assert!(
+            !rows.is_empty(),
+            "a Creator build must serve descriptor rows"
+        );
+        assert!(
+            !pro.is_empty(),
+            "a Creator build must name its Pro capabilities"
+        );
+        // Every row the SPA reads is a row this build can actually run, and
+        // the one roadmap slot is recorded as such rather than hidden.
+        for c in rows {
+            assert_eq!(c["edition"], "creator", "{}", c["key"]);
+            if c["entry_point"] == "roadmap" {
+                assert_eq!(c["installed"], false, "{}", c["key"]);
+            }
+        }
+        let yt = rows
+            .iter()
+            .find(|c| c["key"] == "yt-publish")
+            .expect("yt-publish must be represented");
+        assert_eq!(yt["entry_point"], "roadmap");
+        assert_eq!(yt["installed"], false);
+    } else {
+        assert_eq!(body["edition"], "pvr");
+        assert!(
+            rows.is_empty(),
+            "a PVR build must serve no Creator capability rows, got {rows:?}"
+        );
+        assert!(
+            pro.is_empty(),
+            "a PVR build must report zero Pro capabilities, got {pro:?}"
+        );
+    }
+}
+
+/// The matrix is the descriptor's projection, so it is empty in a PVR build
+/// rather than 404 — and in a Creator build every row it serves names a
+/// capability the descriptor describes.
+#[tokio::test]
+async fn capability_matrix_is_empty_in_pvr_and_derived_in_creator() {
+    let request = Request::builder()
+        .uri("/api/v1/plugins/capabilities")
+        .header("x-api-key", "route-shape-test-key")
+        .body(Body::empty())
+        .unwrap();
+    let response = app().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "matrix route must serve");
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("read body");
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).expect("matrix is JSON");
+    if cfg!(feature = "creator") {
+        assert!(!rows.is_empty());
+        let known: std::collections::HashSet<&str> = strivo_web::capabilities::CapabilityKey::all()
+            .map(|k| k.as_str())
+            .collect();
+        for row in &rows {
+            for provider in row["providers"].as_array().expect("providers") {
+                let name = provider["plugin"].as_str().expect("plugin is a string");
+                assert!(
+                    known.contains(name),
+                    "matrix names {name}, which the descriptor does not describe"
+                );
+            }
+        }
+    } else {
+        assert!(
+            rows.is_empty(),
+            "a PVR build must serve an empty matrix, got {rows:?}"
+        );
+    }
+}
+
 #[cfg(feature = "creator")]
 #[tokio::test]
 async fn s07_plugin_capabilities_rejects_bogus_key() {
@@ -703,7 +809,12 @@ const CREATOR_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/marketplace/catalog"),
     ("put", "/api/v1/channels/{channel_key}/archiver_tandem"),
     ("put", "/api/v1/channels/{channel_key}/archiver_playlists"),
+    // The capability matrix and the descriptor are projections of
+    // `crate::capabilities`, which exists in both editions (empty in PVR),
+    // so both routes are mounted in both. Kept here rather than in
+    // CREATOR_ROUTES so the PVR build's copy is auth-checked too.
     ("get", "/api/v1/plugins/capabilities"),
+    ("get", "/api/v1/plugins/descriptor"),
     ("post", "/api/v1/plugins/{plugin}/{verb}"),
     ("get", "/api/v1/plugins"),
     ("get", "/api/v1/plugins/crunchr/recordings"),

@@ -4,6 +4,28 @@
 //! intro/outro banners) and emits a single `-filter_complex` chain plus the
 //! resulting output label. The host wires the chain into ffmpeg; this crate
 //! does no IO and is exhaustively unit-tested against canned filter strings.
+//!
+//! ## Two ways to get a spec, and one gate
+//!
+//! * [`BrandingSpec`] — a whole overlay spec, written per recording. Kept, and
+//!   still honoured, because it is what the existing editor panel persists.
+//! * [`library::BrandSet`] — a **reusable** set in the [`asset`] library,
+//!   projected onto a destination variant by [`library::BrandSet::apply`].
+//!   Many recordings name one set; none of them stores a copy of it.
+//!
+//! Both go through the same preconditions before they can become a filter
+//! graph, and a missing or unreviewed asset **refuses the export by name**
+//! rather than producing a graph that would drop it. See [`library`] for the
+//! refusal vocabulary and the export-boundary contract.
+
+pub mod asset;
+pub mod library;
+
+pub use asset::{AssetAvailability, AssetKind, AssetRef, AssetTerms};
+pub use library::{
+    resolve, BrandLibrary, BrandSet, BrandVariant, MissingReason, Overlay, Palette, Placement,
+    PreconditionError, RecordingBrand, SafeArea, SafeRect, Slot, Stinger,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +95,7 @@ pub struct Watermark {
     pub opacity: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BannerSlot {
     /// Visible from t=0 to t=duration_secs.
@@ -81,6 +103,10 @@ pub enum BannerSlot {
     /// Visible from t=video_duration-duration_secs to end. Host substitutes
     /// `{end}` token (we emit `t>=main_duration-D`).
     Outro,
+    /// Visible for `duration_secs` starting at `at_secs`. A lower third is
+    /// neither bookend — it is placed, not opened or closed with the video —
+    /// so it could not be expressed as one of the two above.
+    LowerThird { at_secs: f32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +140,15 @@ pub struct FilterChain {
 }
 
 impl BrandingSpec {
+    /// Whether this spec asks for nothing. A projection that came back empty
+    /// must produce an **empty** `filter_complex`, not a passthrough `copy`:
+    /// the plan's `video_filter_complex` is what the executor runs, and a
+    /// `[0:v]copy[vout]` there would claim a video stage the export never does.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.watermark.is_none() && self.banners.is_empty()
+    }
+
     /// Build a `-filter_complex` chain.
     ///
     /// `in_video_label` is the label of the host's source video stream, e.g.
@@ -196,6 +231,9 @@ fn banner_step(b: &Banner, in_label: &str, out_label: &str) -> String {
     let enable = match b.slot {
         BannerSlot::Intro => format!("lt(t,{:.3})", b.duration_secs),
         BannerSlot::Outro => format!("gte(t,main_duration-{:.3})", b.duration_secs),
+        BannerSlot::LowerThird { at_secs } => {
+            format!("between(t,{at_secs:.3},{:.3})", at_secs + b.duration_secs)
+        }
     };
     format!(
         "{in_label}drawtext=text='{escaped}':fontsize={size}:fontcolor={color}:x={x}:y={y}:enable='{enable}'{out_label}",

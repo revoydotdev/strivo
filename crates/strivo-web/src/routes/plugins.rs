@@ -3745,12 +3745,19 @@ async fn branding_load(
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => strivo_branding::BrandingSpec::default(),
     };
-    let chain = spec.build_filter_chain("[0:v]");
+    // Through the resolver, not `build_filter_chain` directly: this is the same
+    // chain the render will run, and a missing brand asset is refused here
+    // rather than shown as a chain the export would reject.
+    let (filter_complex, video_label) = match crate::render::branding_preview(&recording_id, &spec)
+    {
+        Ok(chain) => chain,
+        Err(e) => return Problem::bad_request(format!("branding: {e}")).into_response(),
+    };
     Json(json!({
         "recording_id": recording_id,
         "spec": spec,
-        "filter_complex": chain.filter_complex,
-        "video_label": chain.video_label,
+        "filter_complex": filter_complex,
+        "video_label": video_label,
     }))
     .into_response()
 }
@@ -3783,11 +3790,17 @@ async fn branding_save(
     if let Err(e) = std::fs::write(&path, json) {
         return Problem::internal(format!("write: {e}")).into_response();
     }
-    let chain = spec.build_filter_chain("[0:v]");
+    // Same resolver as the render, so a save cannot report success on a spec
+    // the export would refuse.
+    let (filter_complex, video_label) = match crate::render::branding_preview(&recording_id, &spec)
+    {
+        Ok(chain) => chain,
+        Err(e) => return Problem::bad_request(format!("branding: {e}")).into_response(),
+    };
     Json(json!({
         "ok": true,
-        "filter_complex": chain.filter_complex,
-        "video_label": chain.video_label,
+        "filter_complex": filter_complex,
+        "video_label": video_label,
     }))
     .into_response()
 }

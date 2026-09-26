@@ -31,6 +31,18 @@
 //! [`crate::routes::media_input`] before a request is built, so nothing here
 //! is a validation gate. The compiler's refusals are about a *request* being
 //! internally inconsistent, which is a different question.
+//!
+//! ## Brand assets are the exception, and they are gated here
+//!
+//! A brand asset **is** a media input, so it is admitted the same way and at
+//! the same boundary: [`resolve`] runs the brand library's preconditions
+//! before a request exists, and a missing or unreviewed asset is a named
+//! refusal rather than a filter graph pointing at a file that is not there.
+//!
+//! This is deliberately *here* and not in `render` or in the executor. Both the
+//! plan route and the render route call [`resolve`], so the problem appears in
+//! a preview that spawns nothing. A check that first fired once ffmpeg was
+//! already running would be "at render", which is the defect todo 47 names.
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +54,8 @@ use strivo_editor::render::{
     LayerKind, LayerSpec, LoudnessSpec, OutputProfile, TrackSpec, Transform, VideoIntent,
 };
 use strivo_editor::{time::SourceSpan, Cut, CutKind, Edl};
+
+use strivo_branding::{BrandingSpec, PreconditionError, RecordingBrand};
 
 /// The six per-recording sidecars, as one resolved request.
 ///
@@ -82,8 +96,12 @@ where
 /// Build the request for one recording's saved revision.
 pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
     let clips = clips_from_edl(edl)?;
-    let branding: Option<strivo_branding::BrandingSpec> =
-        read_sidecar(&sidecar(recording_id, "branding"))?;
+    let inline: BrandingSpec =
+        read_sidecar(&sidecar(recording_id, "branding"))?.unwrap_or_default();
+    // The brand preconditions run here, before any `RenderRequest` exists, so
+    // a missing asset is a named refusal at the boundary rather than an
+    // ffmpeg failure once the export is already running.
+    let branding = branding_spec(recording_id, &inline).map_err(|e| e.to_string())?;
     let inserts: Option<strivo_insert_fx::InsertChain> =
         read_sidecar(&sidecar(recording_id, "insert-fx"))?;
     let pitch: Option<strivo_pitch::PitchTime> = read_sidecar(&sidecar(recording_id, "pitch"))?;
@@ -136,10 +154,11 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
         });
     }
 
-    let video_filter_complex = branding
-        .as_ref()
-        .map(|spec| spec.build_filter_chain("[0:v]").filter_complex)
-        .unwrap_or_default();
+    let video_filter_complex = if branding.is_empty() {
+        String::new()
+    } else {
+        branding.build_filter_chain("[0:v]").filter_complex
+    };
 
     let request = RenderRequest {
         subject: recording_id.to_string(),
@@ -214,6 +233,70 @@ fn sidecar(recording_id: &str, name: &str) -> PathBuf {
         .join("plugins")
         .join(name)
         .join(format!("{recording_id}.json"))
+}
+
+/// The reusable brand library. **Global, not per recording** — that is the
+/// whole difference between a brand set and a per-recording copy of one, and it
+/// is why this is not [`sidecar`]-shaped.
+fn brand_library_path() -> PathBuf {
+    strivo_core::config::AppConfig::data_dir()
+        .join("branding")
+        .join("brand_sets.json")
+}
+
+/// A recording's binding to the library: which set, which destination shape.
+fn brand_binding_path(recording_id: &str) -> PathBuf {
+    sidecar(recording_id, "brand-set")
+}
+
+/// The brand spec a recording renders with, and the preconditions it passed to
+/// get there.
+///
+/// Both paths are gated by the same [`strivo_branding::library::resolve`]:
+/// with a binding the library is the source of truth and the set is projected
+/// onto the named variant; without one the per-recording spec is used, as
+/// before. Either way a missing or unreviewed asset is refused **by name** and
+/// no spec is produced.
+pub fn branding_spec(
+    recording_id: &str,
+    inline: &BrandingSpec,
+) -> Result<BrandingSpec, PreconditionError> {
+    // An absent library is not an error: a recording with no binding does not
+    // need one, and refusing here would break every PVR-adjacent caller of a
+    // Creator feature. A library that exists and does not parse IS refused —
+    // silently falling back to "no branding" is the drop this todo forbids.
+    let library = match std::fs::read_to_string(brand_library_path()) {
+        Ok(raw) => serde_json::from_str::<strivo_branding::BrandLibrary>(&raw).map_err(|e| {
+            PreconditionError::UnreadableLibrary {
+                path: brand_library_path(),
+                detail: e.to_string(),
+            }
+        })?,
+        Err(_) => strivo_branding::BrandLibrary::default(),
+    };
+    let binding: Option<RecordingBrand> =
+        read_sidecar(&brand_binding_path(recording_id)).map_err(|e| {
+            PreconditionError::UnreadableBinding {
+                recording_id: recording_id.to_string(),
+                detail: e,
+            }
+        })?;
+    strivo_branding::library::resolve(&library, binding.as_ref(), inline)
+}
+
+/// The filter a saved spec would produce, for the panel's preview.
+///
+/// Delegates to [`branding_spec`] so the branding panel's chain and the render's
+/// chain are the same chain. A second reader here would be the second render
+/// path this module exists to remove — and, worse, a panel showing a chain the
+/// export would refuse.
+pub fn branding_preview(
+    recording_id: &str,
+    inline: &BrandingSpec,
+) -> Result<(String, String), PreconditionError> {
+    let spec = branding_spec(recording_id, inline)?;
+    let chain = spec.build_filter_chain("[0:v]");
+    Ok((chain.filter_complex, chain.video_label))
 }
 
 /// The revision label a plan is compiled from. The EDL store keys revisions by

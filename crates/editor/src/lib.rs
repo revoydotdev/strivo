@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 pub mod render;
 pub mod store;
 pub mod time;
+pub mod transcript;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

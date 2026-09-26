@@ -238,6 +238,14 @@ const group = (rows) => {
   return [...by.entries()].sort();
 };
 
+// The parser above is shared: `check-design-tokens.mjs` classifies this same
+// census against DESIGN.md and must not carry a second copy of the assembly,
+// the `:root` detection or the `var(--x, …)` fallback spans, or the two audits
+// could disagree about what "a hardcoded colour" is and both be right about
+// different numbers.
+export { assemble, collect, fallbackSpans, balancedParenEnd, index };
+
+function main() {
 const editionReport = [];
 let failed = false;
 
@@ -345,3 +353,8 @@ if (failed) {
   process.exit(1);
 }
 console.log("\nOK: no undefined consumed token lacks a fallback.");
+}
+
+// `node scripts/check-css-tokens.mjs` must behave exactly as before, while
+// `import { collect } from "./check-css-tokens.mjs"` must not print or exit.
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

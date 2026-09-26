@@ -58,7 +58,7 @@
 .chat-badge {
   display: inline-block; margin-right: 0.2rem;
   padding: 0.05rem 0.3rem; border-radius: 3px;
-  background: rgba(255,255,255,0.12);
+  background: var(--border);
   font-size: 0.7em; vertical-align: middle;
 }
 /* Twitch badge image — 18×18 raster fits the existing line height. */

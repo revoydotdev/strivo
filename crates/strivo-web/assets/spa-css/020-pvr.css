@@ -1039,14 +1039,14 @@
   padding: 0.6rem 1.2rem;
   border: 1px solid var(--accent2);
   border-radius: var(--radius);
-  background: hsla(208, 89%, 5%, 0.8);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
   color: var(--fg);
   font-size: 1rem;
   cursor: pointer;
   z-index: 3;
 }
 .ms-play-prompt:hover,
-.ms-play-prompt:focus-visible { background: hsla(195, 100%, 43%, 0.25); }
+.ms-play-prompt:focus-visible { background: color-mix(in srgb, var(--accent2) 25%, transparent); }
 .ms-media-error-actions {
   display: flex;
   flex-wrap: wrap;

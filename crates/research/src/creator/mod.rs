@@ -58,6 +58,10 @@ mod entities;
 mod ids;
 mod import;
 mod jobs;
+mod multitrack;
+mod multitrack_align;
+mod multitrack_model;
+mod multitrack_session;
 mod relink;
 mod render_plan;
 mod schema;
@@ -88,6 +92,16 @@ pub use import::{
 pub use jobs::{
     immutable_output_path, is_legal, CacheKey, Job, JobInputs, JobState, JobTransition,
     MAX_ATTEMPTS, TRANSITIONS,
+};
+pub use multitrack::import_multitrack;
+pub use multitrack_align::{MeasuredGap, MediaGap, SessionTimeline};
+pub use multitrack_model::{
+    IdentifiedTrack, MultitrackError, MultitrackRejection, MultitrackRequest, MultitrackSession,
+    ReferenceTrack, TrackMeasurement, MAX_TRACKS,
+};
+pub use multitrack_session::{
+    read_multitrack_session, restore_multitrack_session, GapAttributes, Placement, RestoredSession,
+    SessionAttributes, TrackAttributes,
 };
 pub use relink::{relink, unresolved_sources, RelinkRejection};
 pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};

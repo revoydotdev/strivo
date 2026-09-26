@@ -47,6 +47,12 @@ pub struct AudioTrack {
     pub inferred_kind: TrackKind,
 }
 
+/// What a track is *for*, from the name the recorder stamped on it.
+///
+/// `Mixed` is OBS's own fallback: the single downmixed output a multitrack
+/// recording always carries alongside the stems, and the one a listener can
+/// trust when they trust nothing else. It is a role like any other — it is kept
+/// as a track, not dropped as a duplicate of the sum of the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackKind {
@@ -55,7 +61,29 @@ pub enum TrackKind {
     Discord,
     Music,
     Browser,
+    Mixed,
     Other,
+}
+
+impl TrackKind {
+    /// The role's stable lowercase name.
+    ///
+    /// Defined by a `match` rather than derived from the serde rename, and
+    /// pinned to it by a test over every variant, because the same word ends up
+    /// on a database row and in a JSON body and two spellings of one role is
+    /// the drift this enum is the single answer to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mic => "mic",
+            Self::Game => "game",
+            Self::Discord => "discord",
+            Self::Music => "music",
+            Self::Browser => "browser",
+            Self::Mixed => "mixed",
+            Self::Other => "other",
+        }
+    }
 }
 
 /// Future hook for actual source-separation backends (vocal remover /
@@ -135,6 +163,12 @@ pub fn parse_streams_json(json: &str) -> Result<Vec<AudioTrack>> {
 /// "Microphone" all land on `Mic`.
 pub fn infer_kind(title: &str) -> TrackKind {
     let t = title.to_lowercase();
+    // The downmixed fallback first: "Mixed Audio" and "Stream Audio" are the
+    // names OBS gives it, and a name that also contains "mic" or "game" is still
+    // the fallback, so this has to win over the substring rules below.
+    if t.contains("mixed") || t.contains("stream audio") || t == "default" {
+        return TrackKind::Mixed;
+    }
     if t.contains("mic") || t.contains("voice") || t.contains("vocal") {
         TrackKind::Mic
     } else if t.contains("game") || t.contains("system") || t.contains("desktop") {
@@ -277,5 +311,41 @@ mod tests {
         // since 'music' starts with 'mu', not 'mic'. Sanity check.
         assert_eq!(infer_kind("Mic"), TrackKind::Mic);
         assert_eq!(infer_kind("Music Spotify"), TrackKind::Music);
+    }
+
+    #[test]
+    fn inferred_kind_mixed_wins_over_the_others() {
+        assert_eq!(infer_kind("Mixed"), TrackKind::Mixed);
+        assert_eq!(infer_kind("Mixed Audio"), TrackKind::Mixed);
+        assert_eq!(infer_kind("Stream Audio"), TrackKind::Mixed);
+        assert_eq!(infer_kind("default"), TrackKind::Mixed);
+        assert_eq!(
+            infer_kind("Mixed: Game + Mic"),
+            TrackKind::Mixed,
+            "a downmix name that mentions the stems is still the downmix"
+        );
+    }
+
+    /// `as_str` and the serde rename are two spellings of one role unless a
+    /// test holds them together, and the row a role is written to and the JSON a
+    /// UI reads both use them.
+    #[test]
+    fn as_str_agrees_with_the_serde_name_for_every_role() {
+        for kind in [
+            TrackKind::Mic,
+            TrackKind::Game,
+            TrackKind::Discord,
+            TrackKind::Music,
+            TrackKind::Browser,
+            TrackKind::Mixed,
+            TrackKind::Other,
+        ] {
+            let json = serde_json::to_string(&kind).expect("a unit variant serialises");
+            assert_eq!(
+                json,
+                format!("\"{}\"", kind.as_str()),
+                "{kind:?} spells itself differently in serde and in as_str"
+            );
+        }
     }
 }

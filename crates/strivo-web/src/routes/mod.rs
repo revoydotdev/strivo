@@ -38,6 +38,16 @@ pub mod media_input;
 // `import`, `relink` and their vocabulary out of the PVR binary entirely.
 #[cfg(feature = "creator")]
 pub mod import;
+// OBS-style multitrack import (report item C02). Creator-only for the same
+// reason as `import`: a PVR install has no project to import a session into, and
+// the route spawns a media probe, which is exactly the surface `media_input`
+// exists to gate. Compiling it out keeps its vocabulary out of the PVR binary.
+#[cfg(feature = "creator")]
+pub mod multitrack;
+#[cfg(feature = "creator")]
+pub mod multitrack_gaps;
+#[cfg(feature = "creator")]
+pub mod multitrack_probe;
 // Multi-stream tile layout for the watch player. Core (single + multi view),
 // not a Pro plugin — always compiled so the PVR build's player works.
 pub mod multistream;

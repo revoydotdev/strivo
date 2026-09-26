@@ -23,6 +23,10 @@ sha2 = "0.10"
 # dependencies of strivo-web that only the `creator` feature activates, so a
 # PVR build compiles neither.
 strivo-editor = { path = "../editor" }
+# OBS track roles: the one place that answers "which mic/game/voice-chat/
+# music/mixed track is this". Reused rather than reimplemented, because two
+# substring tables over a track name would be two answers to one question.
+strivo-multitrack = { path = "../multitrack" }
 
 [dev-dependencies]
 tempfile = "3"

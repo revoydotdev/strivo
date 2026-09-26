@@ -9,7 +9,9 @@
 //! stores in [`time_clock`]. The project workspace — one project, many
 //! recordings and edits, one selected revision every view reads — is in
 //! [`workspace`], with what it refuses in [`workspace_malformed`] and what
-//! reversing it costs in [`workspace_rollback`].
+//! reversing it costs in [`workspace_rollback`]. The OBS multitrack
+//! import — track identification and the sample alignment that keeps the stems
+//! together — is in [`multitrack`].
 
 mod fixtures;
 mod identity;
@@ -17,6 +19,7 @@ mod import;
 mod jobs_lifecycle;
 mod malformed;
 mod migration;
+mod multitrack;
 mod rollback;
 mod time_clock;
 mod time_migration;

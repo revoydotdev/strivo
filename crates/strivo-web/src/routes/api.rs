@@ -848,6 +848,9 @@ pub fn router() -> Router<AppState> {
         // Local import: the routes that admit a client-named path and turn it
         // into a project source. Absent from a PVR build entirely.
         r = r.merge(crate::routes::import::router());
+        // OBS multitrack import: identify the tracks and align them. Absent from
+        // a PVR build entirely, for the same reason as the import routes above.
+        r = r.merge(crate::routes::multitrack::router());
     }
 
     r

@@ -114,6 +114,75 @@ impl Store {
         Ok(())
     }
 
+    /// Record the media facts a probe measured about a source: what kind of
+    /// track it is and how long it runs.
+    ///
+    /// Separate from [`Self::insert_source_asset`] because identity and media
+    /// facts arrive at different times from different places — todo 33's import
+    /// registers a source from its *bytes* and deliberately leaves these
+    /// columns empty rather than guessing them from a file extension, and a
+    /// probe that has actually read the container is what fills them in. Neither
+    /// `id` nor `media_fingerprint` is in the statement, so neither an
+    /// identification nor a duration can redefine what a source is.
+    ///
+    /// One method rather than one per caller: a role column written by the
+    /// multitrack importer and by a readiness pass through two statements is two
+    /// places to update, and the first that forgets is a row that says `game` in
+    /// one surface and `audio` in the other.
+    pub fn annotate_source_media(
+        &self,
+        id: SourceAssetId,
+        track_type: &str,
+        duration: MediaTime,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE creator_source_assets SET track_type=?2, duration_us=?3 WHERE id=?1",
+            params![id.to_string(), track_type, duration.micros()],
+        )?;
+        Ok(())
+    }
+
+    /// One capture session by id, or `None` where the id names none.
+    ///
+    /// The reader for the row [`Self::insert_capture_session`] writes. A
+    /// multitrack import stores its measured track set in that row's
+    /// `attributes_json`, and a row nothing can read is state that has to be
+    /// taken on trust.
+    pub fn capture_session(&self, id: CaptureSessionId) -> Result<Option<CaptureSession>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id,project_id,source_asset_id,started_at,ended_at,finalized,\
+                 attributes_json,created_at FROM creator_capture_sessions WHERE id=?1",
+                params![id.to_string()],
+                |r| {
+                    let uuid = |i: usize, v: String| -> rusqlite::Result<uuid::Uuid> {
+                        uuid::Uuid::parse_str(&v).map_err(|e| {
+                            rusqlite::Error::InvalidColumnType(
+                                i,
+                                e.to_string(),
+                                rusqlite::types::Type::Text,
+                            )
+                        })
+                    };
+                    Ok(CaptureSession {
+                        id: CaptureSessionId::from_uuid(uuid(0, r.get(0)?)?),
+                        project_id: ProjectId::from_uuid(uuid(1, r.get(1)?)?),
+                        source_asset_id: r
+                            .get::<_, Option<String>>(2)?
+                            .map(|v| uuid(2, v).map(SourceAssetId::from_uuid))
+                            .transpose()?,
+                        started_at: r.get(3)?,
+                        ended_at: r.get(4)?,
+                        finalized: r.get(5)?,
+                        attributes_json: r.get(6)?,
+                        created_at: r.get(7)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     pub fn insert_capture_session(&self, c: &CaptureSession) -> Result<()> {
         self.conn.execute(
             "INSERT INTO creator_capture_sessions

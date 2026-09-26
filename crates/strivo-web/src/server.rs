@@ -366,7 +366,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::plugins::router())
         .merge(routes::workspace::router())
         .merge(routes::timeline::router())
-        .merge(routes::licence::router());
+        .merge(routes::licence::router())
+        .merge(routes::backup::creator_router());
     let guarded = guarded
         // S16: authenticate ahead of body/query extraction. `route_layer`
         // (unlike `layer`) wraps only routes already registered on `guarded`

@@ -8,6 +8,8 @@
 //! artifact row, and a test that cannot read its own manifest back is a test
 //! that proves the job points at nothing.
 
+use std::path::Path;
+
 use rusqlite::params;
 
 use super::entities::*;
@@ -135,6 +137,66 @@ impl Store {
                 },
             )
             .ok())
+    }
+
+    /// The ids of a project's outputs, oldest first. A candidate set for a
+    /// cleanup pass, so it reads ids rather than every row.
+    pub fn artifact_ids_of(&self, project: ProjectId) -> Result<Vec<ArtifactId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM creator_artifacts WHERE project_id=?1 ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([project.to_string()], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?.parse()?);
+        }
+        Ok(out)
+    }
+
+    /// One artifact by its identity, scoped to the project that owns it.
+    ///
+    /// Two lookups rather than one query because a cleanup pass must never
+    /// reach outside the project it was asked about, and `None` here is how
+    /// that is enforced: an id belonging to a neighbour is indistinguishable
+    /// from one that does not exist, so a plan cannot act on it.
+    pub fn artifact_in_project(
+        &self,
+        id: ArtifactId,
+        project: ProjectId,
+    ) -> Result<Option<Artifact>> {
+        Ok(self.artifact(id)?.filter(|a| a.project_id == project))
+    }
+
+    /// Remove an artifact row, reporting whether one was there.
+    ///
+    /// A row is a fact, not a file: this deletes the row and nothing else. The
+    /// bytes at its `locator` are removed by the caller, and only once this has
+    /// confirmed no other row still names the same location.
+    pub fn delete_artifact(&self, id: ArtifactId) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM creator_artifacts WHERE id=?1",
+            [id.to_string()],
+        )? > 0)
+    }
+
+    /// Whether any surviving row — a source or an output — still names this
+    /// location.
+    ///
+    /// Read across both tables because a locator is a *location*: the same bytes
+    /// can be registered as a source in one project and as an output in
+    /// another, and a cleanup that removed the file on the strength of one row
+    /// would take the other with it.
+    pub fn locator_is_referenced(&self, locator: &Path) -> Result<bool> {
+        let at = locator.display().to_string();
+        for sql in [
+            "SELECT EXISTS(SELECT 1 FROM creator_source_assets WHERE locator=?1)",
+            "SELECT EXISTS(SELECT 1 FROM creator_artifacts WHERE locator=?1)",
+        ] {
+            if self.conn.query_row(sql, [&at], |r| r.get::<_, i64>(0))? != 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn insert_release_package(&self, r: &ReleasePackage) -> Result<()> {

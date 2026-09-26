@@ -646,8 +646,115 @@ const server = createServer(async (req, res) => {
     if (p === "/backup") return json(res, 201, { name: "2026-05-26T00-00-00Z", files: ["config.toml", "jobs.db"], bytes: 1234 });
     if (p === "/backups")
       return json(res, 200, {
-        backups: [{ name: "2026-05-26T00-00-00Z", bytes: 1234, files: ["config.toml", "jobs.db"] }],
+        backups: [
+          // A backup carrying a project record, and one that does not — so the
+          // "nothing about projects was verified" branch is reachable in this
+          // lane rather than asserted only in the model.
+          { name: "2026-05-26T00-00-00Z", bytes: 1234, files: ["config.toml", "jobs.db", "research.db", "manifest.json"], projects: 1, sources: 2 },
+          { name: "2026-05-27T00-00-00Z", bytes: 1500, files: ["config.toml", "jobs.db", "research.db", "manifest.json"], projects: 1, sources: 1 },
+          { name: "2026-05-20T00-00-00Z", bytes: 900, files: ["config.toml", "jobs.db"], projects: 0, sources: 0 },
+        ],
       });
+
+    // ── Restore and retention (todo 40) ───────────────────────────────────
+    // The restore answers are chosen by the backup name, because the claim
+    // under test is which of the three outcomes the UI is willing to call a
+    // success. `complete` is reachable here on purpose: without a control that
+    // DOES produce the green toast, "no green toast appeared" would pass for
+    // any page where toasts are broken.
+    if (p.endsWith("/restore") && req.method === "POST") {
+      const name = p.split("/")[2];
+      if (name === "2026-05-20T00-00-00Z") {
+        return json(res, 200, {
+          restored: ["config.toml", "jobs.db"],
+          report: null,
+          note: "This backup carries no project record, so nothing about projects was verified.",
+        });
+      }
+      if (name === "2026-05-26T00-00-00Z") {
+        return json(res, 200, {
+          restored: ["config.toml", "jobs.db", "research.db"],
+          report: {
+            verified: true,
+            // THE CASE: one of the two recorded sources did not come back.
+            complete: false,
+            projects: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                name: "launch stream",
+                expected: 2,
+                restored: 1,
+                present: true,
+                sources: [
+                  { id: "22222222-2222-4222-8222-222222222222", title: "a.mkv", fingerprint: "sha256:a", outcome: "restored", locator: "/archive/a.mkv" },
+                  { id: "33333333-3333-4333-8333-333333333333", title: "b.mkv", fingerprint: "sha256:b", outcome: "missing_row", locator: null },
+                ],
+              },
+            ],
+          },
+          note: "Restart the daemon for the restored config/DB to take effect.",
+        });
+      }
+      return json(res, 200, {
+        restored: ["config.toml", "jobs.db", "research.db"],
+        report: {
+          verified: true,
+          complete: true,
+          projects: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              name: "launch stream",
+              expected: 1,
+              restored: 1,
+              present: true,
+              sources: [
+                { id: "22222222-2222-4222-8222-222222222222", title: "a.mkv", fingerprint: "sha256:a", outcome: "restored", locator: "/archive/a.mkv" },
+              ],
+            },
+          ],
+        },
+        note: "Restart the daemon for the restored config/DB to take effect.",
+      });
+    }
+    if (p === "/creator/retention/plan") {
+      return json(res, 200, {
+        project: "11111111-1111-4111-8111-111111111111",
+        collectable: 1,
+        entries: [
+          {
+            id: "44444444-4444-4444-8444-444444444444",
+            kind: "proxy",
+            class: "derivative",
+            reason: "derived from a composition",
+            action: "unreferenced",
+            protected: false,
+            collected: true,
+            explain: "44444444-4444-4444-8444-444444444444: proxy — referenced by nothing, so it can be collected",
+            locator: "/archive/proxy.mp4",
+            bytes: 1048576,
+          },
+          {
+            id: "55555555-5555-4555-8555-555555555555",
+            kind: "render",
+            class: "derivative",
+            reason: "derived from a composition",
+            action: "protected",
+            protected: true,
+            collected: false,
+            explain: "55555555-5555-4555-8555-555555555555: render — referenced by release package 66666666-6666-4666-8666-666666666666",
+            locator: "/archive/final.mp4",
+            bytes: 8388608,
+          },
+        ],
+      });
+    }
+    if (p === "/creator/retention/collect" && req.method === "POST") {
+      return json(res, 200, {
+        plan: { project: "11111111-1111-4111-8111-111111111111", collectable: 0, entries: [] },
+        removed: ["44444444-4444-4444-8444-444444444444"],
+        bytes_removed: ["/archive/proxy.mp4"],
+      });
+    }
     if (p.startsWith("/logs"))
       return json(res, 200, {
         file: "strivo.2026-05-26.log",

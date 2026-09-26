@@ -140,6 +140,38 @@ impl Store {
             .optional()?)
     }
 
+    /// Fold the write-ahead log into the main file and truncate it.
+    ///
+    /// **A backup that byte-copies this file without this first is not a
+    /// backup**: in WAL mode the newest commits live in `research.db-wal` until
+    /// a checkpoint, so the copy is missing the projects written moments ago and
+    /// the restore then faithfully returns a store without them.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Every project, oldest first. Enumerates rather than takes one, because a
+    /// backup census that recorded only the project somebody had open would be a
+    /// census of the wrong set.
+    pub fn projects(&self) -> Result<Vec<Project>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM creator_projects ORDER BY created_at, id")?;
+        let ids: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        ids.into_iter()
+            .map(|raw| {
+                let id: ProjectId = raw.parse()?;
+                self.project(id)?.ok_or_else(|| {
+                    crate::ResearchError::Validation(format!("project {raw} vanished"))
+                })
+            })
+            .collect()
+    }
+
     /// Link a research-kernel project by stable ID. Idempotent per pair, and
     /// deliberately many-to-many: the report forbids forcing this into a
     /// one-to-one relationship, because a cross-recording compilation spans

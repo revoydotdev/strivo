@@ -54,6 +54,7 @@
 //! them; the correspondence is pinned by a test that drives the real
 //! `PipelineRegistry`. See [`jobs`]'s module doc for the full argument.
 
+mod backup;
 mod chat;
 mod coverage;
 mod entities;
@@ -70,6 +71,7 @@ mod observations;
 mod readiness;
 mod relink;
 mod render_plan;
+pub mod retention;
 mod rights;
 mod schema;
 mod store;
@@ -90,6 +92,10 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+pub use backup::{
+    reconcile, reconcile_opt, Census, ProjectCensus, ProjectRestore, RestoreReport, SourceCensus,
+    SourceOutcome, SourceRestore, CENSUS_FILE,
+};
 pub use chat::{
     ChatAppend, ChatCollection, ChatDeletion, ChatDeletionTarget, ChatIdentity, ChatMessage,
     ChatReplay, CollectionEnd, DeletionOutcome, Landmark, RawChatDeletion, RawChatMessage,
@@ -135,6 +141,10 @@ pub use readiness::{
 };
 pub use relink::{relink, unresolved_sources, RelinkRejection};
 pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};
+pub use retention::{
+    classify, collect, originals, outputs, plan, Action, Class, Collection, Entry, Plan,
+    PlanRequest, Reference,
+};
 pub use rights::{
     eligibility_of, is_stale as rights_is_stale, Axis, AxisBlocker, CalendarDate, Consent,
     Eligibility, Ineligible, Licence, Ownership, RightsError, SourceNote, MAX_NOTE_BYTES,

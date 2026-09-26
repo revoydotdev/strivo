@@ -218,7 +218,8 @@ async function renderSystem(context = captureRouteContext()) {
           <button id="backup-now" class="sm">＋ Backup now</button>
         </div>
         <div id="backup-list"><div class="empty sm">Loading backups…</div></div>
-        <p class="pg-cap-hint">After restoring, <a href="https://github.com/revoydotdev/strivo/blob/main/docs/DAEMON.md#lifecycle" target="_blank" rel="noopener">restart the daemon manually</a> to apply the restored files.</p>
+        <div id="retention-panel"></div>
+        <p class="pg-cap-hint">After restoring, <a href="https://github.com/revoydotdev/strivo/blob/main/docs/DAEMON.md#lifecycle" target="_blank" rel="noopener">restart the daemon manually</a> to apply the restored files. A restore is only complete when every recorded source comes back; the report below names any that did not.</p>
       </section>
       <section class="cfg-card" id="blocklist-card">
         <h2 class="cfg-title">Blocklist</h2>
@@ -379,7 +380,7 @@ async function paintBackups() {
           return;
         try {
           const res = await API.backupRestore(name);
-          Toast.success(`Restored ${(res.restored || []).join(", ")} — follow the restart steps below to apply`);
+          reportRestore(el, name, res);
         } catch (err) {
           Toast.error(`Restore failed: ${err.message}`);
         }
@@ -387,6 +388,152 @@ async function paintBackups() {
     });
   } catch (e) {
     el.innerHTML = `<div class="empty sm">Could not load backups: ${htmlEscape(e.message)}</div>`;
+  }
+}
+
+// A restore is only a success when the daemon says every recorded project came
+// back whole. Three answers, kept apart on purpose:
+//
+//   complete            — every recorded source came back, rows and bytes.
+//   incomplete + report — the daemon named what is missing; show it.
+//   no report           — the backup carried no project record, so nothing about
+//                         projects was checked. That is NOT "nothing is wrong",
+//                         and the previous wording ("Restored a, b") said so.
+//
+// The green toast is reachable only from the first branch. A restore that
+// reported success for a project whose sources did not come back is this
+// function's one unforgivable bug, so the fallback branch is not a default —
+// the success text is the thing that had to be earned.
+function reportRestore(listEl, name, res) {
+  const report = res && res.report;
+  if (report && report.complete === true) {
+    const n = (report.projects || []).length;
+    // "all 0 projects came back whole" is a green that asserts nothing, so the
+    // empty case gets its own words.
+    Toast.success(
+      n
+        ? `Restored ${(res.restored || []).join(", ")} — all ${n} project${n === 1 ? "" : "s"} came back whole`
+        : `Restored ${(res.restored || []).join(", ")} — this backup held no projects to verify`,
+    );
+    listEl.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (!report) {
+    Toast.error(
+      `Restored ${(res.restored || []).join(", ") || "nothing"} from ${name} — this backup has no project record, so nothing about projects was verified`,
+    );
+    return;
+  }
+  // Incomplete, and the whole point: say which, by name, never as success.
+  const missing = [];
+  for (const project of report.projects || []) {
+    for (const source of project.sources || []) {
+      if (source.outcome && source.outcome !== "restored") {
+        missing.push({ project, source });
+      }
+    }
+  }
+  Toast.error(
+    missing.length
+      ? `Restored files from ${name}, but ${missing.length} source${missing.length === 1 ? "" : "s"} did not come back — not a complete restore`
+      : `Restored files from ${name}, but the restore is not verified complete`,
+  );
+  const rows = missing
+    .map(({ project, source }) => {
+      const why = {
+        missing_row: "row missing from the restored library",
+        unresolved: "row restored, bytes not found — relink it",
+        identity_mismatch: "different content came back under the same id",
+      }[source.outcome] || source.outcome;
+      return `
+        <div class="sys-check error" data-restore-missing="1">
+          <span class="sys-sev">✕</span>
+          <span class="sys-label">${htmlEscape(source.title || source.id)}</span>
+          <span class="sys-msg">${htmlEscape(project.name)} — ${htmlEscape(why)}</span>
+        </div>`;
+    })
+    .join("");
+  const firstProject = (report.projects || []).find((p) => p.present && p.id);
+  if (firstProject) {
+    if (document.getElementById("retention-panel")) {
+      paintRetention(firstProject.id, firstProject.name);
+    }
+  }
+  listEl.insertAdjacentHTML(
+    "afterend",
+    `<div class="sys-domain" id="restore-report" role="alert">
+       <h3 class="sys-domain-title">Restore from ${htmlEscape(name)}: ${missing.length} source${missing.length === 1 ? "" : "s"} did not come back</h3>
+       ${rows || '<div class="sys-check warn"><span class="sys-sev">▲</span><span class="sys-msg">No project was verified complete.</span></div>'}
+     </div>`,
+  );
+}
+
+// Retention: what a cleanup would drop, reported before anything is dropped.
+// Driven entirely by a project's id, which only a restore report supplies, so a
+// PVR install — which has no projects and answers 404 with an empty body — never
+// reaches this code path.
+async function paintRetention(projectId, projectName) {
+  const el = document.getElementById("retention-panel");
+  if (!el) return;
+  el.innerHTML = '<div class="empty sm">Loading cleanup plan…</div>';
+  const render = (plan) => {
+    const head = `<h3 class="sys-domain-title">Cleanup for ${htmlEscape(projectName || "this project")}</h3>`;
+    const entries = (plan && plan.entries) || [];
+    if (!entries.length) {
+      el.innerHTML = head + '<div class="empty sm">This project has no outputs to review.</div>';
+      return;
+    }
+    el.innerHTML =
+      head +
+      entries
+        .map(
+          (e) => `
+        <div class="sys-check ${e.protected ? "warn" : "ok"}" data-retention-action="${htmlEscape(e.action)}">
+          <span class="sys-sev">${e.protected ? "▲" : "✓"}</span>
+          <span class="sys-label">${htmlEscape(e.kind || "output")}</span>
+          <span class="sys-msg">${htmlEscape(e.explain || e.reason || "")}${
+            e.bytes ? ` · ${formatBytes(e.bytes)}` : ""
+          }</span>
+        </div>`,
+        )
+        .join("") +
+      (plan.collectable
+        ? `<div class="task-row">
+             <div class="task-info">
+               <span class="task-name">${plan.collectable} unreferenced</span>
+               <span class="task-cadence">Referenced and original material is never collected.</span>
+             </div>
+             <button id="retention-collect" class="sm" data-project="${htmlEscape(plan.project)}">Collect</button>
+           </div>`
+        : '<p class="pg-cap-hint">Nothing here is unreferenced, so there is nothing to collect.</p>');
+    document.getElementById("retention-collect")?.addEventListener("click", async (e) => {
+      if (
+        !(await confirmDialog(
+          `Remove ${plan.collectable} unreferenced output${plan.collectable === 1 ? "" : "s"} and their files? Originals and anything referenced are kept.`,
+          { ok: "Collect", danger: true },
+        ))
+      )
+        return;
+      await withBusy(e.currentTarget, "Collecting…", async () => {
+        const done = await API._fetch("/creator/retention/collect", {
+          method: "POST",
+          body: { project: plan.project, scope: "project" },
+        });
+        const n = (done.removed || []).length;
+        if (n) Toast.success(`Removed ${n} unreferenced output${n === 1 ? "" : "s"}`);
+        else Toast.error("Nothing was removed — the plan had changed; re-read it");
+        render(done.plan);
+      }).catch((err) => Toast.error(`Cleanup failed: ${err.message}`));
+    });
+  };
+  try {
+    render(
+      await API._fetch(
+        `/creator/retention/plan?project=${encodeURIComponent(projectId)}&scope=project`,
+      ),
+    );
+  } catch (e) {
+    el.innerHTML = `<div class="empty sm">No cleanup surface here: ${htmlEscape(e.message)}</div>`;
   }
 }
 

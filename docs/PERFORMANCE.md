@@ -104,14 +104,24 @@ are compared against the threshold.
 
 | Edition | File | Raw | gzip | brotli | Spread over 3 samples |
 | --- | --- | ---: | ---: | ---: | --- |
-| PVR 0.8.0 | `spa.js` | 386 058 | 102 295 | 100 705 | none (min = median = max) |
-| PVR 0.8.0 | `spa.css` | 92 405 | 17 242 | 18 836 | none (min = median = max) |
-| Creator 0.8.0 | `spa.js` | 584 259 | 151 634 | 149 553 | none (min = median = max) |
-| Creator 0.8.0 | `spa.css` | 134 197 | 24 106 | 26 293 | none (min = median = max) |
+| PVR 0.8.0 | `spa.js` | 388 381 | 103 139 | 101 362 | none (min = median = max) |
+| PVR 0.8.0 | `spa.css` | 92 784 | 17 290 | 18 887 | none (min = median = max) |
+| Creator 0.8.0 | `spa.js` | 587 472 | 152 828 | 150 596 | none (min = median = max) |
+| Creator 0.8.0 | `spa.css` | 134 576 | 24 159 | 26 359 | none (min = median = max) |
+
+These figures were re-measured after Mediabunny, AntV X6, and wavesurfer.js were
+vendored under `crates/strivo-web/assets/vendor/`. Neither bundle grew by the
+vendored size, and that is the expected result rather than a lucky one: all three
+load through a dynamic `import()` at their point of use, and no surface imports
+them yet, so they are embedded bytes a Creator binary carries but not bytes the
+initial parse path pays for. A PVR build drops the tree outright, so the
+vendoring is byte-free there. The figures above are also 0.3–0.8% above the
+pre-vendor measurement, which is the drift of unrelated SPA edits landing in the
+same window; `scripts/check-bundle-size.sh` treats 5% as the staleness bound.
 
 **Threshold result, per edition — both are under the compressed-size trigger.**
-250 KiB is 256 000 bytes. PVR `spa.js` is 102 295 as gzip and 100 705 as
-brotli. Creator `spa.js` is 151 634 as gzip and 149 553 as brotli. Whether to
+250 KiB is 256 000 bytes. PVR `spa.js` is 103 139 as gzip and 101 362 as
+brotli. Creator `spa.js` is 152 828 as gzip and 150 596 as brotli. Whether to
 split either bundle is a separate decision; it is not made here.
 
 The threshold is a disjunction — compressed size **or** parse/evaluation time.
@@ -142,15 +152,15 @@ Two things a reader must not misread:
   "editions": {
     "PVR": {
       "wire_measured": true,
-      "note": "measured 2026-09-26 against the strivo 0.8.0 release PVR bundle over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians",
-      "spa.js": { "raw_bytes": 386058, "gzip": 102295, "brotli": 100705 },
-      "spa.css": { "raw_bytes": 92405, "gzip": 17242, "brotli": 18836 }
+      "note": "re-measured 2026-09-26 after the three browser libraries were vendored, against the strivo 0.8.0 release PVR bundle over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians. build.rs removes assets/vendor/ from a PVR build, so the vendoring is byte-free here",
+      "spa.js": { "raw_bytes": 388381, "gzip": 103139, "brotli": 101362 },
+      "spa.css": { "raw_bytes": 92784, "gzip": 17290, "brotli": 18887 }
     },
     "Creator": {
       "wire_measured": true,
-      "note": "measured 2026-09-26 against a Creator-featured strivo 0.8.0 release build over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians",
-      "spa.js": { "raw_bytes": 584259, "gzip": 151634, "brotli": 149553 },
-      "spa.css": { "raw_bytes": 134197, "gzip": 24106, "brotli": 26293 }
+      "note": "re-measured 2026-09-26 after the three browser libraries were vendored, against a Creator-featured strivo 0.8.0 release build over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians. The vendor tree is embedded in a Creator build but nothing imports it yet, so it costs binary size and not parse time",
+      "spa.js": { "raw_bytes": 587472, "gzip": 152828, "brotli": 150596 },
+      "spa.css": { "raw_bytes": 134576, "gzip": 24159, "brotli": 26359 }
     }
   }
 }

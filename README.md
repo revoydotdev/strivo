@@ -250,3 +250,18 @@ The web UI's topbar icons are vendored from
 [EliverLara/candy-icons](https://github.com/EliverLara/candy-icons)
 (GPL-3.0) by Eliver Lara. Their upstream license and per-icon attribution are
 kept in `crates/strivo-web/assets/icons/candy/`.
+
+Three browser libraries are vendored pre-built under
+`crates/strivo-web/assets/vendor/` and loaded on demand — there is no bundler or
+JavaScript build step. Versions, source URLs, SHA-256 sums, and the full license
+texts are in
+[`crates/strivo-web/assets/vendor/PROVENANCE.md`](crates/strivo-web/assets/vendor/PROVENANCE.md).
+
+| Library | Version | License | Used by |
+|---|---|---|---|
+| [mediabunny](https://www.npmjs.com/package/mediabunny) | 1.60.0 | MPL-2.0 | Creator timeline media handling |
+| [@antv/x6](https://www.npmjs.com/package/@antv/x6) | 3.1.8 | MIT | Creator pipeline node graph |
+| [wavesurfer.js](https://www.npmjs.com/package/wavesurfer.js) | 8.0.1 | BSD-3-Clause | Creator audio waveform |
+
+They are Creator-only dependencies: `build.rs` keeps them out of PVR builds
+entirely, so a released PVR binary neither embeds nor serves them.

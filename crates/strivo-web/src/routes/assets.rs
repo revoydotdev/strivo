@@ -48,7 +48,7 @@ fn assets_version() -> String {
 fn mime_for(path: &str) -> &'static str {
     if path.ends_with(".css") {
         "text/css; charset=utf-8"
-    } else if path.ends_with(".js") {
+    } else if path.ends_with(".js") || path.ends_with(".mjs") {
         "application/javascript; charset=utf-8"
     } else if path.ends_with(".svg") {
         "image/svg+xml"
@@ -88,4 +88,20 @@ pub fn router() -> Router<AppState> {
         // askama/htmx page routers are no longer mounted (see server.rs).
         .route("/", get(spa_shell))
         .route("/app", get(spa_shell))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mime_for;
+
+    /// A JS content type is load-bearing, not cosmetic: a browser refuses to
+    /// execute an `application/octet-stream` ES module, and reports it the same
+    /// way it reports a 404.
+    #[test]
+    fn mjs_served_with_a_javascript_content_type() {
+        assert_eq!(
+            mime_for("vendor/mediabunny.min.mjs"),
+            "application/javascript; charset=utf-8"
+        );
+    }
 }

@@ -15,6 +15,7 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 #[cfg(feature = "creator")]
 use serde_json::json;
+use std::fs;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -1645,4 +1646,80 @@ async fn settings_update_admits_only_paths_in_the_allowlist_const() {
             update_setting_request(app.clone(), api_key, path, serde_json::json!(true)).await;
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
     }
+}
+
+/// The vendored browser libraries, resolved against the crate's *source* tree.
+///
+/// A separate accessor from the embedded one on purpose: the edition-boundary
+/// assertions below pair "these files exist" with "these paths are not
+/// reachable". Asserting only the second passes for free whenever the vendor
+/// tree was never added, so the subject of the check has to be proven
+/// non-empty in the same run.
+fn source_vendor_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/vendor")
+}
+
+fn vendored_files() -> Vec<String> {
+    let dir = source_vendor_dir();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("vendored library tree is missing at {}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".js") || n.ends_with(".mjs"))
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn vendor_tree_is_not_reachable_from_a_pvr_build() {
+    let vendor = vendored_files();
+    assert!(
+        vendor.len() >= 3,
+        "expected the three vendored browser libraries in {}, found {:?} — a PVR \\
+         exclusion asserted against an empty tree proves nothing",
+        source_vendor_dir().display(),
+        vendor
+    );
+
+    for name in &vendor {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/assets/vendor/{name}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app().oneshot(request).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "/assets/vendor/{name} is served by a PVR build; {} bytes of third-party \\
+             code would ship inside every PVR binary",
+            name
+        );
+    }
+}
+
+#[cfg(feature = "creator")]
+#[tokio::test]
+async fn vendored_esm_is_served_with_a_javascript_content_type() {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/assets/vendor/mediabunny.min.mjs")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("Content-Type is set")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        content_type.starts_with("application/javascript"),
+        "a vendored ES module served as {content_type:?} is fetched and then \\
+         silently refused by the browser"
+    );
 }

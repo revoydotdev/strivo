@@ -47,6 +47,16 @@ fn main() {
     if !creator_enabled {
         // The research UI is Creator-only in its entirety; ship none of it.
         let _ = fs::remove_dir_all(dst_assets.join("research"));
+        // Same for the vendored browser libraries, which only Creator surfaces
+        // import. `let _ =` swallows the error, so the assert below is the gate:
+        // an embedded asset is a binary-size cost *and* a fetchable path.
+        let vendor = dst_assets.join("vendor");
+        let _ = fs::remove_dir_all(&vendor);
+        assert!(
+            !vendor.exists(),
+            "PVR build still embeds {}",
+            vendor.display()
+        );
     }
 
     // Release builds ship a minified bundle. Beyond the size win, this is

@@ -704,6 +704,32 @@ const server = createServer(async (req, res) => {
           ],
         });
     }
+    // POST /api/v1/dataviz/run — the real handler is a pure transform
+    // (`strivo_dataviz::run`) with no IO, so the fixture computes the
+    // answer from the posted corpus rather than returning a canned series:
+    // a canned payload would let the spec pass even if the SPA sent the
+    // wrong corpus. Only `speaker_time` is implemented, which is all the
+    // spec exercises; anything else 400s the way an unknown experiment does.
+    if (p === "/dataviz/run" && req.method === "POST") {
+      const body = await readBody(req);
+      const exp = body.experiment || {};
+      if (exp.kind !== "speaker_time") {
+        return json(res, 400, { detail: `fixture implements speaker_time only, got ${exp.kind}` });
+      }
+      const totals = new Map();
+      for (const ep of (body.corpus && body.corpus.episodes) || []) {
+        for (const u of ep.utterances || []) {
+          const secs = Math.max((u.end_sec || 0) - (u.start_sec || 0), 0);
+          totals.set(u.speaker || "Speaker", (totals.get(u.speaker || "Speaker") || 0) + secs);
+        }
+      }
+      const points = [...totals.entries()]
+        .map(([label, sec]) => ({ label, value: sec / 60 }))
+        .sort((a, b) => b.value - a.value);
+      return json(res, 200, {
+        series: { label: "Speaker minutes (across corpus)", chart_hint: "bar", points },
+      });
+    }
     if (p === "/plugins/crunchr/search") {
       const q = (url.searchParams.get("q") || "").trim();
       if (!q) return json(res, 200, { results: [] });

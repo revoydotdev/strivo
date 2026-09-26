@@ -4290,6 +4290,12 @@ fn vtt_escape(s: &str) -> String {
 /// rendered as WebVTT so the in-app player's `<track>` picks them up. Returns
 /// 404 when Crunchr hasn't transcribed the recording yet (so the player's
 /// HEAD probe correctly hides the CC button).
+///
+/// Gated on Crunchr: the segments are Crunchr's store, and reading them
+/// without the entitlement would hand a non-entitled caller the paid
+/// plugin's output for free. The entitlement check therefore precedes the
+/// "has this been transcribed" check — an unentitled caller gets 402, never
+/// a 404 that would read as "no transcript".
 async fn recording_captions(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -4297,6 +4303,9 @@ async fn recording_captions(
 ) -> impl IntoResponse {
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro(CapabilityKey::Crunchr) {
+        return r;
     }
     let Some(conn) = open_ro(&crunchr_db()) else {
         return Problem::not_found("crunchr has no data yet").into_response();
@@ -5566,6 +5575,16 @@ async fn research_migrate_legacy(
 /// arbitrary corpus and return the chart-ready Series. The corpus
 /// is supplied by the client (assembled SPA-side from Crunchr
 /// transcripts) so this endpoint is a pure transform; no IO.
+///
+/// Gated on Crunchr, and the reason is a data-flow one rather than a
+/// naming one: there is no `dataviz` capability row in
+/// `crate::capabilities` (the enum has no such variant, so `gate_pro`
+/// cannot name it at all), and the only material this endpoint can ever
+/// transform is Crunchr's transcripts. The entitlement that matters is
+/// therefore Crunchr's, and holding it is the condition for running a
+/// chart. Minting a `dataviz` descriptor row is the cleaner shape and is
+/// deliberately NOT done here — the descriptor is one list and adding a
+/// row is a descriptor decision, not a route fix.
 async fn dataviz_run(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -5574,8 +5593,45 @@ async fn dataviz_run(
     if authed(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
+    if let Err(r) = gate_pro(CapabilityKey::Crunchr) {
+        return r;
+    }
     let series = strivo_dataviz::run(&body.corpus, &body.experiment);
     Json(json!({ "series": series })).into_response()
+}
+
+/// The entitlement gate for the per-plugin storage routes, keyed on the
+/// *target* plugin rather than a fixed one: `GET`/`DELETE
+/// /api/v1/plugins/{name}/storage` reach into whichever directory the path
+/// names, so the capability whose data is being read or destroyed is the one
+/// the slug names.
+///
+/// A slug the descriptor has no row for is not gated, because its cost is
+/// unknown — gating on a guess would lock a free plugin out of its own
+/// storage view. That is the same reason a marketplace plugin is reachable
+/// here: `plugin_storage_dir` is shared by every plugin, first-party or not.
+///
+/// The arms are a `match` rather than "resolve the key, then gate it"
+/// because `gate_pro` takes a `CapabilityKey` *enum path* and
+/// `scripts/check-capability-descriptor.sh` only recognises a gate whose
+/// argument is literally `CapabilityKey::X`; a dynamic key is a call form
+/// that check cannot see, which is worse than a visible repetition. To keep
+/// that repetition from becoming a second hand-kept list of Pro names,
+/// `every_pro_capability_is_refused_at_the_storage_gate` asserts the arms
+/// against `capabilities::pro_slugs()` — a new Pro row without an arm fails
+/// the suite rather than shipping ungated.
+// Same `Err` shape as `gate_pro` above, propagated the same way, so it
+// carries the same `result_large_err` exemption for the same reason.
+#[allow(clippy::result_large_err)]
+fn gate_pro_plugin_storage(name: &str) -> Result<(), axum::response::Response> {
+    let key = serde_json::from_str::<CapabilityKey>(&format!("\"{name}\"")).ok();
+    match key {
+        Some(CapabilityKey::Crunchr) => gate_pro(CapabilityKey::Crunchr),
+        Some(CapabilityKey::Archiver) => gate_pro(CapabilityKey::Archiver),
+        Some(CapabilityKey::Viewguard) => gate_pro(CapabilityKey::Viewguard),
+        Some(CapabilityKey::Insights) => gate_pro(CapabilityKey::Insights),
+        _ => Ok(()),
+    }
 }
 
 fn plugin_storage_dir(name: &str) -> Option<std::path::PathBuf> {
@@ -5630,6 +5686,9 @@ async fn plugin_storage_size(
         return Problem::bad_request("plugin name must be alphanumeric / dash / underscore")
             .into_response();
     };
+    if let Err(r) = gate_pro_plugin_storage(&name) {
+        return r;
+    }
     let (bytes, file_count) = plugin_storage_walk(&dir);
     Json(json!({
         "plugin": name,
@@ -5655,6 +5714,9 @@ async fn plugin_storage_clear(
         return Problem::bad_request("plugin name must be alphanumeric / dash / underscore")
             .into_response();
     };
+    if let Err(r) = gate_pro_plugin_storage(&name) {
+        return r;
+    }
     if !dir.exists() {
         return Json(json!({
             "plugin": name,
@@ -5700,9 +5762,9 @@ mod research_route_tests {
     // because the env vars it protects stay set for the whole request. A
     // std::sync::Mutex guard held across an await trips
     // `clippy::await_holding_lock`, which CI gates on.
-    static ENV_GUARD: Mutex<()> = Mutex::const_new(());
+    pub(super) static ENV_GUARD: Mutex<()> = Mutex::const_new(());
 
-    fn test_state(api_key: &str) -> AppState {
+    pub(super) fn test_state(api_key: &str) -> AppState {
         AppState {
             ipc: std::sync::Arc::new(crate::ipc_client::IpcClient::disconnected()),
             api_key: crate::auth::ApiKey(api_key.to_string()),
@@ -5994,5 +6056,273 @@ mod research_route_tests {
         assert_eq!(paginate(items.clone(), Some(2), None), vec![0, 1]);
         assert_eq!(paginate(items.clone(), Some(2), Some(3)), vec![3, 4]);
         assert_eq!(paginate(items, Some(0), None).len(), 1); // clamped to >=1
+    }
+}
+
+// ── Entitlement gates on the plugin read/write surface ───────────────
+//
+// Four routes had no `gate_pro` at all (plan todo 7). The gate each one
+// asserts is the one the capability DESCRIPTOR assigns it, read from
+// `capabilities::CAPABILITIES` — not a name assumed from the route:
+//
+//   route                   descriptor row          entitlement
+//   recording_captions      Crunchr (Pro)          Crunchr
+//   dataviz_run             (no row — see below)    Crunchr, by proxy
+//   plugin_storage_size     the target slug         the target's own row
+//   plugin_storage_clear    the target slug         the target's own row
+//
+// `dataviz` is the one place the descriptor has nothing to say: there is no
+// `CapabilityKey::Dataviz` variant and no `CapabilityKey` variant is named
+// `dataviz` in any spelling, so `gate_pro` — which takes a `CapabilityKey` —
+// cannot name it at all. The corpus this endpoint transforms is assembled
+// SPA-side from Crunchr transcripts, and that is the only source it can
+// come from, so Crunchr is the capability whose store the request touches.
+// The proxy is deliberate and is called out in the evidence rather than
+// papered over by minting a descriptor row this todo does not own.
+#[cfg(test)]
+mod route_entitlement_tests {
+    use super::research_route_tests::{test_state, ENV_GUARD};
+    use super::*;
+    use crate::capabilities::Entitlement;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    /// An unentitled environment: no dev-unlock, and `XDG_STATE_HOME` at an
+    /// empty tempdir so a real `licence.json` on the test machine cannot
+    /// make the gate pass. Caller holds `ENV_GUARD`.
+    async fn lock_unentitled() -> (tempfile::TempDir, tokio::sync::MutexGuard<'static, ()>) {
+        let guard = ENV_GUARD.lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // SAFETY: ENV_GUARD is held for the whole call, so no other thread
+        // in this test binary reads or writes these vars concurrently.
+        unsafe {
+            std::env::remove_var("STRIVO_DEV_UNLOCK_ALL");
+            std::env::set_var("XDG_STATE_HOME", dir.path());
+        }
+        (dir, guard)
+    }
+
+    fn corpus_body() -> String {
+        json!({
+            "corpus": { "label": "t", "episodes": [] },
+            "experiment": { "kind": "speaker_time" },
+        })
+        .to_string()
+    }
+
+    /// Non-vacuity: the gate the tests below assert must actually be a
+    /// refusal. If `is_entitled` were true in this environment the four
+    /// 402 assertions would be testing nothing, so the entitlement fact is
+    /// asserted directly before any of them.
+    #[tokio::test]
+    async fn unentitled_fixture_really_is_unentitled() {
+        let (_dir, _guard) = lock_unentitled().await;
+        assert!(
+            !CapabilityKey::Crunchr.is_entitled(),
+            "the fixture is entitled; every 402 assertion below is vacuous"
+        );
+        // And the descriptor rows these tests name are in fact Pro, so the
+        // gate under test is the descriptor's, not a name the test invented.
+        for key in [
+            CapabilityKey::Crunchr,
+            CapabilityKey::Viewguard,
+            CapabilityKey::Insights,
+            CapabilityKey::Archiver,
+        ] {
+            assert_eq!(
+                key.descriptor().entitlement,
+                Entitlement::Pro,
+                "{} must be a Pro row for its gate to be a refusal",
+                key.as_str()
+            );
+        }
+        // `chapters` is Included and is the negative control for the
+        // storage gates: gating a free capability as Pro would be a
+        // regression, and this asserts the descriptor really does say so.
+        assert_eq!(
+            CapabilityKey::Chapters.descriptor().entitlement,
+            Entitlement::Included
+        );
+        // The plan's stale claim, re-derived: there is no dataviz capability.
+        assert!(
+            serde_json::from_str::<CapabilityKey>("\"dataviz\"").is_err(),
+            "a dataviz capability key appeared; dataviz_run's proxy gate \
+             should now name a real row"
+        );
+    }
+
+    #[tokio::test]
+    async fn recording_captions_is_refused_without_crunchr_entitlement() {
+        let (_dir, _guard) = lock_unentitled().await;
+        let state = test_state("captions-gate-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/recordings/{id}/captions.vtt",
+                get(recording_captions),
+            )
+            .with_state(state.clone());
+        let req = Request::builder()
+            .uri(format!(
+                "/api/v1/recordings/{}/captions.vtt",
+                uuid::Uuid::new_v4()
+            ))
+            .header("x-api-key", state.api_key.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn dataviz_run_is_refused_without_crunchr_entitlement() {
+        let (_dir, _guard) = lock_unentitled().await;
+        let state = test_state("dataviz-gate-key");
+        let router = Router::new()
+            .route("/api/v1/dataviz/run", axum::routing::post(dataviz_run))
+            .with_state(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/dataviz/run")
+            .header("content-type", "application/json")
+            .header("x-api-key", state.api_key.as_str())
+            .body(Body::from(corpus_body()))
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn plugin_storage_size_is_refused_for_a_pro_plugin() {
+        let (_dir, _guard) = lock_unentitled().await;
+        let state = test_state("storage-size-gate-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/plugins/{name}/storage",
+                get(plugin_storage_size).delete(plugin_storage_clear),
+            )
+            .with_state(state.clone());
+        let req = Request::builder()
+            .uri("/api/v1/plugins/crunchr/storage")
+            .header("x-api-key", state.api_key.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn plugin_storage_clear_is_refused_for_a_pro_plugin() {
+        let (_dir, _guard) = lock_unentitled().await;
+        let state = test_state("storage-clear-gate-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/plugins/{name}/storage",
+                get(plugin_storage_size).delete(plugin_storage_clear),
+            )
+            .with_state(state.clone());
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/plugins/archiver/storage")
+            .header("x-api-key", state.api_key.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    /// The regression guard for the storage gates: an Included capability's
+    /// storage must stay reachable, or gating on the target slug has locked
+    /// a free feature. Two slugs are covered — one the descriptor knows and
+    /// marks Included, one it has never heard of — because both must pass.
+    #[tokio::test]
+    async fn plugin_storage_stays_reachable_for_a_free_or_unknown_plugin() {
+        let (_dir, _guard) = lock_unentitled().await;
+        for slug in ["chapters", "some-marketplace-plugin"] {
+            let state = test_state("storage-open-key");
+            let router = Router::new()
+                .route(
+                    "/api/v1/plugins/{name}/storage",
+                    get(plugin_storage_size).delete(plugin_storage_clear),
+                )
+                .with_state(state.clone());
+            let req = Request::builder()
+                .uri(format!("/api/v1/plugins/{slug}/storage"))
+                .header("x-api-key", state.api_key.as_str())
+                .body(Body::empty())
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "{slug} must not be gated as Pro"
+            );
+            let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["plugin"], slug);
+        }
+    }
+
+    /// The storage gate's `match` arms must cover the whole Pro set. The
+    /// set is read from the descriptor, never written out, so a fifth Pro
+    /// capability added later fails THIS test rather than shipping with a
+    /// storage route that serves it to an unentitled caller.
+    #[tokio::test]
+    async fn every_pro_capability_is_refused_at_the_storage_gate() {
+        let (_dir, _guard) = lock_unentitled().await;
+        let pro = crate::capabilities::pro_slugs();
+        assert!(
+            !pro.is_empty(),
+            "no Pro capability; the assertion below would be vacuous"
+        );
+        let mut refused = Vec::new();
+        for slug in &pro {
+            let state = test_state("storage-sweep-key");
+            let router = Router::new()
+                .route(
+                    "/api/v1/plugins/{name}/storage",
+                    get(plugin_storage_size).delete(plugin_storage_clear),
+                )
+                .with_state(state.clone());
+            let req = Request::builder()
+                .uri(format!("/api/v1/plugins/{slug}/storage"))
+                .header("x-api-key", state.api_key.as_str())
+                .body(Body::empty())
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            if resp.status() == StatusCode::PAYMENT_REQUIRED {
+                refused.push(*slug);
+            }
+        }
+        assert_eq!(
+            refused.len(),
+            pro.len(),
+            "these Pro capabilities are NOT gated at the storage route: {:?}",
+            pro.iter()
+                .filter(|s| !refused.contains(s))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A malformed slug is a 400, not a 402 and not a 500: the gate has to
+    /// run only on a name the descriptor can classify.
+    #[tokio::test]
+    async fn plugin_storage_rejects_a_malformed_slug_as_bad_request() {
+        let (_dir, _guard) = lock_unentitled().await;
+        let state = test_state("storage-bad-slug-key");
+        let router = Router::new()
+            .route(
+                "/api/v1/plugins/{name}/storage",
+                get(plugin_storage_size).delete(plugin_storage_clear),
+            )
+            .with_state(state.clone());
+        let req = Request::builder()
+            .uri("/api/v1/plugins/..%2F..%2Fetc/storage")
+            .header("x-api-key", state.api_key.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

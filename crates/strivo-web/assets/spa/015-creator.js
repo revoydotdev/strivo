@@ -89,17 +89,33 @@ async function renderDataviz() {
     const exp = DATAVIZ_EXPERIMENTS.find((e) => e.kind === datavizState.experimentKind);
     await withBusy(ev.currentTarget, "Fetching transcripts…", async () => {
       // Build the Corpus client-side from each recording's Crunchr
-      // transcript. Skip recordings that have no transcript yet.
+      // transcript. Three outcomes, and only one of them is "skip me":
+      //   404 — this recording genuinely has no transcript;
+      //   402 — the transcript store is a Pro capability and this machine is
+      //         not entitled, which is a refusal, not a missing row;
+      //   anything else — a real failure, surfaced as-is.
+      // Collapsing all three (the old `.catch(() => null)`) made a
+      // non-entitled user read "you have no transcripts" instead of
+      // "activate Crunchr".
       const episodes = [];
       for (const id of datavizState.selectedIds) {
         const r = finished.find((x) => x.id === id);
-        const tr = await API.crunchrTranscript(id);
-        if (!tr || !tr.utterances) continue;
+        const name = niceTitle(r?.stream_title) || r?.channel_name || id.slice(0, 8);
+        let tr;
+        try {
+          tr = await API.crunchrTranscript(id);
+        } catch (e) {
+          if (e && e.code === 402) throw e;
+          if (e && /^HTTP 404:/.test(e.message || "")) continue;
+          throw e;
+        }
+        const segments = (tr && tr.segments) || [];
+        if (segments.length === 0) continue;
         episodes.push({
           id,
-          title: niceTitle(r?.stream_title) || r?.channel_name || id.slice(0, 8),
+          title: name,
           date: r?.started_at || "",
-          utterances: tr.utterances.map((u) => ({
+          utterances: segments.map((u) => ({
             speaker: u.speaker || "Speaker",
             text: u.text || "",
             start_sec: u.start_sec || 0,

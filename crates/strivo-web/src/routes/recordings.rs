@@ -367,6 +367,15 @@ async fn download(
     resp
 }
 
+/// `GET /api/v1/recordings/{id}/play` — redirect to the raw file stream.
+///
+/// **No SPA caller.** The SPA points its `<video src>` and every download
+/// link straight at `/download` (`012f-pvr.js`, `018a-pvr.js`,
+/// `019b-pvr.js`), which is also what `<track>` resolution needs. This
+/// redirect exists for anything that wants a stable "play this" URL without
+/// knowing the download stream's shape — an external player, a
+/// `Location:` from another service, a bookmark. Keeping it is deliberate;
+/// what would be wrong is implying the UI navigates here.
 async fn play(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>) -> Response {
     if check_dual(&headers, &state.api_key, &state.session_secret).is_err() {
         return Problem::unauthorized().into_response();

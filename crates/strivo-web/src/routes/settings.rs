@@ -2110,6 +2110,17 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/health/checks", get(health_checks))
         // CE-Fusion F3: content-free product telemetry. Not gated behind
         // `creator` — serves both editions.
+        //
+        // **Operator query endpoint, with no SPA caller.** It is a POST for
+        // a client to *report* an event and a GET for an operator to *read*
+        // back what has been reported. The SPA never calls either — the only
+        // in-tree caller of the GET is this crate's own test
+        // (`crate::telemetry`'s route tests) — and there is deliberately no
+        // nav item for it, because a product-telemetry inbox is not a user
+        // surface. Query it with `curl -H "X-Api-Key: $KEY"
+        // http://127.0.0.1:8181/api/v1/telemetry`. See `scripts/check-client-routes.sh`,
+        // which reports uncalled server routes as information rather than as
+        // contract gaps: this one is intentional.
         .route(
             "/api/v1/telemetry",
             get(crate::telemetry::telemetry_handler),

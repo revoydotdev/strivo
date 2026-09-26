@@ -70,5 +70,10 @@
     API._fetch(`/plugins/editor/${encodeURIComponent(recordingId)}/render`, { method: "POST" }),
   datavizRun: (corpus, experiment) =>
     API._fetch(`/dataviz/run`, { method: "POST", body: { corpus, experiment } }),
+  // Crunchr's transcript, from the one route that serves it. The old
+  // `/plugins/crunchr/transcript/{id}` never existed, and this call sat
+  // behind `.catch(() => null)`, so "no such route" and "no transcript"
+  // were the same value to every caller. No mask now: a refusal (402) and a
+  // real failure reach the caller as the error `_fetch` threw.
   crunchrTranscript: (recordingId) =>
-    API._fetch(`/plugins/crunchr/transcript/${encodeURIComponent(recordingId)}`).catch(() => null),
+    API._fetch(`/plugins/crunchr/recordings/${encodeURIComponent(recordingId)}`),

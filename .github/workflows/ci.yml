@@ -103,6 +103,12 @@ jobs:
       - name: config.toml.example covers every AppConfig field
         run: scripts/check-config-example.sh
 
+      # Regenerates docs/SETTINGS-COVERAGE.md from SETTINGS_KEYS and diffs it,
+      # so a hand-edit of the generated document and an allow-list key with no
+      # browser control both fail here rather than at the next reader.
+      - name: settings coverage doc matches the enforced allow-list
+        run: scripts/gen-settings-coverage.sh --check
+
       - name: AUR .SRCINFO matches PKGBUILD
         run: scripts/check-srcinfo.sh
 

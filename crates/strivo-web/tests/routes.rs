@@ -1594,3 +1594,55 @@ fn recordings_module_never_calls_app_config_load_directly() {
         "recordings.rs must not call AppConfig::load directly; use AppState::config()/state.config()"
     );
 }
+
+/// The update allow-list is `SETTINGS_KEYS`, not the handler's `match`: a path
+/// the const drops is refused even though its arm is still in the source, and a
+/// path the const never listed is refused without a matching arm existing. The
+/// literal near-misses matter as much as the accepted key — a gate that
+/// rejected everything would pass a one-sided test.
+#[tokio::test]
+async fn settings_update_admits_only_paths_in_the_allowlist_const() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let config_path = sandbox.path().join("config.toml");
+    strivo_core::config::AppConfig::default()
+        .save(Some(&config_path))
+        .unwrap();
+
+    let api_key = "settings-allowlist-test-key";
+    let app = app_with_config(api_key, config_path.clone());
+
+    let accepted = update_setting_request(
+        app.clone(),
+        api_key,
+        "ui.verbose_status",
+        serde_json::json!(true),
+    )
+    .await;
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let saved = strivo_core::config::AppConfig::load(Some(&config_path)).unwrap();
+    assert!(saved.ui.verbose_status);
+
+    for path in [
+        "ui.verbose_status.off",
+        "notifications.webhook.secret",
+        "plugins..enabled",
+        "recording_dir",
+    ] {
+        if path == "recording_dir" {
+            // Listed, but the value fails this validator rather than the
+            // allow-list: proves the 400 is not a blanket refusal of the row.
+            let refused = update_setting_request(
+                app.clone(),
+                api_key,
+                path,
+                serde_json::json!("/definitely/not/a/directory"),
+            )
+            .await;
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
+            continue;
+        }
+        let refused =
+            update_setting_request(app.clone(), api_key, path, serde_json::json!(true)).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+}

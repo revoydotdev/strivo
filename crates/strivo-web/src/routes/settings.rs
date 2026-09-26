@@ -1587,14 +1587,162 @@ struct SettingsUpdatePayload {
     value: serde_json::Value,
 }
 
+/// One web-writable configuration path.
+///
+/// `restart` records that the daemon owns a startup-time config snapshot, so
+/// persisting the value only affects captures started after a restart. The
+/// handler reports the flag from this same row on every accepted write.
+struct SettingsKey {
+    path: &'static str,
+    restart: bool,
+}
+
+/// Every path `POST /api/v1/settings/update` accepts.
+///
+/// This is the allow-list, not a copy of one: `update_setting` refuses any
+/// path absent from it before the `match` runs, and reads the response's
+/// `restart_required` flag from the same row. `docs/SETTINGS-COVERAGE.md` is
+/// generated from this const by `scripts/gen-settings-coverage.sh`.
+///
+/// `plugins.*.enabled` is one wildcard row so a new plugin lands by writing
+/// `plugins.<name>.enabled` without an allow-list edit; the arm still validates
+/// the name's shape.
+const SETTINGS_KEYS: &[SettingsKey] = &[
+    SettingsKey {
+        path: "recording_dir",
+        restart: true,
+    },
+    SettingsKey {
+        path: "recording.format.format",
+        restart: true,
+    },
+    SettingsKey {
+        path: "recording.format.bitrate_kbps",
+        restart: true,
+    },
+    SettingsKey {
+        path: "recording.format.video_codec",
+        restart: true,
+    },
+    SettingsKey {
+        path: "recording.format.audio_codec",
+        restart: true,
+    },
+    SettingsKey {
+        path: "recording.transcode",
+        restart: false,
+    },
+    SettingsKey {
+        path: "recording.twitch_live_from_start",
+        restart: false,
+    },
+    SettingsKey {
+        path: "recording.auto_vod_backfill",
+        restart: false,
+    },
+    SettingsKey {
+        path: "recording.auto_trim_ads",
+        restart: false,
+    },
+    SettingsKey {
+        path: "recording.filename_template",
+        restart: false,
+    },
+    SettingsKey {
+        path: "recording.container",
+        restart: false,
+    },
+    SettingsKey {
+        path: "ui.reduce_motion",
+        restart: false,
+    },
+    SettingsKey {
+        path: "ui.verbose_status",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.desktop_enabled",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.on_go_live",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.on_recording_finished",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.on_recording_failed",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.on_vod_ready",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.webhook.enabled",
+        restart: false,
+    },
+    SettingsKey {
+        path: "notifications.webhook.url",
+        restart: false,
+    },
+    SettingsKey {
+        path: "monitor_limits.max_concurrent_recordings",
+        restart: false,
+    },
+    SettingsKey {
+        path: "monitor_limits.disk_budget_reserved_gb",
+        restart: false,
+    },
+    SettingsKey {
+        path: "plugins.*.enabled",
+        restart: false,
+    },
+    #[cfg(feature = "creator")]
+    SettingsKey {
+        path: "archiver.enabled",
+        restart: false,
+    },
+    #[cfg(feature = "creator")]
+    SettingsKey {
+        path: "archiver.concurrent_fragments",
+        restart: false,
+    },
+    #[cfg(feature = "creator")]
+    SettingsKey {
+        path: "archiver.archive_dir",
+        restart: false,
+    },
+    #[cfg(feature = "creator")]
+    SettingsKey {
+        path: "archiver.format",
+        restart: false,
+    },
+];
+
+/// The allow-list gate for `update_setting`. A `*` in a const path matches one
+/// arbitrary segment, which is how the per-plugin toggle family is admitted.
+fn setting(path: &str) -> Option<&'static SettingsKey> {
+    SETTINGS_KEYS.iter().find(|key| {
+        key.path == path
+            || key.path.split_once('*').is_some_and(|(prefix, suffix)| {
+                path.len() > prefix.len() + suffix.len()
+                    && path.starts_with(prefix)
+                    && path.ends_with(suffix)
+            })
+    })
+}
+
 /// `POST /api/v1/settings/update` — persist a single config knob.
 ///
-/// Strict allow-list: anything not enumerated here is rejected with 400.
-/// Each entry validates type, applies it to the loaded AppConfig, and saves.
-/// The daemon owns a startup-time config snapshot, so recording destination
-/// and format changes take effect only after it restarts; the response makes
-/// that fact explicit. The poll-interval knob keeps its own endpoint because
-/// it has to be re-armed in the monitor immediately.
+/// Strict allow-list: anything `setting` does not recognise is rejected with
+/// 400. Each accepted entry validates type, applies it to the loaded AppConfig,
+/// and saves. The daemon owns a startup-time config snapshot, so recording
+/// destination and format changes take effect only after it restarts; the
+/// response makes that fact explicit. The poll-interval knob keeps its own
+/// endpoint because it has to be re-armed in the monitor immediately.
 async fn update_setting(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -1609,16 +1757,16 @@ async fn update_setting(
         Err(e) => return crate::problem::Problem::internal(e.to_string()).into_response(),
     };
 
-    // Allow-list. Every entry owns its type and safety validation here;
-    // recording paths and process arguments have stricter validators below.
-    let restart_required = matches!(
-        body.path.as_str(),
-        "recording_dir"
-            | "recording.format.format"
-            | "recording.format.bitrate_kbps"
-            | "recording.format.video_codec"
-            | "recording.format.audio_codec"
-    );
+    // Allow-list. The const decides admission; the `match` below owns the type
+    // and safety validation of each admitted path.
+    let Some(key) = setting(body.path.as_str()) else {
+        return crate::problem::Problem::bad_request(format!(
+            "unknown or read-only setting: {}",
+            body.path
+        ))
+        .into_response();
+    };
+    let restart_required = key.restart;
     let result: Result<(), String> = match body.path.as_str() {
         // The daemon keeps a config snapshot while it is running. Persisting
         // this never moves existing recordings or changes an active capture;
@@ -1754,7 +1902,9 @@ async fn update_setting(
             a.format = s;
             let _ = cfg.set_plugin_section("archiver", &a);
         }),
-        other => Err(format!("unknown or read-only setting: {other}")),
+        // Unreachable: `setting` already rejected every path outside
+        // SETTINGS_KEYS, so landing here means a listed path with no mutation.
+        _ => Err("allow-listed setting has no mutation".into()),
     };
 
     if let Err(e) = result {
@@ -2323,6 +2473,34 @@ mod tests {
         assert!(take_webhook_url(&serde_json::json!("not a url")).is_err());
         assert!(take_webhook_url(&serde_json::json!("ftp://example.com/x")).is_err());
         assert!(take_webhook_url(&serde_json::json!(42)).is_err());
+    }
+
+    /// Hard-coded literals on purpose: a test that iterated SETTINGS_KEYS would
+    /// pass just as happily against an empty const.
+    #[test]
+    fn the_allowlist_const_is_what_the_update_gate_admits() {
+        assert!(setting("recording_dir").is_some());
+        assert!(setting("notifications.webhook.url").is_some());
+        assert!(setting("plugins.crunchr.enabled").is_some());
+        assert!(setting("plugins..enabled").is_none());
+        assert!(setting("plugins.crunchr").is_none());
+        assert!(setting("recording_dir.extra").is_none());
+        assert!(setting("notifications.webhook.secret").is_none());
+        assert!(setting("").is_none());
+    }
+
+    #[test]
+    fn the_allowlist_const_carries_the_restart_flags_the_response_reports() {
+        for path in [
+            "recording_dir",
+            "recording.format.format",
+            "recording.format.bitrate_kbps",
+            "recording.format.video_codec",
+            "recording.format.audio_codec",
+        ] {
+            assert!(setting(path).is_some_and(|key| key.restart), "{path}");
+        }
+        assert!(setting("ui.reduce_motion").is_some_and(|key| !key.restart));
     }
 }
 

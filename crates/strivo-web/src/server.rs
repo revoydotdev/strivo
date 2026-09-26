@@ -28,6 +28,41 @@ pub struct ProbeCacheEntry {
     pub value: serde_json::Value,
 }
 
+/// A minimal `AppState` for a handler test: a disconnected IPC client, a
+/// known API key, and every cache/limiter/semaphore a handler might reach for.
+///
+/// One definition, because a second copy of a fifteen-field struct literal is a
+/// compile error the next time a field is added — and a handler test that
+/// stops compiling is a handler test that quietly stops running.
+#[cfg(test)]
+pub(crate) fn test_state(api_key: &str) -> AppState {
+    AppState {
+        ipc: std::sync::Arc::new(crate::ipc_client::IpcClient::disconnected()),
+        api_key: crate::auth::ApiKey(api_key.to_string()),
+        config_path: None,
+        config_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        config_cache: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        snapshot_cache: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        session_secret: "handler-test-session-secret".to_string(),
+        login_limiter: crate::ratelimit::LoginLimiter::new(),
+        probe_cache: std::sync::Arc::new(
+            tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        ),
+        probe_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+        thumbnail_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        thumbnail_locks: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        thumbnail_failures: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        jobs_db: std::sync::Arc::new(tokio::sync::OnceCell::new()),
+        jobs_db_path: std::sync::Arc::new(
+            strivo_core::config::AppConfig::data_dir().join("jobs.db"),
+        ),
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub ipc: Arc<IpcClient>,
@@ -330,6 +365,7 @@ pub fn build_router(state: AppState) -> Router {
     let guarded = guarded
         .merge(routes::plugins::router())
         .merge(routes::workspace::router())
+        .merge(routes::timeline::router())
         .merge(routes::licence::router());
     let guarded = guarded
         // S16: authenticate ahead of body/query extraction. `route_layer`

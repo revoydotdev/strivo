@@ -220,3 +220,8 @@
   licenceTrial: () => API._fetch("/licence/trial", { method: "POST" }),
   licenceActivate: (key) =>
     API._fetch("/licence/activate", { method: "POST", body: { key } }),
+  // ── The multi-track timeline ───────────────────────────────────────
+  // One route for the read and the write: it compiles a request and answers
+  // with the plan, so a caller can never hold a composition the renderer
+  // would not produce.
+  timelineApply: (body) => API._fetch("/creator/timeline/apply", { method: "POST", body }),

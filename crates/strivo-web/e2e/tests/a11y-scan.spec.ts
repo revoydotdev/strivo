@@ -45,6 +45,7 @@ const PVR_ROUTES = [
  *  actually Creator-only are these seven, so the scan covers them too rather
  *  than claiming a second edition's coverage it did not measure. */
 const CREATOR_ROUTES = [
+  "timeline",
   "studio",
   "analytics",
   "publish",

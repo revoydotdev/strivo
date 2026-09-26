@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "The edit intents the Creator timeline surface actually sends, as captured",
+    "from e2e/tests/creator-timeline.spec.ts. crates/editor/tests/timeline_parity.rs",
+    "replays each one through the real compiler and asserts the composition",
+    "intervals it produces. That is the plan-versus-surface convergence proof:",
+    "the browser states an intent, the server is the only thing that decides",
+    "what it means, and both agree on the resulting intervals.",
+    "",
+    "A no-op edit is included on purpose. A probe that only ever sees edits",
+    "which change something cannot tell 'the check ran' from 'the check is",
+    "vacuous', so the harness is required to report that this one changed",
+    "nothing."
+  ],
+  "request": {
+    "subject": "stream-01",
+    "revision": "rev-7",
+    "clips": [
+      { "cut": 0, "span": { "source": "locator:/recordings/stream-01.mkv", "timebase": { "num": 30, "den": 1 }, "range": { "start": 0, "end": 1000000 }, "rate": { "num": 1, "den": 1 } }, "fade_in": 0, "fade_out": 0 },
+      { "cut": 1, "span": { "source": "locator:/recordings/stream-01.mkv", "timebase": { "num": 30, "den": 1 }, "range": { "start": 2000000, "end": 3500000 }, "rate": { "num": 1, "den": 1 } }, "fade_in": 0, "fade_out": 0 }
+    ],
+    "layers": [
+      { "id": "programme", "kind": "video", "transform": { "scale": null, "offset_px": [0, 0], "z": 0 }, "colour": { "transfer": null, "primaries": null, "matrix": null, "full_range": null }, "clips": [0, 1], "visible": true }
+    ],
+    "transitions": [
+      { "id": "cut-1", "on_layer": "programme", "kind": "dissolve", "at": 900000, "duration": 200000 }
+    ],
+    "tracks": [
+      { "label": "programme", "bus": "master", "gain_db": 0, "pan": 0, "muted": false, "clips": [0, 1] }
+    ],
+    "effects": [],
+    "loudness": null,
+    "captions": { "mode": "none", "style_json": "{}", "coordinate": "composition", "safe_area": true, "cues": [] },
+    "video": { "filter_complex": "", "colour": null },
+    "container": { "extension": "mkv", "video_codec": "libx264", "audio_codec": "aac", "stream_copy": false },
+    "profile": { "name": "long-form", "renderer": "ffmpeg", "renderer_version": "n9.0.2" }
+  },
+  "source_length_us": 10000000,
+  "cases": [
+    {
+      "name": "keyboard: two frames forward, then split",
+      "edit": { "op": "split", "clip": 0, "at": 66668 },
+      "expect_clips": 3,
+      "expect_output_duration_us": 2500000,
+      "expect_outputs": [[0, 66668], [66668, 1000000], [1000000, 2500000]]
+    },
+    {
+      "name": "keyboard: ripple delete of ten frames from the playhead",
+      "edit": { "op": "ripple", "range": { "start": 33334, "end": 366674 } },
+      "expect_clips": 3,
+      "expect_output_duration_us": 2166660,
+      "expect_outputs": [[0, 33334], [33334, 666660], [666660, 2166660]]
+    },
+    {
+      "name": "keyboard: link the second lane to the first",
+      "edit": { "op": "link", "clip": 1, "with": 0, "linked": true },
+      "expect_clips": 2,
+      "expect_output_duration_us": 2500000,
+      "expect_outputs": [[0, 1000000], [1000000, 2500000]]
+    },
+    {
+      "name": "no-op control: a slip of zero changes nothing",
+      "edit": { "op": "slip", "clip": 0, "by": 0 },
+      "expect_clips": 2,
+      "expect_output_duration_us": 2500000,
+      "expect_outputs": [[0, 1000000], [1000000, 2500000]]
+    }
+  ]
+}

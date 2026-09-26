@@ -62,6 +62,11 @@ pub mod plugins;
 // Creator-only because the table it reads is Creator-only — a PVR install has
 // no project context to serve, and a mounted-but-inert route would claim
 // otherwise.
+// The multi-track timeline: one route that applies an edit and answers with
+// the compiled plan. Creator-only for the same reason as `workspace` — the
+// composition it edits lives in the Creator store, and a PVR install has none.
+#[cfg(feature = "creator")]
+pub mod timeline;
 #[cfg(feature = "creator")]
 pub mod workspace;
 // Mounted (see `server.rs::build_router`): the sole recording file-serving

@@ -328,6 +328,7 @@ const ROUTES = [
   "viewer",
   "dataviz",
   "archive",
+  "timeline",
   "plugins",
   "chat",
   "settings",

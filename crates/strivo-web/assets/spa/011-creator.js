@@ -4,3 +4,6 @@
     case "archive":
       await renderArchive();
       break;
+    case "timeline":
+      await renderCreatorTimeline();
+      break;

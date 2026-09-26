@@ -31,6 +31,7 @@ let CREATOR_ENABLED = false;
 // it speaks Twitch IRC directly from the browser, so it works in the PVR build.)
 const CREATOR_ROUTES = new Set([
   "studio", "analytics", "publish", "pipelines", "plugins", "dataviz", "archive",
+  "timeline",
 ]);
 
 // Reduced motion (F-18): the `ui.reduce_motion` setting is a manual override
@@ -102,6 +103,7 @@ const TOPNAV = [
   ["publish", "🚀", "Publish", "p", "/assets/icons/candy/pipelines.svg"],
   // No vendored candy icon for Archive yet — falls back to the glyph.
   ["archive", "🗄", "Archive", "v"],
+  ["timeline", "⏱", "Timeline", "i", "/assets/icons/candy/plugins.svg"],
   ["chat", "💬", "Chat", "t", "/assets/icons/candy/chat.svg"],
   ["settings", "⚙", "Settings", "c", "/assets/icons/candy/settings.svg"],
   ["system", "🛠", "System", "y", "/assets/icons/candy/system.svg"],

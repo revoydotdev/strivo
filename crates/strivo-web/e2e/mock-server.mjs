@@ -371,6 +371,12 @@ function readBody(req) {
 const CONTENT_TYPES = {
   ".js": "text/javascript", ".css": "text/css", ".html": "text/html",
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+  // The three vendored libraries include a true ES module. Served as
+  // octet-stream a browser refuses to execute it, and reports that exactly
+  // as it reports a 404 — so the mock has to carry the same rule
+  // `routes::assets::mime_for` does, or the mock lane would test a bundle
+  // the real server never serves.
+  ".mjs": "text/javascript",
 };
 
 function json(res, code, body) {
@@ -448,6 +454,71 @@ const server = createServer(async (req, res) => {
   if (path.startsWith("/api/v1/")) {
     const p = path.slice("/api/v1".length);
     if (p === "/health") return json(res, 200, { status: "ok" });
+
+    // ── The timeline (todo 43) ──────────────────────────────────────────
+    // Answers the ONE shape the route answers: a compiled plan plus the
+    // request it was compiled from. This mock deliberately does NOT
+    // re-implement the edit algebra — the arithmetic is the Rust
+    // `strivo_editor::timeline` module's, and a second implementation here
+    // would be a second answer to "what does this render as". What the mock
+    // does is refuse a stale base_revision and echo the request, so the
+    // browser lane can prove the surface sends well-formed intents and
+    // draws the plan it is handed. crates/editor/tests/timeline_parity.rs
+    // replays the very request bodies this lane produces through the real
+    // compiler, which is where the arithmetic is proved.
+    if (p === "/creator/timeline/apply" && req.method === "POST") {
+      const body = await readBody(req);
+      const request = body && body.request;
+      if (!request || !Array.isArray(request.clips) || request.clips.length === 0) {
+        return json(res, 400, { detail: "timeline/malformed: no clips" });
+      }
+      if (body.base_revision !== request.revision) {
+        return json(res, 409, {
+          type: "about:blank", title: "Conflict", status: 409,
+          detail: `timeline/stale: the client is editing revision "${request.revision}" but posted "${body.base_revision}"`,
+        });
+      }
+      const clips = request.clips
+        .map((c) => ({
+          cut: c.cut,
+          output: { start: c.span.range.start, end: c.span.range.end },
+          span: c.span,
+          fade_in: c.fade_in,
+          fade_out: c.fade_out,
+        }))
+        .reduce(
+          (acc, c) => {
+            const prev = acc[acc.length - 1];
+            const start = prev ? prev.output.end : 0;
+            acc.push({ ...c, output: { start, end: start + (c.output.end - c.output.start) } });
+            return acc;
+          },
+          [],
+        );
+      const outputDuration = clips.length ? clips[clips.length - 1].output.end : 0;
+      return json(res, 200, {
+        plan: {
+          subject: request.subject,
+          revision: request.revision,
+          output_duration: outputDuration,
+          clips,
+          layers: request.layers,
+          transitions: request.transitions,
+          tracks: request.tracks,
+          audio_chain: [], video_chain: [], loudness: null,
+          video_filter_complex: "", colour: null, cues: [],
+          caption_mode: "none", caption_style_json: "{}",
+          caption_coordinate: "composition", caption_safe_area: true,
+          container: request.container, profile: request.profile,
+        },
+        request,
+        clamps: [],
+        snap_points_us: [0, ...clips.flatMap((c) => [c.output.start, c.output.end])].sort(
+          (a, b) => a - b,
+        ),
+      });
+    }
+
     if (p === "/history")
       return json(res, 200, {
         history: [

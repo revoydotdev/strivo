@@ -414,25 +414,7 @@ mod tests {
     }
 
     fn test_state(api_key: &str) -> AppState {
-        AppState {
-            ipc: std::sync::Arc::new(crate::ipc_client::IpcClient::disconnected()),
-            api_key: crate::auth::ApiKey(api_key.to_string()),
-            config_path: None,
-            config_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
-            config_cache: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-            snapshot_cache: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-            session_secret: "telemetry-test-session-secret".to_string(),
-            login_limiter: crate::ratelimit::LoginLimiter::new(),
-            probe_cache: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            probe_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
-            thumbnail_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
-            thumbnail_locks: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            thumbnail_failures: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            jobs_db: std::sync::Arc::new(tokio::sync::OnceCell::new()),
-            jobs_db_path: std::sync::Arc::new(
-                strivo_core::config::AppConfig::data_dir().join("jobs.db"),
-            ),
-        }
+        crate::server::test_state(api_key)
     }
 
     #[tokio::test]

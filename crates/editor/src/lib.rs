@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 pub mod render;
 pub mod store;
 pub mod time;
+pub mod timeline;
 pub mod transcript;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

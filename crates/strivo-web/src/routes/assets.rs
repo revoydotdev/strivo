@@ -92,7 +92,9 @@ pub fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use super::mime_for;
+    use super::{asset, get, mime_for, StatusCode};
+    use axum::http::header;
+    use axum::Router;
 
     /// A JS content type is load-bearing, not cosmetic: a browser refuses to
     /// execute an `application/octet-stream` ES module, and reports it the same
@@ -103,6 +105,118 @@ mod tests {
             mime_for("vendor/mediabunny.min.mjs"),
             "application/javascript; charset=utf-8"
         );
+    }
+
+    /// The half of the `.mjs` rule that holds in *both* editions: whatever
+    /// `mime_for` decides reaches the wire. Asserting `mime_for` alone would
+    /// pass even if the handler stopped consulting it, and a browser refuses
+    /// an ES module whose response is not a JavaScript content type — a hard
+    /// failure that looks exactly like a 404.
+    #[tokio::test]
+    async fn the_content_type_the_handler_decides_is_the_one_on_the_wire() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        for (path, expected) in [
+            ("/assets/spa.js", mime_for("spa.js")),
+            ("/assets/spa.css", mime_for("spa.css")),
+        ] {
+            let response = Router::<()>::new()
+                .route("/assets/{*path}", get(asset))
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let served = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            assert_eq!(served, expected, "{path}");
+            assert!(
+                served.starts_with("text/") || served.starts_with("application/javascript"),
+                "{path} is served as {served:?}, which a browser will not execute or render"
+            );
+        }
+    }
+
+    /// Every vendored library, over the real router, in the edition that ships
+    /// them — including the fact that the bytes actually contain the export the
+    /// Creator timeline imports. A wrong filename or a typo'd export name is a
+    /// 404 or a link-time `SyntaxError` that nothing else in the tree fetches,
+    /// so it would otherwise surface only when a creator opened the timeline.
+    #[cfg(feature = "creator")]
+    #[tokio::test]
+    async fn every_vendored_library_is_served_with_a_javascript_content_type_and_its_export() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // (served path, the token the artifact must actually expose). Read
+        // off the shipped bytes, not off the library's documentation:
+        // mediabunny is a real ES module with named exports; wavesurfer's ESM
+        // build has a *default* export and nothing else, so `WaveSurfer` is the
+        // name the importer binds and appears nowhere in the file; x6 is a UMD
+        // bundle whose only export is the `globalThis.X6` it attaches.
+        const VENDORED: [(&str, &str); 3] = [
+            ("/assets/vendor/mediabunny.min.mjs", "as canDecodeVideo"),
+            ("/assets/vendor/x6.umd.js", ").X6="),
+            ("/assets/vendor/wavesurfer.esm.js", "as default"),
+        ];
+        for (path, symbol) in VENDORED {
+            let response = Router::<()>::new()
+                .route("/assets/{*path}", get(asset))
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path} must resolve");
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                content_type.starts_with("text/javascript")
+                    || content_type.starts_with("application/javascript"),
+                "{path} is served as {content_type:?}; a browser will refuse to execute it"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                text.contains(symbol),
+                "{path} does not mention {symbol:?}, so the import in the Creator \
+                 timeline names something the artifact does not expose"
+            );
+        }
+    }
+
+    /// The other half of the edition contract, and the reason the assertion
+    /// above can be creator-only: a PVR build must not so much as serve the
+    /// vendor tree. `build.rs` deletes it from `$OUT_DIR`, so these are 404s
+    /// with an empty body — not a redirect, not a placeholder.
+    #[cfg(not(feature = "creator"))]
+    #[tokio::test]
+    async fn a_pvr_build_serves_no_vendor_asset_at_all() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        for path in [
+            "/assets/vendor/mediabunny.min.mjs",
+            "/assets/vendor/x6.umd.js",
+            "/assets/vendor/wavesurfer.esm.js",
+        ] {
+            let response = Router::<()>::new()
+                .route("/assets/{*path}", get(asset))
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 
     /// An octet-streamed SVG is *downloaded* rather than rendered, so the

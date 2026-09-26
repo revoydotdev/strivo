@@ -27,6 +27,7 @@ impl PipelineRuntime {
         registry: Arc<Mutex<PipelineRegistry>>,
         plugins: Arc<Mutex<PluginRegistry>>,
         recordings: Arc<RwLock<HashMap<uuid::Uuid, RecordingJob>>>,
+        capture_reserve: crate::recording::capacity::CaptureReserve,
         plugin_toggles: std::collections::BTreeMap<String, crate::config::PluginToggle>,
         event_tx: mpsc::UnboundedSender<DaemonEvent>,
         action_tx: mpsc::UnboundedSender<PluginAction>,
@@ -39,7 +40,7 @@ impl PipelineRuntime {
         };
         let worker = runtime.clone();
         tokio::spawn(async move {
-            let resources = ResourceRegistry::new();
+            let resources = ResourceRegistry::new().with_capture_reserve(capture_reserve);
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => break,
@@ -236,6 +237,34 @@ impl PipelineRuntime {
                         pipeline_id,
                         stage_id,
                         format!("resource lock closed: {lock:?}"),
+                    )
+                    .await;
+                    return None;
+                }
+                Err(LockAcquireError::CaptureReserve {
+                    free_bytes,
+                    reserve_bytes,
+                }) => {
+                    // Reported through the same state path as `Closed` so the
+                    // reason reaches `StageState::Failed` / `last_error`
+                    // rather than only the log. It rides the backoff retry
+                    // like the other variants, but a run where it never
+                    // clears exhausts `max_attempts` instead of looping.
+                    tracing::warn!(
+                        stage = %stage.name,
+                        stage_id = %stage_id,
+                        pipeline_id = %pipeline_id,
+                        free_bytes,
+                        reserve_bytes,
+                        "render refused: free space is not above the capture reserve"
+                    );
+                    self.finish_failure(
+                        pipeline_id,
+                        stage_id,
+                        format!(
+                            "render refused: {free_bytes} bytes free is not above the \
+                             {reserve_bytes}-byte reserve held for capture"
+                        ),
                     )
                     .await;
                     return None;

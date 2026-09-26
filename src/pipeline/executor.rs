@@ -709,11 +709,19 @@ fn same_resource(a: &ResourceLock, b: &ResourceLock) -> bool {
     }
 }
 
-/// Failure modes for [`ResourceRegistry::acquire`]. Both are transient by
-/// nature — a closed semaphore only happens on shutdown, and a timed-out
-/// wait is exactly the F-37 scenario (a wedged holder), never a permanent
-/// condition — so callers route either into the existing bounded
-/// retry-with-backoff failure path rather than a permanent one.
+/// Failure modes for [`ResourceRegistry::acquire`].
+///
+/// `Closed` and `TimedOut` are transient by nature — a closed semaphore only
+/// happens on shutdown, and a timed-out wait is exactly the F-37 scenario (a
+/// wedged holder), never a permanent condition — so callers route either
+/// into the existing bounded retry-with-backoff failure path rather than a
+/// permanent one.
+///
+/// [`Self::CaptureReserve`] is different in kind and is deliberately not
+/// folded into that: free space below the reserve capture holds does not
+/// clear on its own, and a caller that treated it as transient would retry a
+/// render indefinitely against a volume that is still too full. It is
+/// reported with its own numbers so the refusal says which bound stopped it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockAcquireError {
     /// The semaphore was explicitly closed (shutdown path). Never
@@ -722,6 +730,10 @@ pub enum LockAcquireError {
     Closed,
     /// No permit became available within [`RESOURCE_ACQUIRE_TIMEOUT`].
     TimedOut,
+    /// Free space on the recording volume is not above the reserve capture
+    /// holds, so a render is refused before it starts rather than allowed to
+    /// consume the bytes the next capture needs.
+    CaptureReserve { free_bytes: u64, reserve_bytes: u64 },
 }
 
 impl std::fmt::Display for LockAcquireError {
@@ -729,6 +741,14 @@ impl std::fmt::Display for LockAcquireError {
         match self {
             Self::Closed => write!(f, "resource lock closed"),
             Self::TimedOut => write!(f, "timed out waiting for resource lock"),
+            Self::CaptureReserve {
+                free_bytes,
+                reserve_bytes,
+            } => write!(
+                f,
+                "render refused: {free_bytes} bytes free is not above the {reserve_bytes}-byte \
+                 reserve held for capture"
+            ),
         }
     }
 }
@@ -738,6 +758,9 @@ impl std::fmt::Display for LockAcquireError {
 pub struct ResourceRegistry {
     inner: Arc<Mutex<ResourceRegistryInner>>,
     acquire_timeout: Duration,
+    /// Bytes held back from rendering so capture keeps somewhere to write.
+    /// `None` disables the check; see [`Self::with_capture_reserve`].
+    capture_reserve: Option<crate::recording::capacity::CaptureReserve>,
 }
 
 #[derive(Default)]
@@ -758,7 +781,24 @@ impl ResourceRegistry {
         Self {
             inner: Arc::new(Mutex::new(ResourceRegistryInner::default())),
             acquire_timeout,
+            capture_reserve: None,
         }
+    }
+
+    /// Hold `reserve` bytes of the `reserve.dir` volume back from rendering.
+    ///
+    /// The check is enforced on every [`ResourceLock::Disk`] acquisition, so
+    /// it applies to the one place render work actually starts. A reserve of
+    /// zero bytes leaves the check inert, which is the same convention
+    /// `monitor_limits.disk_budget_reserved_gb` uses for the monitor's own
+    /// auto-record gate — and the same configuration value feeds both, so
+    /// there is one number rather than two that can drift.
+    pub fn with_capture_reserve(
+        mut self,
+        reserve: crate::recording::capacity::CaptureReserve,
+    ) -> Self {
+        self.capture_reserve = Some(reserve);
+        self
     }
 
     /// Build a registry with a non-default acquisition timeout. Production
@@ -777,10 +817,40 @@ impl ResourceRegistry {
     /// returned guard is dropped. Caller awaits in a stage's body before
     /// running the actual work. Bounded by the registry's acquisition
     /// timeout — see [`RESOURCE_ACQUIRE_TIMEOUT`].
+    ///
+    /// A [`ResourceLock::Disk`] acquisition is additionally refused when free
+    /// space is not above the capture reserve (see
+    /// [`Self::with_capture_reserve`]). The check runs *before* the
+    /// semaphore wait so a render under pressure is told no immediately
+    /// instead of queueing behind work that is already occupying the disk.
+    ///
+    /// A failed free-space lookup is not a refusal: the measurement is
+    /// best-effort, exactly as the monitor's disk-budget gate treats a
+    /// statvfs failure, so a transient filesystem error cannot stall every
+    /// render.
     pub async fn acquire(
         &self,
         lock: &ResourceLock,
     ) -> Result<tokio::sync::OwnedSemaphorePermit, LockAcquireError> {
+        if matches!(lock, ResourceLock::Disk { .. }) {
+            if let Some(reserve) = &self.capture_reserve {
+                if let Some(capacity) =
+                    crate::recording::capacity::CaptureCapacity::measure(reserve)
+                {
+                    if let Err(refused) = capacity.render_may_start() {
+                        tracing::warn!(
+                            code = refused.code(),
+                            reason = %refused,
+                            "render stage refused before acquiring the disk lock"
+                        );
+                        return Err(LockAcquireError::CaptureReserve {
+                            free_bytes: capacity.free_bytes(),
+                            reserve_bytes: capacity.reserve_bytes(),
+                        });
+                    }
+                }
+            }
+        }
         let sem = {
             let mut inner = self.inner.lock().await;
             match lock {

@@ -52,6 +52,43 @@ limits.
   processes are killed, and thumbnail temporary files are cleaned up.
 - Creator stages declare API, CPU, and disk resource locks. Generated artifacts
   are reused when source and transcript fingerprints still match.
+- Capture records every interruption it survives, and a cross-check holds that
+  record to the media. `recording::gaps::GapLedger` stores the measured interval
+  and a reason (`recorder-exit`, `stall`, `restart`, `disk-pressure`) for each
+  gap-resume retry, the stall stop, a daemon restart, or a deliberate disk stop.
+  `GapLedger::audit` differences that ledger against the timeline — wall clock
+  elapsed versus the stream duration `ffprobe` measures on the finished media —
+  and reports both directions: an *unrecovered* interval the ledger does not
+  explain, and a *spurious* one the media does not support. The media side is
+  measured from the bytes rather than from a counter the recorder also wrote, so
+  a short encode or a lossy `mkvmerge` join shows up instead of cancelling out.
+  The tolerance is a stated 5 s per session, three orders of magnitude below the
+  5–45 s outages the recorder actually produces.
+- Rendering yields to capture on disk pressure. A `Disk` stage lock is refused
+  before the permit is taken when free space on the recording volume is not
+  *above* `monitor_limits.disk_budget_reserved_gb`, which is the same value the
+  monitor's auto-record gate already uses — one number, two consumers. The
+  refusal is `LockAcquireError::CaptureReserve`, which carries both byte counts
+  and reaches `StageState::Failed`/`last_error`, so a stopped render says why
+  rather than retrying silently against a full volume. It is deliberately not
+  routed down the transient lock-timeout path. Capture may use the whole volume;
+  only render is bounded. A reserve of 0 leaves the check inert, matching that
+  config field's existing convention. This is a second bound on a different
+  resource (bytes, not recorder slots) and does not alter the PVR concurrency
+  gate in `ROADMAP.md`.
+- `scripts/soak_capture_pressure.sh` rehearses the three together. It encodes six
+  hours of real stream time, merges each session's parts through
+  `recording::segments::merge_segments`, measures every part with `ffprobe` and
+  **fully decodes** it rather than size-checking, and audits the result. Its
+  disk-pressure phase fills a private size-capped tmpfs with real bytes until
+  free space crosses the reserve, then asserts capture still writes a decodable
+  part while the render is refused through the real `ResourceRegistry`.
+  `STRIVO_SOAK_MUTATE=drop-ledger-entry|phantom-ledger-entry` deliberately
+  corrupts the graded ledger, and both must turn the run red; a clean mutated run
+  is a defect in the rehearsal. **The six hours is six hours of stream time, not
+  six hours of wall clock** — the run completes in seconds, so real-time
+  behaviour (a wedged child, a slow volume, an hour-five descriptor leak) is not
+  proven by a green run. See `.omo/evidence/task-39-strivo-review-and-pro-edition.json`.
 - SQLite job persistence uses WAL, normal synchronization, a busy timeout, and
   an index matching the paginated history query.
 - Poll timers skip missed ticks, and nonessential browser polling pauses while

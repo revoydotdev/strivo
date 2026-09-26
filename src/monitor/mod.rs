@@ -872,7 +872,7 @@ impl ChannelMonitor {
 /// Unix; GetDiskFreeSpaceExW on Windows; None on lookup failure so the
 /// gate falls through to "allow".
 #[cfg(unix)]
-fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
+pub(crate) fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
     let mut buf: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -883,7 +883,7 @@ fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
     Some((buf.f_bavail as u64) * (buf.f_frsize as u64))
 }
 #[cfg(windows)]
-fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
+pub(crate) fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
@@ -913,7 +913,7 @@ fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
     Some(free_bytes_available_to_caller)
 }
 #[cfg(not(any(unix, windows)))]
-fn free_space_bytes(_dir: &std::path::Path) -> Option<u64> {
+pub(crate) fn free_space_bytes(_dir: &std::path::Path) -> Option<u64> {
     None
 }
 

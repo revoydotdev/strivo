@@ -1024,10 +1024,18 @@ pub async fn run_with_plugins_at(
     }
 
     let shared_recordings = Arc::new(tokio::sync::RwLock::new(state.recordings.clone()));
+    // One reserve, two consumers: the monitor's auto-record gate defers new
+    // captures below it, and the pipeline's disk lock refuses renders below
+    // it. Reusing `disk_budget_reserved_gb` keeps the two from drifting.
+    let capture_reserve = crate::recording::capacity::CaptureReserve {
+        dir: config.recording_dir.clone(),
+        bytes: u64::from(config.monitor_limits.disk_budget_reserved_gb) * 1_000_000_000,
+    };
     let pipeline_runtime = crate::pipeline::PipelineRuntime::spawn(
         pipelines.clone(),
         registry.clone(),
         shared_recordings.clone(),
+        capture_reserve,
         config.plugin_toggles.clone(),
         event_tx.clone(),
         pipeline_action_tx,

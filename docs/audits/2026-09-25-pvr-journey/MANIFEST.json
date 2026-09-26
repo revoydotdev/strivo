@@ -1,0 +1,379 @@
+{
+  "schema_version": 1,
+  "register": "2026-09-25-pvr-journey",
+  "review_date": "2026-09-25",
+  "head": "8053899",
+  "supersedes": null,
+  "scope": {
+    "what": "The PVR user journey, driven end to end against the real compiled release binary rather than the Node mock backend.",
+    "why": "The 2026-09-06 web-surface manifest (item S04) and the 2026-09-08 performance/UX report both record that every prior journey audit ran against mock-server.mjs, a Node stub. This register is the first pass over the real binary.",
+    "journey": [
+      "first run",
+      "platform wizard",
+      "add channel",
+      "monitor",
+      "record",
+      "library",
+      "watch",
+      "settings",
+      "backup/restore",
+      "system"
+    ],
+    "states_per_step": [
+      "loading",
+      "empty",
+      "partial",
+      "failure",
+      "stale"
+    ],
+    "binary": {
+      "path": "/scratch/cargo-targets/strivo-main/release/strivo",
+      "sha256": "38cacd0f8351c1b19a8d638df2447be04ae2adb6ce678bf23d6c9b2c2fe8aa62",
+      "edition": "PVR",
+      "edition_proof": "GET /assets/spa.js from the running server contains \"function chrome(\" and does NOT contain \"renderProApp\", which is defined only in assets/spa/021-creator.js. Asserted by tests-real/real-server.spec.ts:99 and re-confirmed in this run.",
+      "rebuilt": false,
+      "rebuild_note": "The binary was NOT rebuilt. Other lanes are measuring against this exact content hash."
+    },
+    "excluded": [
+      "Creator Edition routes (todo 16's lane)",
+      "crates/strivo-web/src/** and assets/** as remediation targets (audit only; nothing was fixed)",
+      "The mock lane in tests/ (other lanes' commits live there; pre-existing red at HEAD not chased)"
+    ]
+  },
+  "method": {
+    "harness": "crates/strivo-web/e2e/playwright.real.config.ts (port 8281, hardcoded) + real-server.sh, which sandboxes HOME/XDG_* under a mktemp dir so the lane cannot touch a real installation.",
+    "required_env": "STRIVO_BIN must be exported by the caller. The config's own default paths (target/release/strivo, target/debug/strivo) do not exist because .cargo/config.toml redirects target-dir to /scratch/cargo-targets/strivo-main, so without the export real-server.sh:16 aborts on its ${STRIVO_BIN:?} guard.",
+    "specs": [
+      "crates/strivo-web/e2e/tests-real/pvr-journey-firstrun.spec.ts",
+      "crates/strivo-web/e2e/tests-real/pvr-journey-capture.spec.ts",
+      "crates/strivo-web/e2e/tests-real/pvr-journey-library.spec.ts",
+      "crates/strivo-web/e2e/tests-real/pvr-journey-settings-system.spec.ts",
+      "crates/strivo-web/e2e/tests-real/pvr-journey-failure.spec.ts",
+      "crates/strivo-web/e2e/tests-real/pvr-journey-helpers.ts"
+    ],
+    "cache_discipline": "API._fetch collapses GETs behind _cacheTtlMs: 2000 (assets/spa/002-pvr.js:17). Every empty/partial/stale claim in this register is cross-checked through Playwright's `request` fixture with an x-api-key header, which issues a separate HTTP request and never touches the page's cache. A DOM read alone is never treated as evidence that an endpoint is empty.",
+    "non_vacuity": {
+      "claim": "No assertion in these specs is satisfiable by mock-server.mjs.",
+      "method": "Every mock fixture literal that a journey step could key on was read out of mock-server.mjs and compared against the values the specs assert. The mock serves no /channels/resolve, no /settings/platform/*, no /channels/:key/auto_record, no backup download and no backup restore route at all.",
+      "mock_literals_absent_from_the_real_server": [
+        "UClive0000000000000000aa (mock-server.mjs:51,538,542)",
+        "Live Channel (mock-server.mjs:54,538)",
+        "LilAggy / Elden Ring (mock-server.mjs:454)",
+        "2026-05-26T00-00-00Z and bytes:1234 (mock-server.mjs:464,467)",
+        "is_live:true on the channel fixture (mock-server.mjs:59)"
+      ],
+      "self_evidence": "Nine assertions in these specs failed on their first execution and were corrected by reading the source, not by relaxing them. A spec that has never been red is not evidence that it can fail."
+    }
+  },
+  "verdict_vocabulary": {
+    "confirmed": "Reproduced against the real binary. The cited code and the observed behaviour agree.",
+    "unreachable": "The state could not be reached in this build and sandbox. Recorded with the code citation that blocks it, never silently omitted.",
+    "by-design": "Observed, read in the source, and deliberate. Recorded so a later reader does not mistake it for a defect.",
+    "not-applicable": "An adversarial class that does not apply to this todo, with the reason."
+  },
+  "findings": [
+    {
+      "id": "PJ-01",
+      "title": "The platform wizard reports success for credentials that were never validated",
+      "severity": "high",
+      "verdict": "confirmed",
+      "state": "false-success",
+      "file": "crates/strivo-web/assets/spa/034d-pvr.js",
+      "line": 96,
+      "loc": "034d-pvr.js:96-104",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-firstrun.spec.ts:92",
+      "evidence": "POST /api/v1/settings/platform/twitch with client_id=\"not-a-real-client-id\" and client_secret=\"not-a-real-secret\" returns HTTP 202 {\"ok\":true,\"applied\":true,\"configured\":true,\"platform\":\"twitch\"}. openPlatformWizard branches only on `res.applied === false`, so a 202 that claims `applied` is rendered as the success toast \"Twitch saved\", the modal closes, and GET /api/v1/settings then reports twitch_configured: true. The daemon never contacted Twitch.",
+      "consequence": "The false success also un-gates the first-run checklist, because renderHome's `anyPlatform` test (012b-pvr.js:92-95) reads exactly that flag. A user is told their setup is complete on a setup that has never worked.",
+      "repro": "Settings -> Platforms -> Configure Twitch -> fill both fields with any junk string -> Save. Observed: 202 applied:true, toast \"Twitch saved\", twitch_configured flips to true. `npm run test:real` -> pvr-journey-firstrun.spec.ts 'step 2'.",
+      "cross_checked_against": [
+        {
+          "id": "PHASE0/F-11",
+          "register_verdict": "open",
+          "distinct_because": "F-11 is the licence upgrade card reading a flag the backend never computes. PJ-01 is a credential-save path reporting success for unvalidated input. Different component, different flag, different failure."
+        },
+        {
+          "id": "WS/S04",
+          "register_verdict": "closed",
+          "distinct_because": "S04's remedy was the existence of this real-binary lane, which is now what found PJ-01. Re-reporting S04 would be re-reporting the fix; PJ-01 is what the fix made visible."
+        }
+      ]
+    },
+    {
+      "id": "PJ-02",
+      "title": "A wrongly-saved platform credential cannot be cleared through the product",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "state": "unrecoverable-state",
+      "file": "crates/strivo-web/src/routes/settings.rs",
+      "line": 1953,
+      "loc": "settings.rs:1943-1956",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-firstrun.spec.ts:92",
+      "evidence": "Two candidate un-configure paths exist and the real daemon refuses both. POST /api/v1/settings/update {\"path\":\"twitch.client_id\",\"value\":\"\"} returns 400. POST /api/v1/settings/platform/twitch with empty client_id/client_secret returns 400 \"client_id and client_secret are required\". After both attempts, GET /api/v1/settings still reports twitch_configured: true.",
+      "consequence": "PJ-01 is not a wrong message that self-corrects; it is a wrong persisted state with no in-app remedy. Recovery requires hand-editing ~/.config/strivo/config.toml and restarting the daemon.",
+      "repro": "Save junk Twitch credentials (PJ-01), then attempt either clear path. Observed: 400 twice, flag still true. `npm run test:real` -> pvr-journey-firstrun.spec.ts 'step 2'.",
+      "cross_checked_against": [
+        {
+          "id": "PHASE0/F-14",
+          "register_verdict": "closed",
+          "distinct_because": "F-14 was the concern that the unauthenticated chain could not write; its remedy is check_key on the route. Both paths here ARE authenticated and authorised \u2014 the refusal is a payload-validation 400, a different mechanism entirely."
+        }
+      ]
+    },
+    {
+      "id": "PJ-03",
+      "title": "The platform wizard dialog cannot be dismissed with Escape",
+      "severity": "low",
+      "verdict": "confirmed",
+      "state": "accessibility",
+      "file": "crates/strivo-web/assets/spa/034d-pvr.js",
+      "line": 44,
+      "loc": "034d-pvr.js:44-84",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-firstrun.spec.ts:92",
+      "evidence": "openPlatformWizard builds a `.modal-backdrop` dialog and wires exactly three dismissals: `.modal-close`, `.modal-cancel`, and a backdrop click. The document-level Escape handler at 012d-pvr.js:41-43 calls closeAllAppModals(), which queries `.app-modal.open` \u2014 a class this dialog does not carry. Observed: Escape leaves the dialog open; only the three wired paths close it.",
+      "control": "In the same page and session, the Add-channel dialog (#add-channel-modal.open, which does carry .app-modal) closes on Escape. The asymmetry is therefore a property of this dialog, not of the browser or the lane. confirmDialog (008-pvr.js:264) also handles Escape, so three dialogs in one codebase disagree.",
+      "repro": "Settings -> Platforms -> Configure -> press Escape. Observed: dialog still open. `npm run test:real` -> pvr-journey-firstrun.spec.ts 'step 2'.",
+      "cross_checked_against": [
+        {
+          "id": "WS/R04",
+          "register_verdict": "closed",
+          "distinct_because": "R04 was Enter/Space activation on sortable table headers. Different component, different key, already closed, and still closed \u2014 this finding concerns a modal's Escape dismissal."
+        }
+      ]
+    },
+    {
+      "id": "PJ-04",
+      "title": "The first-run gate discards recordings it has already fetched",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "state": "data-hidden",
+      "file": "crates/strivo-web/assets/spa/012b-pvr.js",
+      "line": 95,
+      "loc": "012b-pvr.js:86-98 vs :108-121",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-firstrun.spec.ts:15",
+      "evidence": "renderHome issues Promise.allSettled([settings, channels, recordings]) at 012b-pvr.js:86-88. The first-run branch at :95-98 then returns, and the recRes/chRes handling that would populate recCache, dashRecordings and the rail lives at :108-121 \u2014 after that return. So both results are fetched over real HTTP and thrown away.",
+      "consequence": "A user whose library already contains recordings sees a setup checklist and zero recordings, with no indication that any exist. Nothing about the data is wrong; the gate simply never looks at what it fetched.",
+      "repro": "Against a daemon holding one real finished recording and no configured platform: log in -> #/library shows 'Welcome to StriVo' and no recordings; click 'Continue anyway' -> the same recording appears under Recent. `npm run test:real` -> pvr-journey-firstrun.spec.ts 'step 1'.",
+      "cross_checked_against": [
+        {
+          "id": "PHASE0/F-04",
+          "register_verdict": "closed",
+          "distinct_because": "F-04 was a documentation row claiming a UI existed where none did. PJ-04 is a live control-flow ordering defect in renderHome, discovered by driving the real UI, and is unrelated to any doc/code disagreement."
+        }
+      ]
+    },
+    {
+      "id": "PJ-05",
+      "title": "An auto-record channel in the config is invisible to the channel list",
+      "severity": "high",
+      "verdict": "confirmed",
+      "state": "two-sources-of-truth",
+      "file": "crates/strivo-web/src/routes/settings.rs",
+      "line": 42,
+      "loc": "settings.rs:42-53; blocklist.rs:132-160",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-capture.spec.ts:89",
+      "evidence": "GET /api/v1/channels returns ServerMessage::StateSnapshot.channels and nothing else (settings.rs:46-47) \u2014 the daemon's in-memory channel model. PUT /api/v1/channels/{key}/auto_record writes config.auto_record_channels (blocklist.rs:151,184) and never touches that snapshot. Observed: after a 200 {enabled:true, status:ok} write, GET /api/v1/settings lists the channel in auto_record_channels while GET /api/v1/channels still returns an empty channels array.",
+      "consequence": "A channel genuinely configured for automatic recording is absent from the left rail, from the Monitor page, and from the watch tiles, and no data-action=\"record\" button exists to start a capture from it. The user cannot see or act on a channel the daemon will in fact record.",
+      "repro": "PUT /api/v1/channels/Twitch:12345/auto_record with enabled:true, then GET both /api/v1/settings and /api/v1/channels. Observed: the config lists the channel, the channel list is empty, the rail says 'No channels yet.', and no capture button exists. `npm run test:real` -> pvr-journey-capture.spec.ts 'step 3b'.",
+      "cross_checked_against": [
+        {
+          "id": "PHASE0/F-30",
+          "register_verdict": "still-open",
+          "distinct_because": "F-30 is one IPC connection per browser tab, a scaling note about the event relay. PJ-05 is a persistence-versus-snapshot divergence between two different stores. Different mechanism, different consequence."
+        },
+        {
+          "id": "PHASE0/F-34",
+          "register_verdict": "still-open",
+          "distinct_because": "F-34 counts per-request ResearchStore::open sites. PJ-05 concerns which store the channel list reads from. Unrelated."
+        }
+      ]
+    },
+    {
+      "id": "PJ-06",
+      "title": "Any non-snapshot daemon reply is reported to the user as 'no channels'",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "state": "false-empty",
+      "file": "crates/strivo-web/src/routes/settings.rs",
+      "line": 50,
+      "loc": "settings.rs:50",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-capture.spec.ts:89",
+      "evidence": "The handler's fallthrough arm is `Ok(_) => Json(json!({ \"channels\": [] }))`. Every ServerMessage variant other than StateSnapshot \u2014 including a variant that fails to carry channels at all \u2014 is flattened into a successful, empty list.",
+      "consequence": "A daemon that answered but could not supply channels is indistinguishable, to both the SPA and any monitoring built on this endpoint, from an account that genuinely has none. The SPA's empty state then tells the user to connect a platform they may already have connected.",
+      "repro": "Read the fallthrough arm alongside the success arm. Not separately triggered at runtime: forcing a second ServerMessage variant through the IPC boundary is outside what this sandbox can do, and the audit records that honestly rather than claiming a runtime reproduction.",
+      "cross_checked_against": [
+        {
+          "id": "WS/V01",
+          "register_verdict": "closed",
+          "distinct_because": "V01 was a specific validator/UI defect already remediated. PJ-06 is a distinct fallthrough arm in a different handler."
+        }
+      ]
+    },
+    {
+      "id": "PJ-07",
+      "title": "A path-style player URL is silently reported as 'no recording specified'",
+      "severity": "low",
+      "verdict": "confirmed",
+      "state": "malformed-input",
+      "file": "crates/strivo-web/assets/spa/019b-pvr.js",
+      "line": 61,
+      "loc": "019b-pvr.js:61-68",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-library.spec.ts:75",
+      "evidence": "renderPlayer reads the recording id only from the `?recording=` query parameter and never consults routeParts(). Observed: `#/play/does-not-exist-1234` renders 'No recording specified.' \u2014 the id is not named in the output and the wrong URL form is not diagnosed. The form the SPA actually emits, `#/play?recording=<uuid>`, works.",
+      "consequence": "A hand-typed or bookmarked path URL is indistinguishable from opening the player with nothing selected, so the user is told the wrong thing about their own request.",
+      "repro": "Navigate to #/play/any-id. Observed: 'No recording specified.' with no mention of the id. `npm run test:real` -> pvr-journey-library.spec.ts 'step 7'.",
+      "cross_checked_against": [
+        {
+          "id": "WS/R03",
+          "register_verdict": "closed",
+          "distinct_because": "R03 was the recordings Load-more cursor, already closed. PJ-07 is a player route's URL parameter parsing and does not involve pagination."
+        }
+      ]
+    },
+    {
+      "id": "PJ-08",
+      "title": "A Creator deep link in the PVR build keeps its URL while rendering PVR content",
+      "severity": "low",
+      "verdict": "confirmed",
+      "state": "mislabelled-state",
+      "file": "crates/strivo-web/assets/spa/032-pvr.js",
+      "line": 89,
+      "loc": "032-pvr.js:88-90",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-library.spec.ts:122",
+      "evidence": "renderSettings reassigns the local `known` variable to \"general\" for the Creator-only Plugins pane without rewriting location.hash. Observed: the URL stays #/settings/plugins while `.stg-rail-item.is-active` reads 'General' and the pane shows General's seven rows. No rail item links to #/settings/plugins in this build.",
+      "control": "The sibling case does rewrite the URL: #/studio bounces via `location.hash = \"#/library\"` (012-pvr.js:563-565) and the address bar follows. Two pieces of Creator-gating code in one SPA disagree about whether to be honest about the redirect.",
+      "repro": "Navigate to #/settings/plugins in a PVR build. Observed: URL unchanged, General pane. `npm run test:real` -> pvr-journey-library.spec.ts 'step 7b'.",
+      "cross_checked_against": [
+        {
+          "id": "WS/S10",
+          "register_verdict": "closed",
+          "distinct_because": "S10 was the edition boundary itself \u2014 a PVR bundle dispatching into Creator UI whose definitions were never shipped. That defect is fixed and its remedy (separate -creator modules) is what makes this PVR build render General at all. PJ-08 is a stale address bar in a correctly-gated build, not a boundary breach.",
+          "relation": "S10's closure is the reason PJ-08 is reachable rather than a crash."
+        }
+      ]
+    },
+    {
+      "id": "PJ-09",
+      "title": "A backup's reported byte count is the uncompressed payload, not the download",
+      "severity": "low",
+      "verdict": "confirmed",
+      "state": "misleading-figure",
+      "file": "crates/strivo-web/src/routes/backup.rs",
+      "line": 62,
+      "loc": "backup.rs:62,86; 034d-pvr.js:363-366",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-settings-system.spec.ts:94",
+      "evidence": "Both the create response (backup.rs:62) and the list (backup.rs:86) report `bytes: walk_dir_bytes(&dest)` \u2014 the summed size of the staged, uncompressed backup directory. The Download link serves a tarball built on the fly, so the transferred size differs. Observed on one run: reported 5030, downloaded 766, both non-zero, download confirmed gzip by its 1f 8b magic.",
+      "consequence": "The size the UI prints next to each backup row (034d-pvr.js:363-366) does not match the file the user downloads, with nothing on screen to say so.",
+      "repro": "System -> Backup now -> note the reported size -> download the same backup and compare lengths. `npm run test:real` -> pvr-journey-settings-system.spec.ts 'step 9'.",
+      "cross_checked_against": [
+        {
+          "id": "WS/CE02",
+          "register_verdict": "closed",
+          "distinct_because": "CE02 was Creator/PVR feature separation. Unrelated to the backup handler."
+        }
+      ]
+    },
+    {
+      "id": "PJ-10",
+      "title": "An unrecognised route renders the library but leaves the bogus hash in place",
+      "severity": "low",
+      "verdict": "confirmed",
+      "state": "stale-url",
+      "file": "crates/strivo-web/assets/spa/008-pvr.js",
+      "line": 340,
+      "loc": "008-pvr.js:340-348; 012-pvr.js:563-565",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-failure.spec.ts:144",
+      "evidence": "currentRoute() returns the \"library\" fallback for an unknown hash but does not rewrite location.hash. Observed: #/definitely-not-a-route renders the full library chrome and the first-run gate, with the unrecognised hash still in the address bar. No uncaught error is raised.",
+      "consequence": "A stale or mistyped bookmark silently becomes a page whose URL describes something that does not exist, and reloading it reproduces the same misleading state.",
+      "repro": "Navigate to #/definitely-not-a-route. Observed: library rendered, hash unchanged, zero page errors. `npm run test:real` -> pvr-journey-failure.spec.ts 'MALFORMED'.",
+      "cross_checked_against": [
+        {
+          "id": "PHASE0/F-39",
+          "register_verdict": "closed",
+          "distinct_because": "F-39 was closed on a routing/asset concern in the prior audit's own terms. PJ-10 is a fresh observation about hash rewriting on the unknown-route path, recorded rather than asserted to be a regression of F-39."
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "id": "OBS-A",
+      "title": "State chips are deliberately suppressed for a single-state library",
+      "verdict": "by-design",
+      "loc": "assets/spa/012f-pvr.js:165-169",
+      "note": "The chip row is empty with one recording present. The source says so explicitly: 'Single state in cache -> chips add no value; skip the row entirely.' Recorded because an empty chip row reads as a defect and this audit initially mis-scored it as one.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-library.spec.ts:14"
+    },
+    {
+      "id": "OBS-B",
+      "title": "QA FAILURE SCENARIO: a deliberately broken recording file surfaces a real, actionable error state",
+      "verdict": "by-design",
+      "loc": "assets/spa/019b-pvr.js (player error surface)",
+      "note": "The plan's named failure scenario. The seeded capture's bytes were overwritten in place with truncated non-Matroska garbage. Observed: the recordings table still reads 'Finished' and the correct size (file_exists is a stat, not a probe), and pressing Play renders 'Can't play this recording' / 'this format is not supported by this browser' with Retry, Download file and Copy file path, a 'Playback error' label, and a <video> element pointing at the real download endpoint. A concurrent ranged GET returned 206 with 16 bytes, proving the failure is a decode failure and not a transport one. The tile is not blank and the error is specific and actionable. The media file was restored byte-for-byte in a finally, verified by length and content.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-failure.spec.ts:15"
+    },
+    {
+      "id": "OBS-C",
+      "title": "A corrupt-but-present capture gives no signal until playback",
+      "verdict": "confirmed",
+      "loc": "crates/strivo-web/src/routes/settings.rs:66-80 (augment_recording); assets/spa/012f-pvr.js:40-44",
+      "note": "augment_recording computes file_exists with Path::exists(), and the timeline flips a row to Failed only when file_exists is false. A present-but-undecodable file is therefore indistinguishable from a good one in the table, the dashboard and the timeline. Recorded as an observation rather than a finding: the player handles the case correctly and well (OBS-B), and surfacing it earlier would cost a media probe on every list render, which docs/PERFORMANCE.md:47-52 explicitly argues against. Recorded so the trade-off is a decision rather than an oversight.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-failure.spec.ts:15"
+    },
+    {
+      "id": "OBS-D",
+      "title": "Malformed input fails loudly and distinguishably at the API boundary",
+      "verdict": "by-design",
+      "note": "Observed: a well-formed but unknown recording id returns 404 'recording not found'; a malformed id returns 400 naming the UUID parse failure; a channel key without 'Platform:id' returns 400 quoting that requirement; and /recordings, /channels, /settings and /backups each return 401 to an anonymous caller. None of these degrades to a silent empty success.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-failure.spec.ts:144"
+    },
+    {
+      "id": "OBS-E",
+      "title": "The retired #/history route still resolves, and the journey's dead ends name their cause",
+      "verdict": "by-design",
+      "note": "#/history redirects to #/recordings?view=timeline, which reads the durable journal ('1 of 1 entries loaded - durable across restarts') and overlays live file state. The watch route with no channel renders '...or drag a channel from the rail' rather than a blank wall, and the Add-channel wizard's empty-query case does nothing at all instead of showing a spurious error.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-library.spec.ts:14"
+    }
+  ],
+  "unreachable": [
+    {
+      "step": "3 (add channel) \u2014 phase 2, confirm and enable auto-record",
+      "reason": "paintAddWizardConfirm (assets/spa/012d-pvr.js:87-96) renders #aw-confirm only when a ChannelResolved frame carries a channel_id. POST /api/v1/channels/resolve returns 202 and the verdict arrives over SSE; with no platform configured the daemon answers with an error frame instead, observed as 'Not found: twitch section missing in config'. The only route to working credentials is the wizard in PJ-01, which accepts and does not validate them. Asserted: #aw-confirm has count 0.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-capture.spec.ts:15"
+    },
+    {
+      "step": "5 (record) \u2014 starting a capture",
+      "reason": "The capture buttons are rendered per channel in channelDetailHtml (assets/spa/012c-pvr.js:11,17 for record, :25 for auto-record), and that detail only exists for a selected channel. selectedChannelKey is null on a fresh session and no channel can enter the snapshot without a platform (PJ-05). Asserted: [data-action=\"record\"] and [data-action=\"stop\"] both have count 0. Recording *history* is reachable and is asserted with a real on-disk capture.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-capture.spec.ts:193"
+    },
+    {
+      "step": "7 (watch) \u2014 a live stream tile",
+      "reason": "#/watch renders its stage, layout controls and recent-recordings strip, but a tile requires a channel, and there is none (PJ-05). Asserted: 0 iframes, with the copy naming the cause. Note honestly: this state is NOT mock-discriminating, because mock-server.mjs:59 ships is_live:true and would render a live tile.",
+      "spec": "crates/strivo-web/e2e/tests-real/pvr-journey-library.spec.ts:75"
+    }
+  ],
+  "adversarial_classes": {
+    "misleading-success-output": "APPLIED, and the primary class. Every assertion was checked against mock-server.mjs to confirm the mock could not satisfy it, and the mock's five fixture literals are recorded in method.non_vacuity. Nine assertions failed on first execution and were fixed by reading source rather than by loosening them. Three deliberate control assertions exist: the add-channel dialog closing on Escape (which is what makes PJ-03 a finding), the #/studio bounce rewriting the URL (which is what makes PJ-08 a finding), and the platform endpoint returning 400 for empty credentials (which is what makes PJ-01 distinguishable from a blanket-success endpoint).",
+    "stale-state": "APPLIED. The 2 s GET cache is asserted out of the served bundle rather than assumed, and every empty/partial claim is cross-checked through the request fixture. Deliberately NOT asserted: that an immediate re-read is stale, because that is wall-clock dependent and would flake. Stated as a limitation rather than quietly dropped.",
+    "hung-or-long-commands": "APPLIED. The 'Searching...' state is made deterministically observable by delaying the resolve RESPONSE; undelayed, the local daemon outruns the round trip and the assertion would be a coin flip. No assertion relies on an unbounded wait, and every expect carries a timeout.",
+    "dirty-worktree": "APPLIED. git status --short was captured before and after; the commit stages only the paths this todo owns. Cargo.lock and the untracked artifacts/ directory were never staged.",
+    "malformed-input": "APPLIED. The deliberately broken recording file is the named case (OBS-B), and unknown-id, malformed-id, malformed-channel-key and anonymous-access are each asserted (OBS-D).",
+    "flaky-tests": "APPLIED. The lane was run three times end to end: 22 passed on each run (28.0s, 33.0s, 28.1s).",
+    "repeated-interruptions": "APPLIED. The lane was interrupted mid-session between runs; no orphaned daemon, held port or stale sandbox survived, and real-server.sh's own mtime sweep plus this todo's explicit removal were both exercised.",
+    "prompt-injection": "NOT APPLICABLE. No untrusted external text is ingested. Every input is the local release binary, its own seeded fixture, and strings this audit wrote itself.",
+    "cancel-resume": "NOT APPLICABLE. An audit adds no resumable user flow."
+  },
+  "not_verified": [
+    "Any Creator Edition route, surface or bundle. Out of scope (todo 16's lane) and the binary under test is the PVR edition.",
+    "Any journey step that requires working third-party platform credentials. PJ-01 shows such credentials cannot be obtained honestly in this build, so phases 2-5 of the capture journey were audited as unreachable rather than as passing.",
+    "Live stream playback. No channel can enter the daemon snapshot without a platform, so no tile ever mounts. Not simulated.",
+    "The negative direction of the 2 s GET cache (a read provably served from cache). Timing-dependent; deliberately not asserted.",
+    "PJ-06's runtime trigger. The false-empty fallthrough arm is cited and read in source, but forcing a non-StateSnapshot variant through the IPC boundary was not attempted.",
+    "Long-running or large-library behaviour. One recording and one backup; no pagination beyond a single out-of-range cursor probe."
+  ],
+  "cleanup_receipt": {
+    "daemon": "no strivo process from this todo remains",
+    "port_8281": "released",
+    "sandboxes": "every strivo-e2e-sandbox.* created by this todo was removed",
+    "preserved": "/home/revelri/.local/bin/strivo (pid 1601 at the time of writing) predates this session by hours and is a real user installation; it was never touched."
+  }
+}

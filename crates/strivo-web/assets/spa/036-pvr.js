@@ -1358,8 +1358,11 @@ events.on((event) => {
   // never actually renders there (render() bounces it to #/library) — but
   // this SSE handler runs regardless of edition, so guard the call the same
   // way teardownDataviz/teardownArchive do above.
+  // The frame carries the whole run, so hand it over: renderPipelines
+  // patches the run it already holds and only falls back to a coarse refetch
+  // for a run this client has never seen.
   if (event.PipelineUpdated && currentRoute() === "pipelines" && typeof renderPipelines === "function") {
-    renderPipelines().catch(() => {});
+    renderPipelines(event.PipelineUpdated.pipeline).catch(() => {});
   }
 
   // Tier 1 auth signal: any of these change the worst severity

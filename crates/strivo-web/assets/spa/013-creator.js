@@ -7,7 +7,38 @@ const PIPELINE_NODE_ROUTES = new Set([
   "schedule-optimizer",
 ]);
 
-async function renderPipelines() {
+// Bounded client-side run store, keyed by run id and newest-first. The
+// `PipelineUpdated` SSE frame carries the whole `Pipeline` — the identical
+// type `GET /pipelines/runs` returns — so a live stage transition can patch
+// the cached run instead of re-downloading the run history. Capped so a
+// long-lived tab cannot grow without bound; whatever the cap evicts comes
+// back on the next coarse refetch, which the unknown-run path below always
+// takes.
+const RUN_STORE_MAX = 50;
+const RUNS_VISIBLE = 20;
+let runStore = [];
+let showAllRuns = false;
+
+// Returns true when the run was already held and is now patched in place,
+// false when this client has never seen it — the caller then falls back to
+// a coarse refetch, which is also how a newly-started run enters the store.
+function storeRun(run) {
+  const at = runStore.findIndex((r) => r.id === run.id);
+  if (at === -1) return false;
+  runStore[at] = run;
+  return true;
+}
+
+async function renderPipelines(livePipeline) {
+  // A live transition for a run we already hold: patch the store and repaint
+  // the run list from it. No network, and — unlike a refetch behind
+  // `API._fetch`'s 2 s GET cache — never a stale one. An unknown id (another
+  // client's run, or one the cap evicted) falls through to the coarse load
+  // below rather than being silently dropped.
+  if (livePipeline && livePipeline.id && storeRun(livePipeline)) {
+    paintRunList();
+    return;
+  }
   let payload = { pipelines: [] };
   let recs = { recordings: [] };
   let runPayload = { runs: [] };
@@ -20,7 +51,10 @@ async function renderPipelines() {
   } catch (_) {}
   root.removeAttribute("aria-busy");
   const pipelines = payload.pipelines || [];
-  const runs = (runPayload.runs || []).slice().reverse();
+  // Newest-first, capped: the oldest runs fall off the store, and the cap is
+  // announced below rather than truncating silently.
+  runStore = (runPayload.runs || []).slice().reverse().slice(0, RUN_STORE_MAX);
+  showAllRuns = false;
   // Cache finished recordings so the Run-on-… picker can list them.
   const finishedRecs = (recs.recordings || [])
     .filter((r) => stateClassName(r.state) === "finished" && r.file_exists !== false)
@@ -122,48 +156,9 @@ async function renderPipelines() {
       </header>
     </section>
     <section class="cfg-card">
-      <h2 class="cfg-title">Runs <span class="pg-cap-hint">${runs.length} durable run${runs.length === 1 ? "" : "s"}</span></h2>
-      <div class="pg-list">
-        ${runs.slice(0, 20).map((run) => {
-          const stages = run.stages || [];
-          const done = stages.filter((stage) => stage.state === "Done" || stage.state === "Skipped").length;
-          const state = typeof run.state === "string" ? run.state : Object.keys(run.state || {})[0] || "Pending";
-          const failed = stages.find((stage) => stage.state && (stage.state.Exhausted || stage.state.Failed));
-          const stageRows = stages.map((stage) => {
-            const stageState = typeof stage.state === "string"
-              ? stage.state
-              : Object.keys(stage.state || {})[0] || "Pending";
-            const artifacts = (stage.artifacts || []).map((artifact, artifactIndex) => {
-              const path = String(artifact.path || "");
-              const leaf = path.split(/[\\/]/).pop() || artifact.kind || "artifact";
-              const href = `/api/v1/pipelines/runs/${encodeURIComponent(run.id)}/stages/${encodeURIComponent(stage.id)}/artifacts/${artifactIndex}`;
-              return `<a class="pl-cap pl-cap-produces" href="${href}" download title="Download ${htmlEscape(path)}">${htmlEscape(artifact.kind || leaf)} · ${htmlEscape(leaf)}</a>`;
-            }).join("");
-            return `<div class="task-row">
-              <div class="task-info">
-                <span class="task-name">${htmlEscape(stage.name)}</span>
-                <span class="task-cadence">${htmlEscape(stage.kind && stage.kind.Custom ? stage.kind.Custom : stageState)}</span>
-                ${artifacts ? `<span class="pl-node-caps">${artifacts}</span>` : ""}
-              </div>
-              <span class="cfg-badge ${stageState === "Done" ? "ok" : stageState === "Exhausted" ? "bad" : ""}">${htmlEscape(stageState)}</span>
-            </div>`;
-          }).join("");
-          return `<div class="pg-row pl-run-row" data-run-id="${htmlEscape(run.id)}">
-            <div class="pg-row-main">
-              <strong>${htmlEscape(run.name)}</strong>
-              <span class="pg-cap-hint">${done}/${stages.length} stages · ${htmlEscape(run.trigger || "manual")}</span>
-              ${failed ? `<span class="error">${htmlEscape((failed.state.Exhausted || failed.state.Failed).error || "stage failed")}</span>` : ""}
-              <details class="pl-run-stages">
-                <summary>${stages.length} stage${stages.length === 1 ? "" : "s"} · ${(stages.flatMap((stage) => stage.artifacts || [])).length} artifact${stages.flatMap((stage) => stage.artifacts || []).length === 1 ? "" : "s"}</summary>
-                ${stageRows}
-              </details>
-            </div>
-            <span class="cfg-badge ${state === "Done" ? "ok" : state === "Failed" ? "bad" : ""}">${htmlEscape(state)}</span>
-            ${state === "Running" || state === "Pending" ? `<button class="sm pl-cancel" data-run="${htmlEscape(run.id)}">Cancel</button>` : ""}
-            ${failed ? `<button class="sm pl-retry" data-stage="${htmlEscape(failed.id)}">Retry</button>` : ""}
-          </div>`;
-        }).join("") || '<div class="empty sm">No runs yet. Pick a finished recording to start the first workflow.</div>'}
-      </div>
+      <h2 class="cfg-title">Runs <span class="pg-cap-hint" id="pl-runs-count">${runListCount()}</span></h2>
+      <div class="pg-list" id="pl-run-list">${runListHtml()}</div>
+      ${runStore.length > RUNS_VISIBLE ? `<button class="sm" id="pl-runs-show-all">Show all ${runStore.length} runs</button>` : ""}
     </section>
     <h2 class="cfg-title">Workflow blueprints <span class="pg-cap-hint">trajectory and capability topology</span></h2>
     ${cards || '<div class="empty">No pipelines defined.</div>'}
@@ -173,6 +168,82 @@ async function renderPipelines() {
   document.getElementById("pl-run-ultimate")?.addEventListener("click", () => {
     openRecordingPickerForPipeline({ name: "Ultimate creator publish", id: "creator_publish" }, finishedRecs);
   });
+  document.getElementById("pl-runs-show-all")?.addEventListener("click", () => {
+    showAllRuns = true;
+    paintRunList();
+  });
+  bindRunHandlers();
+}
+
+function runListCount() {
+  return `${runStore.length} durable run${runStore.length === 1 ? "" : "s"}`;
+}
+
+function runListHtml() {
+  const visible = showAllRuns ? runStore : runStore.slice(0, RUNS_VISIBLE);
+  return (
+    visible.map(runRowHtml).join("") ||
+    '<div class="empty sm">No runs yet. Pick a finished recording to start the first workflow.</div>'
+  );
+}
+
+// Repaint just the run list from the store. The DAG cards and the
+// recordings the "New run" picker needs are untouched, so a live transition
+// costs no network and no full-page churn.
+function paintRunList() {
+  const list = document.getElementById("pl-run-list");
+  if (!list) return;
+  list.innerHTML = runListHtml();
+  const count = document.getElementById("pl-runs-count");
+  if (count) count.textContent = runListCount();
+  const more = document.getElementById("pl-runs-show-all");
+  if (more) more.hidden = showAllRuns;
+  bindRunHandlers();
+}
+
+function runRowHtml(run) {
+  const stages = run.stages || [];
+  const done = stages.filter((stage) => stage.state === "Done" || stage.state === "Skipped").length;
+  const state = typeof run.state === "string" ? run.state : Object.keys(run.state || {})[0] || "Pending";
+  const failed = stages.find((stage) => stage.state && (stage.state.Exhausted || stage.state.Failed));
+  const stageRows = stages.map((stage) => {
+    const stageState = typeof stage.state === "string"
+      ? stage.state
+      : Object.keys(stage.state || {})[0] || "Pending";
+    const artifacts = (stage.artifacts || []).map((artifact, artifactIndex) => {
+      const path = String(artifact.path || "");
+      const leaf = path.split(/[\\/]/).pop() || artifact.kind || "artifact";
+      const href = `/api/v1/pipelines/runs/${encodeURIComponent(run.id)}/stages/${encodeURIComponent(stage.id)}/artifacts/${artifactIndex}`;
+      return `<a class="pl-cap pl-cap-produces" href="${href}" download title="Download ${htmlEscape(path)}">${htmlEscape(artifact.kind || leaf)} · ${htmlEscape(leaf)}</a>`;
+    }).join("");
+    return `<div class="task-row">
+      <div class="task-info">
+        <span class="task-name">${htmlEscape(stage.name)}</span>
+        <span class="task-cadence">${htmlEscape(stage.kind && stage.kind.Custom ? stage.kind.Custom : stageState)}</span>
+        ${artifacts ? `<span class="pl-node-caps">${artifacts}</span>` : ""}
+      </div>
+      <span class="cfg-badge ${stageState === "Done" ? "ok" : stageState === "Exhausted" ? "bad" : ""}">${htmlEscape(stageState)}</span>
+    </div>`;
+  }).join("");
+  return `<div class="pg-row pl-run-row" data-run-id="${htmlEscape(run.id)}">
+    <div class="pg-row-main">
+      <strong>${htmlEscape(run.name)}</strong>
+      <span class="pg-cap-hint">${done}/${stages.length} stages · ${htmlEscape(run.trigger || "manual")}</span>
+      ${failed ? `<span class="error">${htmlEscape((failed.state.Exhausted || failed.state.Failed).error || "stage failed")}</span>` : ""}
+      <details class="pl-run-stages">
+        <summary>${stages.length} stage${stages.length === 1 ? "" : "s"} · ${(stages.flatMap((stage) => stage.artifacts || [])).length} artifact${stages.flatMap((stage) => stage.artifacts || []).length === 1 ? "" : "s"}</summary>
+        ${stageRows}
+      </details>
+    </div>
+    <span class="cfg-badge ${state === "Done" ? "ok" : state === "Failed" ? "bad" : ""}">${htmlEscape(state)}</span>
+    ${state === "Running" || state === "Pending" ? `<button class="sm pl-cancel" data-run="${htmlEscape(run.id)}">Cancel</button>` : ""}
+    ${failed ? `<button class="sm pl-retry" data-stage="${htmlEscape(failed.id)}">Retry</button>` : ""}
+  </div>`;
+}
+
+// Rebound on every repaint: paintRunList() replaces the run rows wholesale,
+// so handlers attached to the previous nodes would be gone.
+function bindRunHandlers() {
   document.querySelectorAll(".pl-cancel").forEach((button) => {
     button.addEventListener("click", async () => {
       button.disabled = true;

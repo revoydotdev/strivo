@@ -30,6 +30,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+pub mod render;
 pub mod store;
 pub mod time;
 

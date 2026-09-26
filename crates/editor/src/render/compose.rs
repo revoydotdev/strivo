@@ -1,0 +1,231 @@
+//! The stages of the compile, one function each.
+//!
+//! Split out of `compile` so the top-level function reads as the order things
+//! happen in rather than as the bodies of eight unrelated checks. Every
+//! function here is total: it either places what it was given or returns a
+//! [`RenderError`](super::RenderError) naming what it could not.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::error::RenderError;
+use super::plan::{Cue, PlanLayer, Track, Transition};
+use super::request::{CaptionMode, EffectStep, RenderRequest, TransitionSpec};
+use crate::time::{IntervalMap, Mapped, Timed};
+
+/// Refuse a repeated name. Every plan collection is keyed by something a human
+/// chose — a layer id, a track label, an effect id — and two entries under one
+/// key are two answers to "which limiter", so the compiler refuses rather than
+/// picking one.
+fn distinct<'a>(kind: &'static str, ids: impl Iterator<Item = &'a str>) -> Result<(), RenderError> {
+    let mut seen: BTreeSet<&'a str> = BTreeSet::new();
+    for id in ids {
+        if !seen.insert(id) {
+            return Err(RenderError::DuplicateId {
+                kind,
+                id: id.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Sort the layers into paint order and map their cut indices onto clips.
+pub(super) fn compile_layers(
+    req: &RenderRequest,
+    placed: &BTreeMap<usize, usize>,
+) -> Result<Vec<PlanLayer>, RenderError> {
+    distinct("layers", req.layers.iter().map(|l| l.id.as_str()))?;
+    let mut layers: Vec<PlanLayer> = Vec::with_capacity(req.layers.len());
+    for layer in &req.layers {
+        let mut clips = Vec::with_capacity(layer.clips.len());
+        for cut in &layer.clips {
+            clips.push(*placed.get(cut).ok_or_else(|| RenderError::UnknownCut {
+                owner: format!("layer {:?}", layer.id),
+                cut: *cut,
+                placed: req.clips.len(),
+            })?);
+        }
+        clips.sort_unstable();
+        layers.push(PlanLayer {
+            id: layer.id.clone(),
+            kind: layer.kind,
+            transform: layer.transform,
+            colour: layer.colour,
+            clips,
+            visible: layer.visible,
+        });
+    }
+    // Paint order is `(z, id)`. The id tiebreak is what makes two layers at
+    // the same z deterministic instead of dependent on the caller's ordering.
+    layers.sort_by(|a, b| (a.transform.z, &a.id).cmp(&(b.transform.z, &b.id)));
+    Ok(layers)
+}
+
+fn to_transition(spec: &TransitionSpec) -> Transition {
+    Transition {
+        id: spec.id.clone(),
+        on_layer: spec.on_layer.clone(),
+        kind: spec.kind,
+        at: spec.at,
+        duration: spec.duration,
+    }
+}
+
+/// Sort the transitions and refuse the ones the output cannot hold.
+pub(super) fn compile_transitions(
+    req: &RenderRequest,
+    layers: &[PlanLayer],
+    output: i64,
+) -> Result<Vec<Transition>, RenderError> {
+    distinct("transitions", req.transitions.iter().map(|t| t.id.as_str()))?;
+    for spec in &req.transitions {
+        if !layers.iter().any(|l| l.id == spec.on_layer) {
+            return Err(RenderError::UnknownLayer {
+                transition: spec.id.clone(),
+                layer: spec.on_layer.clone(),
+            });
+        }
+        let end = spec.at.micros().saturating_add(spec.duration.micros());
+        if end > output {
+            return Err(RenderError::TransitionOutOfRange {
+                id: spec.id.clone(),
+                at: spec.at.micros(),
+                end,
+                output,
+            });
+        }
+    }
+    let mut out: Vec<Transition> = req.transitions.iter().map(to_transition).collect();
+    out.sort_by(|a, b| (a.at, &a.id).cmp(&(b.at, &b.id)));
+    Ok(out)
+}
+
+/// Resolve the tracks. Every cut must land on exactly one bus: a clip on no
+/// bus renders silent, and a clip on two buses is a routing one output stream
+/// cannot express.
+pub(super) fn compile_tracks(
+    req: &RenderRequest,
+    placed: &BTreeMap<usize, usize>,
+) -> Result<Vec<Track>, RenderError> {
+    distinct("tracks", req.tracks.iter().map(|t| t.label.as_str()))?;
+    let mut routed: BTreeSet<usize> = BTreeSet::new();
+    let mut tracks: Vec<Track> = Vec::with_capacity(req.tracks.len());
+    for spec in &req.tracks {
+        let mut clips = Vec::with_capacity(spec.clips.len());
+        for cut in &spec.clips {
+            let clip = *placed.get(cut).ok_or_else(|| RenderError::UnknownCut {
+                owner: format!("track {:?}", spec.label),
+                cut: *cut,
+                placed: req.clips.len(),
+            })?;
+            if !routed.insert(*cut) {
+                return Err(RenderError::ClipRoutedTwice { cut: *cut });
+            }
+            clips.push(clip);
+        }
+        clips.sort_unstable();
+        tracks.push(Track {
+            label: spec.label.clone(),
+            bus: spec.bus.clone(),
+            gain_db: spec.gain_db,
+            pan: spec.pan,
+            muted: spec.muted,
+            clips,
+        });
+    }
+    for requested in &req.clips {
+        if !routed.contains(&requested.cut) {
+            return Err(RenderError::UnroutedClip { cut: requested.cut });
+        }
+    }
+    tracks.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(tracks)
+}
+
+/// Order the effects into signal flow and drop the ones that emit nothing.
+///
+/// An empty `filter` is a saved chain that produces no work — an insert chain
+/// with no effects, a default automation curve. Keeping it would make two
+/// plans differ for no reason, and would move the plan's content hash when a
+/// user opens a panel and saves the defaults.
+pub(super) fn compile_effects(
+    req: &RenderRequest,
+    tracks: &[Track],
+) -> Result<(Vec<EffectStep>, Vec<EffectStep>), RenderError> {
+    distinct("effects", req.effects.iter().map(|e| e.id.as_str()))?;
+    let buses: BTreeSet<&str> = tracks.iter().map(|t| t.bus.as_str()).collect();
+    for effect in &req.effects {
+        if effect.arity > buses.len() {
+            return Err(RenderError::BusArity {
+                stage: effect.id.clone(),
+                mixes: effect.arity,
+                tracks: buses.len(),
+            });
+        }
+    }
+    let mut kept: Vec<EffectStep> = req
+        .effects
+        .iter()
+        .filter(|e| !e.filter.trim().is_empty())
+        .cloned()
+        .collect();
+    // `EffectKind`'s declaration order *is* the canonical order, so sorting by
+    // it cannot drift from the comment that explains it. The id tiebreak keeps
+    // two effects of one stage (a track chain and a master chain) stable.
+    kept.sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
+    let video = kept
+        .iter()
+        .filter(|e| !e.kind.is_audio())
+        .cloned()
+        .collect();
+    let audio = kept.into_iter().filter(|e| e.kind.is_audio()).collect();
+    Ok((audio, video))
+}
+
+/// Resolve every cue into composition time through the interval map.
+///
+/// A source-time cue the composition cut away has no answer, and
+/// [`IntervalMap::resolve`] reports that rather than inventing one. A cue
+/// whose source span is used twice resolves to every position it reaches,
+/// because a repeat is footage the user asked for twice.
+pub(super) fn compile_cues(
+    req: &RenderRequest,
+    map: &IntervalMap,
+) -> Result<Vec<Cue>, RenderError> {
+    if req.captions.mode == CaptionMode::BurnedIn && req.captions.style_json.trim().is_empty() {
+        return Err(RenderError::BurnWithoutStyle);
+    }
+    let mut cues: Vec<Cue> = Vec::with_capacity(req.captions.cues.len());
+    for (index, cue) in req.captions.cues.iter().enumerate() {
+        let resolved = map
+            .resolve(Timed {
+                at: cue.at,
+                coordinate: req.captions.coordinate,
+            })
+            .map_err(|error| RenderError::CueUnmapped {
+                index,
+                at: cue.at.micros(),
+                error,
+            })?;
+        match resolved {
+            Mapped::Source(one) => cues.push(Cue {
+                at: one.at,
+                duration: cue.duration,
+                source_at: vec![cue.at],
+            }),
+            Mapped::Composition(many) => {
+                let mut positions = many;
+                positions.sort_by_key(|m| m.at);
+                for position in positions {
+                    cues.push(Cue {
+                        at: position.at,
+                        duration: cue.duration,
+                        source_at: vec![cue.at],
+                    });
+                }
+            }
+        }
+    }
+    cues.sort_by_key(|c| c.at);
+    Ok(cues)
+}

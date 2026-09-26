@@ -13,6 +13,8 @@ pub mod csrf;
 pub mod ipc_client;
 pub mod problem;
 pub mod ratelimit;
+#[cfg(feature = "creator")]
+pub mod render;
 pub mod routes;
 pub mod server;
 pub mod telemetry;

@@ -40,9 +40,12 @@
 //! long is this source". The `f32` seconds in the legacy edit decision list
 //! are read at exactly one named boundary, `strivo_editor::time::Cut::span`.
 //!
-//! What is deliberately **not** here yet: the render compiler (todo 23).
-//! Where a field belongs to it, it is either stored as an opaque document or
-//! left out, and it is said so at the field.
+//! The render compiler (todo 23) is here, in [`render_plan`], and its plan is
+//! `strivo_editor::render::CompiledPlan` — a value, not a document. This module
+//! owns the one function that stores one as a [`RenderPlan`] row, so there is
+//! one definition of "the plan" and one of "the row that holds it". Where a
+//! revision field still belongs to the compiler it is stored as an opaque
+//! document (`timeline_json`), and it is said so at the field.
 //!
 //! **The job and artifact lifecycle (todo 24) is here, in [`jobs`], and it is
 //! the pipeline's state machine rather than a second one.** Its state names
@@ -54,6 +57,7 @@
 mod entities;
 mod ids;
 mod jobs;
+mod render_plan;
 mod schema;
 mod store;
 mod store_delivery;
@@ -77,6 +81,7 @@ pub use jobs::{
     immutable_output_path, is_legal, CacheKey, Job, JobInputs, JobState, JobTransition,
     MAX_ATTEMPTS, TRANSITIONS,
 };
+pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};
 pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 pub use store::Store;
 pub use store_jobs::{MoveJob, NewJob};

@@ -116,10 +116,14 @@ impl PitchTime {
         }
         let tempo = self.tempo.clamp(0.25, 4.0);
         let pitch = self.pitch.clamp(0.25, 4.0);
+        // The option is `formant`, singular. `formants=preserved` is rejected
+        // outright by ffmpeg with "Option not found", so every non-identity
+        // pitch setting used to fail the whole render — which is why this went
+        // unnoticed while the setting was never baked at all.
         let formants = if self.formant_preserve {
-            ":formants=preserved"
+            ":formant=preserved"
         } else {
-            ":formants=shifted"
+            ":formant=shifted"
         };
         format!(
             "rubberband=tempo={}:pitch={}{}",
@@ -212,7 +216,7 @@ mod tests {
         let p = PitchTime::default().with_tempo(1.5);
         assert_eq!(
             p.to_filter(),
-            "rubberband=tempo=1.5:pitch=1.0:formants=preserved"
+            "rubberband=tempo=1.5:pitch=1.0:formant=preserved"
         );
     }
 
@@ -221,7 +225,7 @@ mod tests {
         let p = PitchTime::transpose_semitones(12.0);
         assert_eq!(
             p.to_filter(),
-            "rubberband=tempo=1.0:pitch=2.0:formants=preserved"
+            "rubberband=tempo=1.0:pitch=2.0:formant=preserved"
         );
     }
 
@@ -231,7 +235,7 @@ mod tests {
         p.formant_preserve = false;
         assert_eq!(
             p.to_filter(),
-            "rubberband=tempo=0.5:pitch=1.0:formants=shifted"
+            "rubberband=tempo=0.5:pitch=1.0:formant=shifted"
         );
     }
 

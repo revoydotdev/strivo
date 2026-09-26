@@ -106,6 +106,56 @@ impl SubMix {
     pub fn output_pad() -> &'static str {
         "out"
     }
+
+    /// Project the bus onto a **single** input stream, as a `-af` value.
+    ///
+    /// [`Self::to_filter_complex`] needs one ffmpeg input per track, which a
+    /// cut-and-concat render of one recording does not have. This is the same
+    /// graph with the mixer collapsed: `amix` of one input at
+    /// `normalize=0` is the identity, and an `anull` pad on both sides of it
+    /// is a no-op, so for one track the two are the same signal.
+    ///
+    /// `None` when the bus declares more than one track. That is **not** a
+    /// fallback to a partial mix — it is the honest answer, because a second
+    /// track needs a second input and this render has none. The caller
+    /// surfaces it rather than rendering one bus and calling it the mix.
+    /// Multi-track arrivals are the timeline work that adds a second source.
+    pub fn to_single_input_chain(&self) -> Option<String> {
+        if self.tracks.len() != 1 {
+            return None;
+        }
+        let track = &self.tracks[0];
+        let mut chain: Vec<String> = Vec::new();
+        if let Some(c) = &track.insert_fx {
+            let s = c.to_filter();
+            if !s.is_empty() {
+                chain.push(s);
+            }
+        }
+        if (track.gain_db).abs() > 1e-6 {
+            chain.push(format!("volume={:.2}dB", track.gain_db));
+        }
+        if let Some(c) = &self.master_chain {
+            let s = c.to_filter();
+            if !s.is_empty() {
+                chain.push(s);
+            }
+        }
+        if (self.master_gain_db).abs() > 1e-6 {
+            chain.push(format!("volume={:.2}dB", self.master_gain_db));
+        }
+        if chain.is_empty() {
+            None
+        } else {
+            Some(chain.join(","))
+        }
+    }
+
+    /// How many separate signals the full graph mixes.
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        self.tracks.len()
+    }
 }
 
 #[cfg(test)]

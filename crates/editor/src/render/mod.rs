@@ -1,0 +1,78 @@
+//! One render contract: a revision compiled to a plan, and one plan executed.
+//!
+//! From `docs/CREATOR-EDITION-REPORT-2026-09-07.md` F02/R01. Before this
+//! module, "what will this edit render as?" had as many answers as there were
+//! callers: the EDL renderer took two filter strings, a second argv builder in
+//! `strivo-plugins` synthesised its own, and each plugin's panel showed a
+//! *preview* string built by its own crate. The UI promised five effects were
+//! baked; two were.
+//!
+//! **The seam, and why it is here rather than in the plugin crates.**
+//!
+//! [`compile`] owns *composition and policy* — layer order, routing, the
+//! canonical order of the audio chain, and every refusal. It does **not** own
+//! filter spelling: each effect crate already emits its own ffmpeg fragment
+//! from its own model ([`request::EffectStep::filter`]), and re-deriving those
+//! strings here would be a second implementation of six of them. The caller —
+//! the only place that already links every plugin crate — resolves the saved
+//! chains into steps, and the compiler orders, routes and refuses.
+//!
+//! That is also why this lives in `strivo-editor` and not in
+//! `strivo-research`: adding six plugin crates as dependencies of the research
+//! kernel to hold a struct would invert the dependency graph for nothing.
+//!
+//! **One compiler, two callers.** [`preview`] and [`export`] are the only two,
+//! they differ in what they *do* with the plan, and [`CompiledPlan`] has no
+//! public constructor, so there is no third way to reach a plan. Preview's
+//! approximations are **derived from** the plan ([`approximations`]) and never
+//! stored in it — an approximation field *on* the plan would be a second
+//! answer to "what does this render as" for preview and export to disagree
+//! about.
+//!
+//! ## Time
+//!
+//! Every coordinate and length here is a [`MediaTime`] — todo 22's single
+//! integer representation — and every mapping between source and composition
+//! time goes through the [`IntervalMap`] it defines. This module adds no `f64`
+//! time and no millisecond column. `f64` appears on **gains, ratios and dB**
+//! only, which are not time.
+//!
+//! ## Validation is not here
+//!
+//! Admission of a *revision's inputs* — is this path inside the media root,
+//! does this cut fit inside its source — belongs to
+//! `strivo_web::routes::media_input`, and runs before a
+//! [`request::RenderRequest`] is built. This module starts from an
+//! already-admitted request and refuses only what a request can be internally
+//! inconsistent about.
+
+mod approximate;
+mod compile;
+mod compose;
+mod error;
+pub mod example;
+mod execute;
+mod invoke;
+mod plan;
+mod request;
+
+#[cfg(test)]
+mod tests;
+
+pub use approximate::{approximations, Approximation};
+pub use compile::compile;
+pub use error::RenderError;
+pub use execute::{export, preview, Export, Preview};
+pub use invoke::{
+    audio_chain, clip_args, concat_args, fade_filter, is_passthrough, measure_filter,
+    normalize_args, normalize_filter, parse_measurements, track_filter, video_chain,
+    video_is_passthrough,
+};
+pub use plan::{Clip, CompiledPlan, Cue, Loudness, PlanLayer, Track, Transition};
+pub use request::{
+    CaptionMode, CaptionSpec, ClipRequest, Colour, Container, CueCoord, EffectKind, EffectStep,
+    LayerKind, LayerSpec, LoudnessSpec, OutputProfile, RenderRequest, TrackSpec, Transform,
+    TransitionKind, TransitionSpec, VideoIntent,
+};
+
+pub use crate::time::{Coordinate, IntervalMap, MediaTime, SourceSpan, TimeError};

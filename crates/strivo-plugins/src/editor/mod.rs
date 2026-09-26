@@ -3,7 +3,7 @@
 //! Was a TUI editor (timeline / compilation / filter views). With the
 //! TUI deletion the plugin is now a headless registration shell —
 //! the webui's editor surface lives under `strivo-web` and operates on
-//! the shared EDL types in `strivo_core::edl`.
+//! the shared EDL types in `strivo_editor`.
 
 use std::any::Any;
 use std::path::PathBuf;
@@ -11,12 +11,11 @@ use std::path::PathBuf;
 use strivo_core::events::DaemonEvent;
 use strivo_core::plugin::{Plugin, PluginAction, PluginContext, StatusSlot};
 
-pub mod concat;
 pub mod filter;
 
 /// An EDL segment selected from a transcript view. Was the TUI
-/// editor's interaction primitive; preserved here because the
-/// non-TUI submodules (`concat`, `filter`) still build on it.
+/// editor's interaction primitive; preserved here because `filter`
+/// still builds on it.
 #[derive(Debug, Clone)]
 pub struct EditorClip {
     pub in_word: u32,

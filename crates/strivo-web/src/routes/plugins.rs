@@ -1835,9 +1835,10 @@ async fn editor_render(
         Ok(s) => s,
         Err(e) => return Problem::internal(format!("open store: {e}")).into_response(),
     };
-    let edl = match store.load(&recording_id).ok().flatten() {
-        Some(e) => e,
-        None => return Problem::not_found("no EDL saved yet").into_response(),
+    let edl = match store.current(&recording_id) {
+        Ok(Some(c)) => c.edl,
+        Ok(None) => return Problem::not_found("no EDL saved yet").into_response(),
+        Err(e) => return Problem::internal(format!("load: {e}")).into_response(),
     };
     // A stored EDL is re-admitted here rather than trusted because
     // `editor_save` admitted it: a revision written before this gate existed,
@@ -1862,46 +1863,77 @@ async fn editor_render(
         "_",
     );
     let output = out_dir.join(format!("{safe}.mkv"));
-    // Pick up any saved branding overlay; absent or empty spec → passthrough,
-    // so the fast `-c copy` concat path stays in play.
-    let branding_spec: strivo_branding::BrandingSpec =
-        std::fs::read_to_string(branding_path(&recording_id))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-    let chain = branding_spec.build_filter_chain("[0:v]");
-    let fc = chain.filter_complex.clone();
-    // Same for the saved volume automation. Empty automation produces
-    // an `anull` filter which the renderer detects + falls back to `-c copy`.
-    let automation: strivo_automation::VolumeAutomation =
-        std::fs::read_to_string(automation_path(&recording_id))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-    let audio_filter = automation.build_audio_filter(0.05);
-    // The EDL render is N sequential per-cut ffmpeg passes plus a concat
-    // pass — full transcode wall time. Run it off the Tokio worker thread.
+    // One resolver reads all six per-recording sidecars — branding, insert FX,
+    // pitch/time, sub-mix, volume automation and the caption style — so the
+    // four this route used to skip cannot be skipped by accident again. A
+    // sidecar that exists but does not parse is refused here rather than
+    // silently rendered without the effect.
+    let resolved = match crate::render::resolve(&recording_id, &edl) {
+        Ok(resolved) => resolved,
+        Err(e) => return Problem::bad_request(format!("render inputs: {e}")).into_response(),
+    };
+    // The EDL render is N sequential per-cut ffmpeg passes plus a concat pass
+    // and possibly a loudness measurement pass — full transcode wall time. Run
+    // it off the Tokio worker thread.
     let render_edl = edl.clone();
     let render_output = output.clone();
     let render = tokio::task::spawn_blocking(move || {
-        strivo_editor::render_edl_with_filters(
-            &render_edl,
-            &render_output,
-            Some(&fc),
-            Some(&audio_filter),
-        )
+        crate::render::render(&resolved, &render_edl, &render_output)
     })
     .await;
     match render {
-        Ok(Ok(bytes)) => Json(json!({
+        Ok(Ok(done)) => Json(json!({
             "ok": true,
-            "output_path": output.to_string_lossy(),
-            "bytes": bytes,
+            "output_path": done.output.to_string_lossy(),
+            "bytes": done.bytes,
             "total_duration": edl.total_duration(),
+            "plan": done.plan,
         }))
         .into_response(),
         Ok(Err(e)) => Problem::internal(format!("render: {e}")).into_response(),
         Err(error) => Problem::internal(format!("editor worker crashed: {error}")).into_response(),
+    }
+}
+
+/// `GET /api/v1/plugins/editor/<recording_id>/render/plan` — what the saved
+/// revision renders as, without rendering it.
+///
+/// The **preview** caller, and the reason preview can be trusted: it is the
+/// same compiler the render route uses, over the same six sidecars, so a plan
+/// shown here is the plan that will be executed. It spawns nothing, so it is
+/// also the cheap way to find out that a saved sidecar is unparseable.
+///
+/// The response names what a preview cannot be exact about rather than
+/// quietly differing from the render: burned-in captions and the loudness pass
+/// are both measured on the finished signal, and `rendered_preview` is the
+/// route that produces it.
+async fn editor_render_plan(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
+        return r;
+    }
+    let store = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
+        Ok(s) => s,
+        Err(e) => return Problem::internal(format!("open store: {e}")).into_response(),
+    };
+    let current = match store.current(&recording_id) {
+        Ok(Some(current)) => current,
+        Ok(None) => return Problem::not_found("no EDL saved yet").into_response(),
+        Err(e) => return Problem::internal(format!("load: {e}")).into_response(),
+    };
+    let resolved = match crate::render::resolve(&recording_id, &current.edl) {
+        Ok(resolved) => resolved,
+        Err(e) => return Problem::bad_request(format!("render inputs: {e}")).into_response(),
+    };
+    match crate::render::preview(&resolved) {
+        Ok(shown) => Json(json!({ "ok": true, "preview": shown })).into_response(),
+        Err(e) => Problem::bad_request(format!("render plan: {e}")).into_response(),
     }
 }
 
@@ -4516,6 +4548,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/plugins/editor/{id}/render",
             axum::routing::post(editor_render),
+        )
+        .route(
+            "/api/v1/plugins/editor/{id}/render/plan",
+            get(editor_render_plan),
         )
         .route(
             "/api/v1/plugins/editor/{id}/revisions",

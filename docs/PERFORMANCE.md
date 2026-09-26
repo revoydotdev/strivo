@@ -368,6 +368,154 @@ handle open plus its PRAGMA and schema batch. The *magnitude* is not separable
 from this host's run-to-run spread on any single run, which is why two pairs
 were taken and the sign consistency, not one percentage, is the evidence.
 
+## Cold-media bounds (verified)
+
+The control list above claims six things about ffmpeg/ffprobe work. All six are
+real, all six are enforced at runtime rather than merely declared, and each now
+names both a code site and a test. Measured 2026-09-25 against the `strivo 0.8.0`
+release PVR binary (sha256 `38cacd0f…`) on a 10 000-recording library,
+`BENCH_PORT=8413`, `loadavg_1m` 12.0 on 24 CPUs, sampling the web process's real
+children out of `/proc` every 20 ms while the media path ran.
+
+**Two of the plan's own pointers were wrong, and re-locating them matters.**
+`crates/strivo-web/src/telemetry.rs:426-427` is a `#[cfg(test)]` fixture that
+builds an `AppState` for the telemetry tests — it is not the declaration of the
+probe cache or the pool. The production declaration is
+`crates/strivo-web/src/server.rs:61-71` (fields) and `:175-179` / `:240-244`
+(construction). Likewise `recording_thumb` is **not** in `routes/api.rs`; it is
+`crates/strivo-web/src/routes/settings.rs:1160`, and so are `recording_probe`
+(`:283`) and `remux_recording` (`:1433`).
+
+### Claim-by-claim
+
+| # | Claim, as written above | Code site | Test | Verdict |
+| --- | --- | --- | --- | --- |
+| 1 | "Probe, remux, and thumbnail processes share a two-slot worker pool" | `server.rs:64,176,241` (`probe_slots`); acquired at `settings.rs:325` (probe), `:1215` (thumb), `:1459` (remux) | `cold_media_routes_bound_the_pool_and_coalesce_by_id` | verified — peak 2 across mixed probe+thumb traffic |
+| 2 | "Thumbnails additionally have a one-slot limit" | `server.rs:68,177,242`; acquired at `settings.rs:1209` | same test (asserts the per-name ffmpeg peak) | verified — peak 1 ffmpeg with 2 thumbs + 2 probes in flight |
+| 3 | "coalesce by recording ID" | `settings.rs:131-143` (per-id lock map), `:1199-1206` (lock, then re-read the on-disk cache) | `cold_media_routes_bound_the_pool_and_coalesce_by_id` (phase 2) and `thumbnail_lock_keeps_one_lock_while_a_waiter_is_queued` (`settings.rs:2200`) | verified — two concurrent requests for one cold id start exactly **one** extraction |
+| 4 | "cache failures briefly" | `settings.rs:155-162` (30 s TTL), `:1224` (cleared on success), `:1229-1233` (recorded, bounded at 1 024) | `queued_thumbnail_rechecks_a_recent_failure_after_its_id_lock` (`settings.rs:2218`) | verified |
+| 5 | "Probe and individual thumbnail attempts have 30-second deadlines" | `settings.rs:355` (probe), `:1308` and `:1333` (both thumbnail attempts) | `every_media_child_process_has_a_deadline_and_kill_on_drop` (structural) + the `wedge` workload below (behaviour) | verified — a wedged ffmpeg was killed at 30.0 s |
+| 6 | "remux deadlines allow 120 seconds plus file size at 4 MiB/s" | `settings.rs:1480-1481` | same structural test | verified as written; **not measured end-to-end** — no multi-hour archive was remuxed, so the size term is exercised only by the fact that it is the same `tokio::time::timeout` the other three spawns use |
+
+Before this pass, only claims 3 (partially — the existing test covers the lock
+map, not that a second request spawns no second process) and 4 had any test at
+all. Claims 1, 2, 5 and 6 had none.
+
+Two more sentences in the same paragraph are structural rather than bounded and
+are guarded by the same test: "Cancelled media processes are killed"
+(`kill_on_drop(true)` at `settings.rs:344,1292,1317,1466`) and "thumbnail
+temporary files are cleaned up" (`ThumbnailTemp`'s `Drop`, `settings.rs:1253`).
+The probe cache is fingerprinted by size and mtime as claimed
+(`settings.rs:316-322`, rechecked after queueing at `:333-341`, written at
+`:476`); it has **no** test, and none was added — a second request inside the
+TTL is a cache hit only in the sense that it returns the stored JSON, and the
+measurement below cannot separate a hit from a fast recompute.
+
+**A recording shorter than 10 s costs two ffmpeg spawns, not one.** The
+thumbnail route seeks to `-ss 10` first and only falls back to `-ss 0` when that
+attempt produced no file (`settings.rs:1313-1336`), so every cold thumbnail of a
+clip shorter than the seek point runs ffmpeg twice. This is correct behaviour,
+not a bound violation — the two spawns are sequential and never exceed the
+one-slot limit — but it is why the coalescing test's fixtures are 12 s long: on a
+2 s fixture "two concurrent requests" looks like a coalescing failure when it is
+really one request retrying.
+
+### Measured peaks against the declared bound
+
+| Workload | Requests (concurrency 8) | Peak media children | By name | Window | Result |
+| --- | ---: | ---: | --- | --- | --- |
+| 24 cold `/thumb` | 24 | **1** | `ffmpeg: 1` | 87–2 164 ms | 24× `200` |
+| 24 cold `/probe` | 24 | **2** | `ffprobe: 2` | 114–262 ms | 24× `200` |
+| mixed 24 `/thumb` + 24 `/probe` | 48 | **2** | `ffmpeg: 1`, `ffprobe: 1` | 15–2 143 ms | 48× `200` |
+| 24 `/thumb`, every ffmpeg SIGKILLed | 24 | 1 | `ffmpeg: 1` | 168–1 656 ms | 42 kills; 22× `404`, 2× `200` |
+| `/thumb` on a source that never delivers data | 1 | 1 | `ffmpeg: 1` | 18–**29 993 ms** | `404` at 30 004 ms |
+
+Three of these deserve their own note.
+
+- **The peak is a lower bound on attained concurrency, never a violation.** A
+  second run of the same binary put the mixed workload's peak at 1 rather than 2:
+  the sampler's 20 ms cadence lost a race it would have caught on a quieter host.
+  The bound claim is the `<= 2` side, and that side held on every run.
+- **Killing a child does not leak a permit.** After 42 SIGKILLs spread across 24
+  concurrent thumbnail requests, a *fresh* cold thumbnail answered `200` in
+  112 ms. A leaked `probe_slots`/`thumbnail_slots` permit would have starved the
+  pool instead of answering.
+- **The deadline is a kill, not a wait.** The wedged source is a FIFO that never
+  delivers data, so ffmpeg blocks in `read()`. The request answered `404` at
+  30 004 ms and no ffmpeg was running afterwards. One unreaped **zombie**
+  (`State: Z`) was still visible 2 s later, which is a killed child awaiting
+  reaping, not a running one; the harness and the test both exclude `Z` from the
+  count for that reason. Whether tokio's orphan reaper collects it promptly was
+  not measured beyond that 2 s window.
+
+### Failure scenario: the harness does detect a wedged ffmpeg
+
+The `timeout` around the first thumbnail attempt (`settings.rs:1308`) was
+removed, the release binary rebuilt, and the same workload re-run. The request
+never answered — the client gave up at 45 s with the ffmpeg still in its `read()`
+(`status: 0`, last media child at **45 032 ms**) — and the harness inverted its
+verdict to `wedge_detected`. The pristine binary was copied back over
+`release/strivo` afterwards and re-hashed to the same
+`63dc01737d7e539d1397ad677d9d82c9` / `38cacd0f…` it had before the build; the
+mutated sources were restored with `git checkout` and `git diff HEAD` over
+`crates/strivo-web/src/` is empty.
+
+The same recipe makes the Rust tests load-bearing rather than decorative. With
+`AppState::test_state`'s pool raised from 2 to 8 the runtime test fails with
+"3 media children ran at once"; with one `tokio::time::timeout` deleted the
+structural test fails with `left: 4, right: 3`; with the per-id lock at
+`settings.rs:1200` removed the coalescing phase fails with "started 2 ffmpeg
+extractions". All three mutations were reverted with `git checkout` and
+`git diff HEAD` over `crates/strivo-web/src/` is empty.
+
+### Durable archive: the media paths are only reachable if this holds
+
+`docs/PERFORMANCE.md` claims list/detail/playback resolve the durable journal
+and overlay live snapshot state, which is what makes a cold thumbnail or probe
+possible for a recording the daemon no longer holds in memory. Both halves were
+re-checked rather than taken from the tranche report:
+
+- **Evicted from daemon memory** — `durable_archive_entry_lists_details_and_range_downloads_without_snapshot`
+  (`crates/strivo-web/tests/routes.rs:1149`) drives the real router with IPC
+  deliberately disconnected, and asserts the recording lists, opens its detail,
+  and serves a 100-byte range. Green.
+- **After a real restart** — nothing in the Rust suite restarts a daemon, so
+  `scripts/check_durable_archive.sh` does: it seeds 261 finished rows (the
+  oldest written first, against one real media file) into a real `jobs.db`, boots
+  the real daemon + web pair in a throwaway XDG sandbox, then stops and starts
+  both again. The oldest of 261 — well past `MAX_TERMINAL_RECORDINGS` (200,
+  `src/daemon.rs:21`) — listed and served a 100-byte range **before and after**
+  the restart. Note the honest limit: after a restart the daemon reloads journal
+  rows into its own snapshot, so this half proves durability across the restart,
+  not the snapshot-miss fallback; that fallback is the Rust test's job.
+
+The real-server lane (`crates/strivo-web/e2e`, `npm run test:real`) is green
+twice in a row — 7 passed, 26.3 s and 5.2 s — against this same binary. Its
+`download serves a real finished recording with Range + cache validators` test
+covers the Range half over real bytes. `TRANCHE.md:48` records this lane as "6
+passed"; it is 7 now, because the CE01-era `#/studio` test was added after the
+tranche. That is drift in a count, not a broken claim.
+
+### Reproduce
+
+```sh
+scripts/bench_media_pool.sh <release-strivo>/release/strivo 10000 out.json
+scripts/bench_media_pool.sh <release-strivo>/release/strivo 10000 out.json --expect-wedge
+scripts/check_durable_archive.sh <release-strivo>/release/strivo 260
+cargo test -p strivo-web --test media_pool --locked
+```
+
+`scripts/bench_media_pool.sh` reuses todo 9's `scripts/seed_bench_library.py`
+unchanged and refuses a non-release build or a real `$HOME`, exactly as
+`scripts/bench_library.sh` does; it is a separate script rather than an edit to
+that harness because the two answer different questions and the captured
+baseline must keep its own meaning. It runs on a throwaway filesystem under
+`$TMPDIR` with a declared 2 048 MiB ceiling that it asserts — the whole 10 000-row
+sandbox, media pool and all, measured **11–12 MiB**. `BENCH_CONCURRENCY` stays at
+its default of 1 for the API harness; the concurrency here is a fixed 8
+in-flight media requests, the shape a browser wall produces, and it is a knob
+(`MEDIA_CONCURRENCY`) rather than a loop.
+
 ## Next profiling thresholds
 
 Profile before adding complexity. Split the SPA into route chunks when compressed

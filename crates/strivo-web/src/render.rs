@@ -331,7 +331,7 @@ pub struct RenderResponse {
 
 /// The media path a cut names. The plan deliberately carries a cut index, not
 /// a path, so anything that needs the locator reads it from here.
-pub fn cut_locator<'a>(edl: &'a Edl, cut: usize) -> Option<&'a str> {
+pub fn cut_locator(edl: &Edl, cut: usize) -> Option<&str> {
     match &edl.cuts.get(cut)?.kind {
         CutKind::Source { source_path } => Some(source_path),
         CutKind::Broll { broll_path } => Some(broll_path),

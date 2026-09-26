@@ -41,6 +41,13 @@ pub mod multistream;
 // within the edition.
 #[cfg(feature = "creator")]
 pub mod plugins;
+// The project workspace: one project, one selected revision, and the same
+// answer for every view (player, transcript, timeline, inspector, task status).
+// Creator-only because the table it reads is Creator-only — a PVR install has
+// no project context to serve, and a mounted-but-inert route would claim
+// otherwise.
+#[cfg(feature = "creator")]
+pub mod workspace;
 // Mounted (see `server.rs::build_router`): the sole recording file-serving
 // path (download/play) plus the path-containment guard + tests from roadmap
 // item 2. The page routers that once sat beside it (channels/dashboard/logs/

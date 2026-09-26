@@ -32,11 +32,18 @@ impl Store {
             }
         }
         let mut conn = Connection::open(path)?;
+        // `busy_timeout` first, deliberately: `journal_mode=WAL` needs a lock
+        // another connection can be holding, and with the default timeout of 0
+        // that statement returns SQLITE_BUSY immediately instead of waiting.
+        // Setting it afterwards made the 30 s above a claim rather than a fact,
+        // and two readers opening the same Creator database at once failed with
+        // "database is locked" — which is two views of one project, the exact
+        // case this store exists to serve.
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
+            "PRAGMA busy_timeout=30000;
+             PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=30000;",
+             PRAGMA foreign_keys=ON;",
         )?;
         schema::migrate(&mut conn, schema::MIGRATIONS)?;
         Ok(Self { conn })

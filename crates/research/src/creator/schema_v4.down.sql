@@ -1,0 +1,24 @@
+-- Version 4, reversed: the project workspace's row goes away.
+--
+-- **The drop destroys unsaved work and the selection with it.** That is the
+-- honest cost of reversing the version that introduced them: there is no
+-- prior version of this state to fall back to, and inventing one would be a
+-- second place recording a selection. It is also why
+-- `docs/RESEARCH-PLATFORM-ROADMAP.md:72` permits a destructive `down` only
+-- when rehearsed from a backup, and why the rehearsal copies the file rather
+-- than pointing `down` at a live database.
+--
+-- No index is created on this table and none has to be dropped: the primary key
+-- on `project_id` is the clustered key SQLite already maintains, and SQLite
+-- drops a table's own indexes with it. Reversing the order of creation is the
+-- whole reverse migration.
+--
+-- The version line is NOT stamped here. It belongs to `schema::rollback`,
+-- which writes it in the same transaction as this file's statements — a `down`
+-- that stamped it itself would make the line's position depend on which
+-- caller applied the SQL.
+--
+-- `SELECT` nothing. A `down` that reported what it removed would be a second
+-- place summarising the schema.
+
+DROP TABLE IF EXISTS creator_workspace;

@@ -329,6 +329,7 @@ pub fn build_router(state: AppState) -> Router {
     #[cfg(feature = "creator")]
     let guarded = guarded
         .merge(routes::plugins::router())
+        .merge(routes::workspace::router())
         .merge(routes::licence::router());
     let guarded = guarded
         // S16: authenticate ahead of body/query extraction. `route_layer`

@@ -6,7 +6,10 @@
 //! durable job and artifact lifecycle in [`jobs_lifecycle`], and the the
 //! time model in three: its data migration in [`time_migration`], its shape
 //! and its anti-drift check in [`time_schema`], and the clock segments it
-//! stores in [`time_clock`].
+//! stores in [`time_clock`]. The project workspace — one project, many
+//! recordings and edits, one selected revision every view reads — is in
+//! [`workspace`], with what it refuses in [`workspace_malformed`] and what
+//! reversing it costs in [`workspace_rollback`].
 
 mod fixtures;
 mod identity;
@@ -18,3 +21,6 @@ mod time_clock;
 mod time_migration;
 mod time_schema;
 mod time_shared;
+mod workspace;
+mod workspace_malformed;
+mod workspace_rollback;

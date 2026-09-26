@@ -46,6 +46,7 @@ pub const TABLES: &[&str] = &[
     "creator_clock_segments",
     "creator_jobs",
     "creator_job_transitions",
+    "creator_workspace",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -70,13 +71,19 @@ const JOB_LIFECYCLE_V3: &str = include_str!("schema_v3.sql");
 
 const DROP_JOB_LIFECYCLE_V3: &str = include_str!("schema_v3.down.sql");
 
+const PROJECT_WORKSPACE_V4: &str = include_str!("schema_v4.sql");
+
+const DROP_PROJECT_WORKSPACE_V4: &str = include_str!("schema_v4.down.sql");
+
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
 /// millisecond durations with integer microseconds and adds the wall-clock
 /// to media-time segments; version 3 is the durable job and artifact
-/// lifecycle. Versions 1 and 2 are frozen — committed history with rehearsed
-/// rollbacks, and a database already at those versions migrates forward from
-/// the bytes they wrote.
+/// lifecycle; version 4 is the persistent project workspace — one row per
+/// project carrying the one selected revision every view reads, the playhead,
+/// the selection range, the active view and unsaved work. Versions 1 to 3 are
+/// frozen — committed history with rehearsed rollbacks, and a database
+/// already at those versions migrates forward from the bytes they wrote.
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -95,6 +102,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_job_lifecycle",
         up: JOB_LIFECYCLE_V3,
         down: DROP_JOB_LIFECYCLE_V3,
+    },
+    Migration {
+        version: 4,
+        name: "creator_project_workspace",
+        up: PROJECT_WORKSPACE_V4,
+        down: DROP_PROJECT_WORKSPACE_V4,
     },
 ];
 
@@ -158,38 +171,57 @@ pub fn applied_version(conn: &Connection) -> Result<i64, ResearchError> {
 /// this code does not know is how state gets dropped.
 pub fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<i64, ResearchError> {
     validate(migrations)?;
-    let start = applied_version(conn)?;
     let latest = migrations.iter().map(|m| m.version).max().unwrap_or(0);
-    if start > latest {
-        return Err(ResearchError::UnsupportedSchema {
-            found: start,
-            supported: latest,
-        });
+    loop {
+        let start = applied_version(conn)?;
+        if start > latest {
+            return Err(ResearchError::UnsupportedSchema {
+                found: start,
+                supported: latest,
+            });
+        }
+        let Some(next) = migrations.iter().find(|m| m.version > start) else {
+            return Ok(start);
+        };
+        apply_one(conn, next)?;
     }
-    for m in migrations.iter().filter(|m| m.version > start) {
-        apply_one(conn, m)?;
-    }
-    applied_version(conn)
 }
 
-/// Apply exactly one migration, atomically. On any error the transaction is
-/// rolled back, so a migration that dies half-way leaves the recorded
-/// version untouched and the next open re-runs it from the start.
-fn apply_one(conn: &mut Connection, m: &Migration) -> Result<(), ResearchError> {
+/// Apply exactly one migration, atomically, and report whether this caller was
+/// the one that applied it.
+///
+/// On any error the transaction is rolled back, so a migration that dies
+/// half-way leaves the recorded version untouched and the next open re-runs it
+/// from the start.
+///
+/// **The version is re-read inside this transaction, under the write lock
+/// `BEGIN IMMEDIATE` takes.** Reading it outside is what let two connections
+/// opening the same Creator database at once both decide to apply the same
+/// step, and the loser died on the first statement naming something the winner
+/// had already added — `duplicate column name: duration_us`, which is schema
+/// version 2's `ALTER TABLE`. That is not a theoretical race: two views of one
+/// project is the case this whole schema exists to serve, and the workspace
+/// routes open a connection per request. `BEGIN IMMEDIATE` takes the write lock
+/// before the re-read, so the second applier blocks, then sees the committed
+/// version and skips.
+fn apply_one(conn: &mut Connection, m: &Migration) -> Result<bool, ResearchError> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
-    let outcome = (|| -> Result<(), ResearchError> {
+    let outcome = (|| -> Result<bool, ResearchError> {
+        if applied_version(conn)? >= m.version {
+            return Ok(false);
+        }
         conn.execute_batch(m.up)?;
         conn.execute(
             "INSERT INTO schema_meta(key,value) VALUES(?1,?2)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             rusqlite::params![VERSION_KEY, m.version.to_string()],
         )?;
-        Ok(())
+        Ok(true)
     })();
     match outcome {
-        Ok(()) => {
+        Ok(applied) => {
             conn.execute_batch("COMMIT")?;
-            Ok(())
+            Ok(applied)
         }
         Err(e) => {
             let _ = conn.execute_batch("ROLLBACK");

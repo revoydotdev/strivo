@@ -371,3 +371,21 @@ pub fn editor_store_path() -> PathBuf {
         .join("editor")
         .join("editor.db")
 }
+
+/// Make the Creator database exist before parallel tests race to be its first
+/// writer.
+///
+/// SQLite does **not** invoke the busy handler for a `journal_mode` change, so
+/// two connections becoming the first to open a brand-new file race for the
+/// exclusive lock and the loser gets `SQLITE_BUSY` however long `busy_timeout`
+/// is. This is an invariant of the running server rather than of a test:
+/// `server::serve` calls `creator_schema::ensure_creator_schema()` once, before
+/// it binds, so by the time a request opens the store the file already exists and
+/// is already WAL. `Once` reproduces that: exactly one test is first.
+pub fn ensure_creator_db() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        strivo_research::creator::Store::open(strivo_web::creator_schema::creator_db_path())
+            .expect("creator db opens");
+    });
+}

@@ -64,6 +64,8 @@ mod store_delivery;
 mod store_jobs;
 mod store_sources;
 mod store_time;
+mod store_workspace;
+mod workspace;
 
 #[cfg(test)]
 mod tests;
@@ -86,6 +88,10 @@ pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSIO
 pub use store::Store;
 pub use store_jobs::{MoveJob, NewJob};
 pub use store_time::ClockSegmentRow;
+pub use workspace::{
+    revision_fingerprint, Resolved, Selection, View, ViewState, Workspace, WorkspaceError,
+    WorkspaceResult,
+};
 
 use std::path::Path;
 

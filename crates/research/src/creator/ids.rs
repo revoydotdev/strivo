@@ -86,6 +86,11 @@ typed_ids!(
     /// One immutable revision of an edit. Revisions chain through their
     /// parent, so a project accumulates many without a shared counter.
     CompositionRevisionId,
+    /// One committed action in a project's edit history. Distinct from the
+    /// revision it names: a history entry is *what a person did*, and undo,
+    /// redo, branch and snapshot are all readings of this one chain rather than
+    /// four stores.
+    HistoryId,
     /// A destination-shaped derivative of a composition revision.
     VariantId,
     /// A resolved, reproducible render instruction set.

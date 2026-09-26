@@ -18,6 +18,9 @@
 //! [`observations_rollback`].
 
 mod fixtures;
+mod history;
+mod history_draft;
+mod history_rollback;
 mod identity;
 mod import;
 mod jobs_lifecycle;

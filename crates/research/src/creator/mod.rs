@@ -56,6 +56,7 @@
 
 mod coverage;
 mod entities;
+mod history;
 mod ids;
 mod import;
 mod jobs;
@@ -73,6 +74,7 @@ mod schema;
 mod store;
 mod store_availability;
 mod store_delivery;
+mod store_history;
 mod store_jobs;
 mod store_observations;
 mod store_rights;
@@ -91,9 +93,10 @@ pub use entities::{
     Artifact, Availability, CaptureSession, CompositionRevision, MetricObservation, Project,
     Publication, ReleasePackage, RenderPlan, SourceAsset, TranscriptRevision, Variant,
 };
+pub use history::{Edit, HistoryEntry, HistoryStoreError, TranscriptEdit, TranscriptPatch};
 pub use ids::{
-    ArtifactId, CaptureSessionId, CompositionRevisionId, JobId, MetricObservationId, ProjectId,
-    PublicationId, ReleasePackageId, RenderPlanId, ResearchProjectId, SourceAssetId,
+    ArtifactId, CaptureSessionId, CompositionRevisionId, HistoryId, JobId, MetricObservationId,
+    ProjectId, PublicationId, ReleasePackageId, RenderPlanId, ResearchProjectId, SourceAssetId,
     TranscriptRevisionId, VariantId,
 };
 pub use import::{

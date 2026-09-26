@@ -51,6 +51,7 @@ pub const TABLES: &[&str] = &[
     "creator_stream_events",
     "creator_metric_availability",
     "creator_source_notes",
+    "creator_history",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -86,6 +87,10 @@ const DROP_OBSERVATION_SERIES_V5: &str = include_str!("schema_v5.down.sql");
 const SOURCE_RIGHTS_V6: &str = include_str!("schema_v6.sql");
 
 const DROP_SOURCE_RIGHTS_V6: &str = include_str!("schema_v6.down.sql");
+
+const EDIT_HISTORY_V7: &str = include_str!("schema_v7.sql");
+
+const DROP_EDIT_HISTORY_V7: &str = include_str!("schema_v7.down.sql");
 
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
@@ -136,6 +141,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_source_rights",
         up: SOURCE_RIGHTS_V6,
         down: DROP_SOURCE_RIGHTS_V6,
+    },
+    Migration {
+        version: 7,
+        name: "creator_edit_history",
+        up: EDIT_HISTORY_V7,
+        down: DROP_EDIT_HISTORY_V7,
     },
 ];
 

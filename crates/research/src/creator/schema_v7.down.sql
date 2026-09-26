@@ -1,0 +1,24 @@
+-- Version 7, reversed: the edit history's rows go away.
+--
+-- **The drop destroys the history.** That is the honest cost of reversing the
+-- version that introduced it: there is no prior version of these rows to fall
+-- back to, and reconstructing one would be the second history store this table
+-- exists to avoid being. It is also why
+-- `docs/RESEARCH-PLATFORM-ROADMAP.md:72` permits a destructive `down` only when
+-- rehearsed from a backup, and why the rehearsal copies the file rather than
+-- pointing `down` at a live database.
+--
+-- The composition revisions this history *pointed at* are untouched. A
+-- `creator_composition_revisions` row is a revision in its own right and
+-- version 7 never owned it; dropping the history loses the ordering, not the
+-- edits.
+--
+-- The version line is NOT stamped here. It belongs to `schema::rollback`,
+-- which writes it in the same transaction as this file's statements — a `down`
+-- that stamped it itself would make the line's position depend on which
+-- caller applied the SQL.
+--
+-- `SELECT` nothing. A `down` that reported what it removed would be a second
+-- place summarising the schema.
+
+DROP TABLE IF EXISTS creator_history;

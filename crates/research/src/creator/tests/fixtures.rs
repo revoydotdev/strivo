@@ -69,3 +69,18 @@ pub fn revision(
         created_at: format!("2026-09-07T00:00:0{n}Z"),
     }
 }
+
+/// One immutable transcript revision, attached to a recording.
+pub fn transcript(project_id: ProjectId, source_id: SourceAssetId, n: u32) -> TranscriptRevision {
+    TranscriptRevision {
+        id: TranscriptRevisionId::generate(),
+        project_id,
+        source_asset_id: source_id,
+        revision: n,
+        provider: "whisper".into(),
+        model_version: "large-v3".into(),
+        author: String::new(),
+        body_json: r#"{"segments":[{"words":[{"id":"w7","at":{"start":1000000,"end":1200000},"text":"roughly"}]}]}"#.into(),
+        created_at: format!("2026-09-07T00:00:0{n}Z"),
+    }
+}

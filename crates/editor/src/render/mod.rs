@@ -100,15 +100,16 @@ pub use compile::compile;
 pub use error::RenderError;
 pub use execute::{export, preview, Export, Preview};
 pub use invoke::{
-    audio_chain, clip_args, concat_args, fade_filter, is_passthrough, measure_filter,
-    normalize_args, normalize_filter, parse_measurements, track_filter, video_chain,
-    video_is_passthrough,
+    audio_chain, clip_args, composite_args, concat_args, fade_filter, frames_filter,
+    is_passthrough, layer_offset_exprs, layer_scale_filter, measure_filter, normalize_args,
+    normalize_filter, overlay_clip_args, overlay_layers, parse_measurements, track_filter,
+    video_chain, video_is_passthrough,
 };
 pub use plan::{Clip, CompiledPlan, Cue, Loudness, PlanLayer, Track, Transition};
 pub use request::{
     CaptionMode, CaptionSpec, ClipRequest, Colour, Container, CueCoord, EffectKind, EffectStep,
-    LayerKind, LayerSpec, LoudnessSpec, OutputProfile, RenderRequest, TrackSpec, Transform,
-    TransitionKind, TransitionSpec, VideoIntent,
+    Frames, Interpolation, Keyframe, LayerKind, LayerSpec, LoudnessSpec, OutputProfile,
+    RenderRequest, TrackSpec, Transform, TransitionKind, TransitionSpec, VideoIntent,
 };
 
 pub use crate::time::{Coordinate, IntervalMap, MediaTime, SourceSpan, TimeError};

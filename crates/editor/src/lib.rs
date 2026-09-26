@@ -184,6 +184,16 @@ impl Edl {
 
     /// Insert a B-roll cut at position `at_idx`. If `at_idx` is past
     /// the end, append.
+    ///
+    /// **This is the sequential insert, and it is the boundary format's own
+    /// shape rather than the editor's model.** It lengthens the output by the
+    /// B-roll's length and splits the source around it, which is exactly the
+    /// gap `docs/CREATOR-EDITION-REPORT-2026-09-07.md:96` records. It is kept
+    /// because the store and the SPA still read the `f32`-seconds cut list, and
+    /// changing it would change what an existing draft means. The layered
+    /// spelling — B-roll *placed* over a source that keeps playing — is
+    /// [`RenderRequest::clips`](render::RenderRequest)'s `overlay_at`, and the
+    /// only way to reach a plan.
     pub fn insert_broll(&mut self, at_idx: usize, broll_path: &str, start_sec: f32, end_sec: f32) {
         let cut = Cut {
             start_sec: start_sec.max(0.0),

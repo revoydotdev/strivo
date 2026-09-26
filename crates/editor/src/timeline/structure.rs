@@ -70,6 +70,7 @@ impl Timeline {
             span: respan(&span, right)?,
             fade_in: MediaTime::ZERO,
             fade_out: self.request.clips[clip].fade_out,
+            overlay_at: self.request.clips[clip].overlay_at,
         };
         self.request.clips[clip].span = respan(&span, left)?;
         self.request.clips[clip].fade_out = MediaTime::ZERO;

@@ -35,6 +35,13 @@ pub struct Clip {
     pub span: SourceSpan,
     pub fade_in: MediaTime,
     pub fade_out: MediaTime,
+    /// Drawn over the output timeline rather than consuming it.
+    ///
+    /// The one field that separates the two lanes, and the reason the
+    /// programme's [`CompiledPlan::timeline`] holds one entry where the
+    /// composition has an overlay: the overlay is not a segment of the
+    /// programme, so the source is never split to make room for it.
+    pub overlay: bool,
 }
 
 /// One layer, already sorted into paint order.
@@ -47,6 +54,71 @@ pub struct PlanLayer {
     /// Indices into [`CompiledPlan::clips`], ascending.
     pub clips: Vec<usize>,
     pub visible: bool,
+    /// In output position order, at most one keyframe per instant.
+    pub keyframes: Vec<super::request::Keyframe>,
+}
+
+impl PlanLayer {
+    /// The layer's transform at an output position.
+    ///
+    /// The **one** definition of "where is this layer at `at`", read by the
+    /// executor when it builds the ffmpeg expression and by a caller drawing a
+    /// preview handle. Two implementations of an interpolation are how a
+    /// preview and a render come to disagree about a zoom.
+    ///
+    /// Before the first keyframe and after the last, the nearest one holds;
+    /// between two, `Stepped` holds the earlier value and `Linear` interpolates
+    /// the geometric fields. `z` never interpolates — it is a paint order, and
+    /// half of one is not an order.
+    #[must_use]
+    pub fn transform_at(&self, at: MediaTime) -> super::request::Transform {
+        let Some(first) = self.keyframes.first() else {
+            return self.transform;
+        };
+        if at <= first.at {
+            return first.transform;
+        }
+        let Some((before, after)) = self
+            .keyframes
+            .iter()
+            .zip(self.keyframes.iter().skip(1))
+            .find(|(a, b)| a.at <= at && at < b.at)
+        else {
+            return self.keyframes[self.keyframes.len() - 1].transform;
+        };
+        // The arriving keyframe's own setting decides how it is reached, which
+        // is what `Keyframe::interpolate` says it means.
+        if after.interpolate != super::request::Interpolation::Linear {
+            return before.transform;
+        }
+        let span = (after.at.micros() - before.at.micros()).max(1);
+        let progress = (at.micros() - before.at.micros()) as f64 / span as f64;
+        // Truncated toward zero, which is what ffmpeg does with an integer
+        // option: `overlay`'s `x` is an int, so a 10.67 px slide is drawn at 10.
+        // Rounding here instead would make the model's answer differ from the
+        // pixel by one for every non-integral instant.
+        let lerp = |from: i64, to: i64| -> i64 {
+            let delta = (to - from) as f64 * progress;
+            (from as f64 + delta).trunc() as i64
+        };
+        super::request::Transform {
+            scale: match (before.transform.scale, after.transform.scale) {
+                (Some(from), Some(to)) => Some((
+                    lerp(i64::from(from.0), i64::from(to.0)).max(0) as u32,
+                    lerp(i64::from(from.1), i64::from(to.1)).max(0) as u32,
+                )),
+                // An unscaled keyframe on either end takes the scaled one's
+                // value: a track that names a size once names it throughout.
+                (None, other) => other,
+                (other, None) => other,
+            },
+            offset_px: (
+                lerp(before.transform.offset_px.0, after.transform.offset_px.0),
+                lerp(before.transform.offset_px.1, after.transform.offset_px.1),
+            ),
+            z: before.transform.z,
+        }
+    }
 }
 
 /// One transition, already ordered by output position.
@@ -174,6 +246,8 @@ pub struct CompiledPlan {
     pub video_filter_complex: String,
     /// The output's declared colour handling.
     pub colour: Option<Colour>,
+    /// The output's declared picture shape. `None` = no conform.
+    pub frames: Option<super::request::Frames>,
     /// Resolved cues, in output order.
     pub cues: Vec<Cue>,
     pub caption_mode: super::request::CaptionMode,

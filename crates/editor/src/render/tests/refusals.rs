@@ -49,6 +49,7 @@ fn a_non_integral_speed_output_is_refused_not_rounded() {
         .expect("non-empty"),
         fade_in: MediaTime::ZERO,
         fade_out: MediaTime::ZERO,
+        overlay_at: None,
     };
     let refusal = preview(&req).expect_err("a fractional microsecond is refused");
     assert!(

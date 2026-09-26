@@ -36,6 +36,22 @@ pub struct ClipRequest {
     /// Fades applied inside this clip, on the output timeline.
     pub fade_in: MediaTime,
     pub fade_out: MediaTime,
+    /// Where this clip is drawn on the output timeline, or `None` for the
+    /// programme lane.
+    ///
+    /// `None` means the clip **consumes** the output timeline: it is appended
+    /// to the cut list and the next clip starts where this one ends. `Some`
+    /// means the clip is **placed** — it is drawn over that output position
+    /// and consumes nothing, so the source keeps running underneath it.
+    ///
+    /// That distinction is report item E08's whole content. The legacy cut
+    /// list has no way to say it: an inserted B-roll is one more ordered entry,
+    /// so the output grows by its length and the source is split around it
+    /// (`docs/CREATOR-EDITION-REPORT-2026-09-07.md:96`). An `Option` rather
+    /// than a separate clip type because the two lanes differ in exactly one
+    /// field, and a second struct would be a second timeline.
+    #[serde(default)]
+    pub overlay_at: Option<MediaTime>,
 }
 
 /// What a layer contributes to the picture.
@@ -124,6 +140,66 @@ pub struct LayerSpec {
     /// A layer that draws nothing is a mistake, not a no-op: it is either a
     /// half-finished B-roll layer or a layer whose clips were all deleted.
     pub visible: bool,
+    /// A layer's transform over time. Empty means the layer's static
+    /// [`Self::transform`] for its whole life, which is the ordinary case.
+    #[serde(default)]
+    pub keyframes: Vec<Keyframe>,
+}
+
+/// How a keyframe's value is reached from the one before it.
+///
+/// A stated choice rather than an emergent one: a zoom that eases and a title
+/// that snaps are different artifacts, and "the renderer will work it out" is
+/// how a creator's stepped title card comes back smoothly animated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Interpolation {
+    /// Interpolate the geometric values between the two keyframes.
+    Linear,
+    /// Hold the earlier keyframe's value until the next one.
+    Stepped,
+}
+
+/// One keyframe: the transform held at `at` on the output timeline.
+///
+/// Times are **output** coordinates, so a keyframe lands where the viewer sees
+/// it regardless of what the source underneath is doing. `z` is never
+/// interpolated — it is a paint order, and a paint order halfway between two
+/// layers is not an order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Keyframe {
+    pub at: MediaTime,
+    pub transform: Transform,
+    /// How this keyframe is reached **from the previous one**. The first
+    /// keyframe's own setting is unread, because there is nothing before it.
+    #[serde(default = "linear")]
+    pub interpolate: Interpolation,
+}
+
+fn linear() -> Interpolation {
+    Interpolation::Linear
+}
+
+/// The declared shape of the output picture: frame size, frame rate, pixel
+/// format and timebase.
+///
+/// A declaration rather than something the renderer infers, because "rendered
+/// at *some* resolution" is what report §4.5 calls insufficient
+/// (`docs/CREATOR-EDITION-REPORT-2026-09-07.md:90`): with two sources of
+/// different sizes and rates in one composition there is no single size the
+/// renderer could pick that is not a silent choice. Every field is what a
+/// caller asks ffprobe to confirm afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Frames {
+    pub width: u32,
+    pub height: u32,
+    /// Nominal frame rate as an exact rational, e.g. `24000/1001`.
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub pixel_format: String,
+    /// The output frame timebase, e.g. `1/1000`.
+    pub timebase_num: u32,
+    pub timebase_den: u32,
 }
 
 /// How two overlapping layers meet. Named rather than implied, because a
@@ -363,6 +439,10 @@ pub struct VideoIntent {
     pub filter_complex: String,
     /// Declared output colour handling. `None` = carry through.
     pub colour: Option<Colour>,
+    /// The declared output picture shape. `None` = no conform, so the output
+    /// keeps the base layer's own size and rate.
+    #[serde(default)]
+    pub frames: Option<Frames>,
 }
 
 /// Everything the compiler is given. One value, built by one function, handed

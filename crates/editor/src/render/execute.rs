@@ -128,7 +128,8 @@ fn execute(
     let _scratch = attempt::Scratch(scratch.clone());
     std::fs::create_dir_all(&scratch).map_err(io)?;
 
-    let mut clips = Vec::with_capacity(plan.clips.len());
+    let mut rendered: Vec<std::path::PathBuf> = Vec::with_capacity(plan.clips.len());
+    let mut programme = Vec::with_capacity(plan.clips.len());
     for (index, clip) in plan.clips.iter().enumerate() {
         let entry = edl.cuts.get(clip.cut).ok_or_else(|| {
             io(format!(
@@ -141,18 +142,31 @@ fn execute(
             CutKind::Broll { broll_path } => broll_path.clone(),
         };
         let path = scratch.join(format!("clip_{index:03}.mkv"));
-        let args = invoke::clip_args(plan, clip, &source, &path);
-        run(&args)?;
-        clips.push(path);
+        if clip.overlay {
+            // Video only. The programme's audio is never re-run, split or
+            // re-encoded around an insert: the overlay is composited over the
+            // picture and contributes no signal of its own.
+            run(&invoke::overlay_clip_args(plan, clip, &source, &path))?;
+        } else {
+            run(&invoke::clip_args(plan, clip, &source, &path))?;
+            programme.push(path.clone());
+        }
+        rendered.push(path);
     }
 
     let list_path = scratch.join("concat.txt");
-    let listing: String = clips
+    let listing: String = programme
         .iter()
         .map(|p| format!("file '{}'\n", p.display()))
         .collect();
     std::fs::write(&list_path, listing).map_err(io)?;
-    run(&invoke::concat_args(plan, &list_path, output, subtitle))?;
+    if plan.clips.iter().all(|c| !c.overlay) {
+        run(&invoke::concat_args(plan, &list_path, output, subtitle))?;
+    } else {
+        let borrowed: Vec<&Path> = rendered.iter().map(std::path::PathBuf::as_path).collect();
+        let args = invoke::composite_args(plan, &list_path, &borrowed, output, subtitle)?;
+        run(&args)?;
+    }
 
     if let Some(target) = &plan.loudness {
         let measured = measure(output, target)?;

@@ -33,19 +33,44 @@ fn distinct<'a>(kind: &'static str, ids: impl Iterator<Item = &'a str>) -> Resul
 pub(super) fn compile_layers(
     req: &RenderRequest,
     placed: &BTreeMap<usize, usize>,
+    overlay: &[bool],
 ) -> Result<Vec<PlanLayer>, RenderError> {
     distinct("layers", req.layers.iter().map(|l| l.id.as_str()))?;
     let mut layers: Vec<PlanLayer> = Vec::with_capacity(req.layers.len());
     for layer in &req.layers {
         let mut clips = Vec::with_capacity(layer.clips.len());
         for cut in &layer.clips {
-            clips.push(*placed.get(cut).ok_or_else(|| RenderError::UnknownCut {
+            let clip = *placed.get(cut).ok_or_else(|| RenderError::UnknownCut {
                 owner: format!("layer {:?}", layer.id),
                 cut: *cut,
                 placed: req.clips.len(),
-            })?);
+            })?;
+            // A layer drawn over the programme must be *placed*. Without the
+            // placement it falls back to the programme lane, where it would
+            // lengthen the output and split the bed — the exact defect this
+            // lane exists to refuse, reached by forgetting one field.
+            if layer.kind != super::request::LayerKind::Video && !overlay[clip] {
+                return Err(RenderError::UnplacedLayerClip {
+                    layer: layer.id.clone(),
+                    cut: *cut,
+                });
+            }
+            clips.push(clip);
         }
         clips.sort_unstable();
+        let mut keyframes = layer.keyframes.clone();
+        // Ordered here, not at the point of use, so the plan carries one order.
+        keyframes.sort_by_key(|k| k.at);
+        if let Some(duplicate) = keyframes
+            .windows(2)
+            .find(|w| w[0].at == w[1].at)
+            .map(|w| w[0].at)
+        {
+            return Err(RenderError::DuplicateKeyframe {
+                layer: layer.id.clone(),
+                at: duplicate.micros(),
+            });
+        }
         layers.push(PlanLayer {
             id: layer.id.clone(),
             kind: layer.kind,
@@ -53,6 +78,7 @@ pub(super) fn compile_layers(
             colour: layer.colour,
             clips,
             visible: layer.visible,
+            keyframes,
         });
     }
     // Paint order is `(z, id)`. The id tiebreak is what makes two layers at
@@ -106,6 +132,7 @@ pub(super) fn compile_transitions(
 pub(super) fn compile_tracks(
     req: &RenderRequest,
     placed: &BTreeMap<usize, usize>,
+    overlay: &[bool],
 ) -> Result<Vec<Track>, RenderError> {
     distinct("tracks", req.tracks.iter().map(|t| t.label.as_str()))?;
     let mut routed: BTreeSet<usize> = BTreeSet::new();
@@ -121,6 +148,15 @@ pub(super) fn compile_tracks(
                 cut: *cut,
                 placed: req.clips.len(),
             })?;
+            // An overlay is composited as **video only** — the executor renders
+            // it with no audio stream at all, so the source underneath keeps
+            // playing without interruption. Routing one onto a bus would
+            // promise its audio in the mix and deliver a silent track, which is
+            // the false-success class this compiler exists to refuse. (E08's
+            // `Must NOT`: the source audio is never re-run under an insert.)
+            if overlay[clip] {
+                return Err(RenderError::OverlayOnAudioTrack { cut: *cut });
+            }
             if !routed.insert(*cut) {
                 return Err(RenderError::ClipRoutedTwice { cut: *cut });
             }
@@ -139,8 +175,8 @@ pub(super) fn compile_tracks(
             clips,
         });
     }
-    for requested in &req.clips {
-        if !routed.contains(&requested.cut) {
+    for (index, requested) in req.clips.iter().enumerate() {
+        if !overlay[index] && !routed.contains(&requested.cut) {
             return Err(RenderError::UnroutedClip { cut: requested.cut });
         }
     }

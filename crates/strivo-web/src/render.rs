@@ -186,6 +186,7 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
             colour: Default::default(),
             clips: (0..edl.cuts.len()).collect(),
             visible: true,
+            keyframes: Vec::new(),
         }],
         transitions: Vec::new(),
         tracks: vec![TrackSpec {
@@ -222,6 +223,7 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
         video: VideoIntent {
             filter_complex: video_filter_complex,
             colour: None,
+            frames: None,
         },
         container: Container {
             extension: "mkv".into(),
@@ -346,6 +348,7 @@ fn clips_from_edl(edl: &Edl) -> Result<Vec<ClipRequest>, String> {
                 span,
                 fade_in,
                 fade_out,
+                overlay_at: None,
             })
         })
         .collect()

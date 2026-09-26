@@ -43,6 +43,7 @@ fn clip(cut: usize, start: i64, end: i64) -> ClipRequest {
         span: span(start, end),
         fade_in: MediaTime::ZERO,
         fade_out: MediaTime::ZERO,
+        overlay_at: None,
     }
 }
 
@@ -71,6 +72,7 @@ pub fn request() -> RenderRequest {
             colour: Colour::default(),
             clips: vec![0, 1],
             visible: true,
+            keyframes: Vec::new(),
         }],
         transitions: vec![TransitionSpec {
             id: "cut-1".into(),
@@ -118,6 +120,7 @@ pub fn request() -> RenderRequest {
         video: VideoIntent {
             filter_complex: "[0:v]eq=brightness=0.0[vout]".into(),
             colour: None,
+            frames: None,
         },
         container: Container {
             extension: "mkv".into(),

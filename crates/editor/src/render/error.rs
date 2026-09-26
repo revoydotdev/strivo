@@ -37,6 +37,37 @@ pub enum RenderError {
     UnroutedClip { cut: usize },
     /// One cut routed to two buses.
     ClipRoutedTwice { cut: usize },
+    /// A layer drawn over the programme whose clip was never placed.
+    ///
+    /// An unplaced clip falls back to the programme lane, where it would
+    /// lengthen the output and split the bed around itself — the exact defect
+    /// the overlay lane exists to end, reached by leaving one field unset.
+    UnplacedLayerClip { layer: String, cut: usize },
+    /// A layer placed over an output the composition does not reach.
+    ///
+    /// Refused rather than pulled back inside the output. Clamping would render
+    /// something other than the edit, and report no error for it.
+    OverlayOutOfRange {
+        cut: usize,
+        at: i64,
+        end: i64,
+        output: i64,
+    },
+    /// An overlay clip routed to an audio track. Overlays are composited video
+    /// only — the source keeps playing under them uninterrupted — so this
+    /// would promise an audio contribution and deliver a silent track.
+    OverlayOnAudioTrack { cut: usize },
+    /// Two keyframes on one layer at one output instant. Which one wins is not
+    /// a question the plan may leave to a renderer's expression evaluator.
+    DuplicateKeyframe { layer: String, at: i64 },
+    /// A caller's video graph that does not read `[0:v]`, so the executor
+    /// cannot relabel it and thread the overlay composite through it.
+    UnlabelledVideoGraph,
+    /// Overlay layers together with video effect steps. The effects are joined
+    /// onto the picture by a label the plan does not own, and guessing one
+    /// would drop either the overlay or the effect while reporting success.
+    /// Refused rather than mis-wired, like [`Self::BurnOverVideoGraph`].
+    OverlaysOverVideoEffects,
     /// A transition that runs past the end of the output.
     TransitionOutOfRange {
         id: String,
@@ -119,6 +150,36 @@ impl fmt::Display for RenderError {
                 write!(f, "cut {cut} is on no track, so it would render silent")
             }
             Self::ClipRoutedTwice { cut } => write!(f, "cut {cut} is routed to two buses"),
+            Self::UnplacedLayerClip { layer, cut } => write!(
+                f,
+                "layer {layer:?} draws cut {cut} over the programme but never placed it, \
+                 so it would consume the output timeline and split the source"
+            ),
+            Self::OverlayOutOfRange {
+                cut,
+                at,
+                end,
+                output,
+            } => write!(
+                f,
+                "cut {cut} is placed at {at}..{end} us, past the {output} us output"
+            ),
+            Self::OverlayOnAudioTrack { cut } => write!(
+                f,
+                "cut {cut} is a layer overlay and renders video only, so it cannot be \
+                 routed to an audio track"
+            ),
+            Self::DuplicateKeyframe { layer, at } => {
+                write!(f, "layer {layer:?} has two keyframes at {at} us")
+            }
+            Self::UnlabelledVideoGraph => f.write_str(
+                "the caller's video filter graph does not read [0:v], so the executor \
+                 cannot relabel it and composite the overlays through it",
+            ),
+            Self::OverlaysOverVideoEffects => f.write_str(
+                "video effect steps cannot be applied over composited overlay layers \
+                 yet: the graph's output label has to be threaded into the effect",
+            ),
             Self::TransitionOutOfRange {
                 id,
                 at,

@@ -10,7 +10,7 @@
 //! ES256; the entitlement gate verifies it on every read.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,14 @@ pub struct Licence {
 }
 
 impl Licence {
+    /// Whether the *record* claims a paid tier that has not expired.
+    ///
+    /// **Not the gate's answer.** This reads two editable fields of an
+    /// ordinary file and trusts both, so a hand-written
+    /// `{"tier":"pro","expires_at":null,"token":""}` returns `true`. It
+    /// survives as a record-shape predicate; entitlement is decided by
+    /// [`crate::licence::reconnect::classify`], which also verifies the
+    /// signature.
     pub fn is_entitled(&self) -> bool {
         matches!(self.tier, Tier::Pro | Tier::Trial) && !self.is_expired()
     }
@@ -80,30 +88,52 @@ impl LicenceCache {
 
     pub fn load() -> Result<Option<Licence>> {
         let path = Self::path();
+        Ok(Self::load_at(&path))
+    }
+
+    /// [`load`](Self::load) against an explicit path, collapsing the two
+    /// failure modes to `None`. A caller that must tell "no file" from
+    /// "unparsable file" — the reconnection classifier, which refuses both
+    /// but reports them differently — reads the path itself.
+    pub fn load_at(path: &Path) -> Option<Licence> {
         if !path.exists() {
-            return Ok(None);
+            return None;
         }
-        let raw = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let lic: Licence =
-            serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-        Ok(Some(lic))
+        let raw = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&raw).ok()
     }
 
     pub fn save(lic: &Licence) -> Result<()> {
-        let path = Self::path();
+        Self::save_at(&Self::path(), lic)
+    }
+
+    /// [`save`](Self::save) against an explicit path, written atomically:
+    /// a sibling temp file is written and then renamed over the target, so
+    /// an interruption leaves either the previous complete cache or the new
+    /// one — never a truncated file that the next read has to guess about.
+    pub fn save_at(path: &Path, lic: &Licence) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).ok();
         }
         let raw = serde_json::to_vec_pretty(lic)?;
-        fs::write(&path, raw).with_context(|| format!("write {}", path.display()))?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, raw).with_context(|| format!("write {}", tmp.display()))?;
+        // `rename` within a directory is atomic on every platform this
+        // ships to; a failure here leaves the old file intact because the
+        // temp file was never the target.
+        fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))?;
         Ok(())
     }
 
     /// Remove the cache (deactivation / "log out" flow). Idempotent.
     pub fn clear() -> Result<()> {
-        let path = Self::path();
+        Self::clear_at(&Self::path())
+    }
+
+    /// [`clear`](Self::clear) against an explicit path.
+    pub fn clear_at(path: &Path) -> Result<()> {
         if path.exists() {
-            fs::remove_file(&path).with_context(|| format!("rm {}", path.display()))?;
+            fs::remove_file(path).with_context(|| format!("rm {}", path.display()))?;
         }
         Ok(())
     }

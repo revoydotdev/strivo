@@ -328,20 +328,6 @@ pub async fn run_with_plugins_at(
 
     tracing::info!("StriVo daemon starting");
 
-    // Strivo Pro: kick off the 72h licence-refresh loop — but only when
-    // STRIVO_LICENCE_URL is actually configured. The licence backend is on
-    // an explicit release hold (README's "Release boundary"; ADR 0002 /
-    // CE06), and every edition shares this entrypoint, so a default PVR (or
-    // Creator) install with the env var unset spawns no task and makes no
-    // network call at all, rather than an idle-but-live one. Handle is
-    // intentionally leaked when it does spawn — the task lives for the
-    // daemon's lifetime.
-    let _licence_refresh =
-        crate::licence::spawn_refresh_loop(crate::licence::DEFAULT_REFRESH_INTERVAL);
-    if _licence_refresh.is_some() {
-        tracing::info!("licence backend configured; refresh loop started");
-    }
-
     // Write PID file
     let pid_path = ipc::pid_path();
     std::fs::write(&pid_path, std::process::id().to_string())?;
@@ -354,6 +340,22 @@ pub async fn run_with_plugins_at(
     tracing::info!("Config loaded");
     for w in config.config_warnings() {
         tracing::warn!("config: {w}");
+    }
+
+    // Strivo Pro: kick off the 72h licence-reconnect loop — only when the
+    // operator set `[licence] cache_reconnection` *and* STRIVO_LICENCE_URL is
+    // configured. After the config load, because the first is a config field.
+    // The licence backend is on an explicit release hold (README's "Release
+    // boundary"; ADR 0002 / CE06), and every edition shares this entrypoint,
+    // so a default PVR (or Creator) install spawns no task and makes no
+    // network call at all, rather than an idle-but-live one. Behaviourally
+    // unchanged by moving it here: the loop's first tick is one interval
+    // away, so it was never racing startup. Handle is intentionally leaked
+    // when it does spawn — the task lives for the daemon's lifetime.
+    let _licence_refresh =
+        crate::licence::spawn_refresh_loop(crate::licence::DEFAULT_REFRESH_INTERVAL);
+    if _licence_refresh.is_some() {
+        tracing::info!("licence cache reconnection enabled; reconnect loop started");
     }
 
     // W2 phase 2 — init plugins inside the daemon process. Plugins

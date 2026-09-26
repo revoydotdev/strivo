@@ -5,22 +5,26 @@
 //!
 //! Decision order:
 //!
-//!   1. **Debug-only override** — `STRIVO_DEV_UNLOCK_ALL=1` can enable
+//!   1. **Not a Pro capability** — always allowed.
+//!   2. **Debug-only override** — `STRIVO_DEV_UNLOCK_ALL=1` can enable
 //!      development tests in a debug build.
-//!   2. **Default** — Creator/Pro functionality is unavailable. The former
-//!      licence-cache path is deliberately disabled until the product has a
-//!      reviewed, secure release and purchase design.
+//!   3. **A verified, in-date licence cache** — only when the operator has
+//!      opted in with `[licence] cache_reconnection`, which is off by
+//!      default. See [`crate::licence::reconnect`]; the entitlement hold
+//!      itself is unchanged, and a default install takes this branch to a
+//!      `false` without reading a file.
 //!
 //! The set of "Pro" plugin names is not core's to know — core has no
 //! notion of what a plugin *is*, let alone which ones cost money. Both
 //! [`is_pro_plugin`] and [`is_entitled`] take that set as a parameter:
 //! the caller that composes plugins into the running app (the Creator
-//! Edition web server) supplies its own Pro plugin slugs; the PVR
-//! edition passes an empty set (or never calls in on a code path it
-//! doesn't compile), so nothing is Pro-gated there. See ADR 0001 (CE06):
-//! entitlement is a Creator Edition product concept, and core's gate
-//! stays generic over *which* plugins that means without naming any of
-//! them.
+//! Edition web server) supplies it, derived from the capability descriptor
+//! by `capabilities::pro_slugs()`; the PVR edition passes an empty set (or
+//! never calls in on a code path it doesn't compile), so nothing is
+//! Pro-gated there. See ADR 0001 (CE06): entitlement is a Creator Edition
+//! product concept, and core's gate stays generic over *which* plugins that
+//! means without naming any of them. There is no second list of Pro names
+//! anywhere in the tree, and adding one is the drift todo 20 removed.
 
 pub fn is_pro_plugin(name: &str, pro_plugins: &[&str]) -> bool {
     pro_plugins.iter().any(|p| p.eq_ignore_ascii_case(name))
@@ -28,7 +32,7 @@ pub fn is_pro_plugin(name: &str, pro_plugins: &[&str]) -> bool {
 
 /// Returns true if `plugin` should be allowed to load / be exposed in
 /// the UI. Free plugins (not in `pro_plugins`) are always allowed; Pro
-/// plugins require a valid licence cache or the dev override.
+/// plugins require the dev override or a verified licence cache.
 pub fn is_entitled(plugin: &str, pro_plugins: &[&str]) -> bool {
     if !is_pro_plugin(plugin, pro_plugins) {
         return true;
@@ -36,14 +40,19 @@ pub fn is_entitled(plugin: &str, pro_plugins: &[&str]) -> bool {
     if dev_unlock() {
         return true;
     }
-    false
+    super::reconnect::grant()
 }
 
 /// Whole-app entitlement (used by the upgrade card, the licence
 /// status route, etc.) — true iff *any* Pro feature is unlocked on
 /// this machine right now.
 pub fn entitled() -> bool {
-    dev_unlock()
+    if dev_unlock() {
+        return true;
+    }
+    // Same answer the per-capability gate reaches, so the upgrade card and
+    // the 402 can never disagree about whether this install is paid.
+    super::reconnect::grant()
 }
 
 fn dev_unlock() -> bool {

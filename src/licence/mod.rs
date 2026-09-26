@@ -22,9 +22,11 @@ pub mod cache;
 pub mod client;
 pub mod gate;
 pub mod machine_id;
+pub mod reconnect;
 pub mod verify;
 
 pub use cache::{Licence, LicenceCache, Tier};
 pub use client::{spawn_refresh_loop, DEFAULT_REFRESH_INTERVAL};
 pub use gate::is_entitled;
 pub use machine_id::machine_id;
+pub use reconnect::{set_enabled as set_cache_reconnection, RefreshOutcome};

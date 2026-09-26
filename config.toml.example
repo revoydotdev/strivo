@@ -211,6 +211,22 @@
 # # breaker.
 # disk_budget_reserved_gb = 0
 
+# ─── Creator Edition licence cache ─────────────────────────────────────────
+# OFF, and it must stay off in a shipped install. The Creator Edition and its
+# licence backend are on an explicit release hold — see
+# docs/LICENCE-BACKEND-DEPLOY.md for the four conditions that must be met
+# before any of this is reopened.
+#
+# Setting the flag does not re-enable activation, trial or purchase: those
+# routes stay unavailable. It only lets an *already verified, in-date,
+# machine-bound* licence cache unlock Pro capabilities, and lets the daemon
+# reconnect an expired one in the background. A cache is honoured only after
+# its ES256 signature, issuer, machine binding, tier and expiry have been
+# checked, so a hand-edited licence.json unlocks nothing.
+#
+# [licence]
+# cache_reconnection = false
+
 # ─── Desktop / webhook notifications ───────────────────────────────────────
 # What state changes the daemon fires a notify-rust desktop banner (and
 # optionally an outbound webhook) for. Defaults err on the side of

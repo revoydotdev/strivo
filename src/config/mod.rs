@@ -92,6 +92,13 @@ pub struct AppConfig {
     #[serde(default)]
     pub monitor_limits: MonitorLimits,
 
+    /// Creator Edition licence-cache settings. Read by the entitlement
+    /// gate, which `load()` publishes to
+    /// [`crate::licence::reconnect`] — see that module for why the flag is
+    /// consulted there rather than plumbed through every gate call site.
+    #[serde(default)]
+    pub licence: LicenceConfig,
+
     /// Per-plugin enable flags surfaced on Settings → Plugins. Keyed by
     /// plugin name; missing entries default to enabled=true. The runtime
     /// consults this when deciding whether to schedule a plugin's RPC
@@ -780,10 +787,31 @@ impl Default for AppConfig {
             web: WebConfig::default(),
             notifications: NotificationsConfig::default(),
             monitor_limits: MonitorLimits::default(),
+            licence: LicenceConfig::default(),
             plugin_toggles: BTreeMap::new(),
             config_path: None,
         }
     }
+}
+
+/// Creator Edition licence-cache settings.
+///
+/// One flag, and it is off. The licence backend is on an explicit release
+/// hold (`docs/LICENCE-BACKEND-DEPLOY.md`), so nothing here may be `true` in
+/// a shipped install: no activation, no trial, no purchase, and no cached
+/// key that a user can paste in. Turning this on is an operator action
+/// taken after the four conditions in that document are met.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LicenceConfig {
+    /// Let a *verified, in-date, machine-bound* licence cache unlock Pro
+    /// capabilities, and let the background loop reconnect an expired one.
+    ///
+    /// Off by default, and off in a build whose licence backend has not been
+    /// configured. It does not re-enable activation, trial or purchase: the
+    /// routes that would accept a new key remain unavailable
+    /// (`crates/strivo-web/src/routes/licence.rs`, `backend_url() -> None`).
+    #[serde(default)]
+    pub cache_reconnection: bool,
 }
 
 impl AppConfig {
@@ -974,6 +1002,19 @@ impl AppConfig {
     }
 
     pub fn load(path: Option<&std::path::Path>) -> Result<Self> {
+        let config = Self::load_inner(path)?;
+        // Published here rather than at each call site because the flag is
+        // read by a process-global the entitlement gate consults, and there
+        // are a dozen-plus `load` callers (daemon, serve, and a long tail of
+        // CLI subcommands) — a per-call-site wiring is a wiring that some
+        // process forgets, and a forgotten one is a *fail-open* gate.
+        // `load` already has side effects (quarantine, first-run save), so
+        // this adds no new surprise to the contract.
+        crate::licence::reconnect::set_enabled(config.licence.cache_reconnection);
+        Ok(config)
+    }
+
+    fn load_inner(path: Option<&std::path::Path>) -> Result<Self> {
         let path = path
             .map(|p| p.to_path_buf())
             .unwrap_or_else(Self::config_path);

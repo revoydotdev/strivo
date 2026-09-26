@@ -22,6 +22,37 @@ struct Header {
     typ: Option<String>,
 }
 
+/// Why a token was refused.
+///
+/// Split out because "these dates have run out" and "this token is not
+/// signed for us" are different facts with different consequences: the
+/// first is renewable by a refresh, the second never is. The reconnection
+/// classifier needs the distinction, and a caller that only has an
+/// `anyhow::Error` would have to sniff its message for the word "expired".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The token's own `exp`, or the licence expiry it carries, has passed.
+    Expired,
+    /// Anything else: bad signature, wrong issuer, wrong machine, unsupported
+    /// tier, malformed JWT.
+    Untrusted,
+}
+
+/// A verification failure, with the reason and the detail kept apart.
+#[derive(Debug)]
+pub struct VerifyError {
+    pub kind: Refusal,
+    pub detail: String,
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
 /// Verify an activation token against the configured public key, issuer,
 /// machine binding, expiry, and tier.
 pub fn verify_token(token: &str) -> Result<VerifiedClaims> {
@@ -42,51 +73,89 @@ pub fn verify_token_with(
     expected_issuer: &str,
     expected_machine: &str,
 ) -> Result<VerifiedClaims> {
+    verify_token_detailed(token, public_key_pem, expected_issuer, expected_machine)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// [`verify_token_with`] with the refusal reason preserved instead of
+/// flattened into a message. Every check that fails for a reason other than
+/// expiry is [`Refusal::Untrusted`].
+pub fn verify_token_detailed(
+    token: &str,
+    public_key_pem: &str,
+    expected_issuer: &str,
+    expected_machine: &str,
+) -> std::result::Result<VerifiedClaims, VerifyError> {
+    let untrusted = |detail: &str| VerifyError {
+        kind: Refusal::Untrusted,
+        detail: detail.to_string(),
+    };
+    let expired = |detail: &str| VerifyError {
+        kind: Refusal::Expired,
+        detail: detail.to_string(),
+    };
+    let malformed = |e: anyhow::Error| VerifyError {
+        kind: Refusal::Untrusted,
+        detail: format!("{e:#}"),
+    };
+
     let mut parts = token.split('.');
-    let header_part = parts.next().context("JWT header missing")?;
-    let claims_part = parts.next().context("JWT claims missing")?;
-    let signature_part = parts.next().context("JWT signature missing")?;
+    let header_part = parts
+        .next()
+        .ok_or_else(|| untrusted("JWT header missing"))?;
+    let claims_part = parts
+        .next()
+        .ok_or_else(|| untrusted("JWT claims missing"))?;
+    let signature_part = parts
+        .next()
+        .ok_or_else(|| untrusted("JWT signature missing"))?;
     if parts.next().is_some() {
-        bail!("JWT has too many segments");
+        return Err(untrusted("JWT has too many segments"));
     }
 
     let decoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let header: Header =
-        serde_json::from_slice(&decoder.decode(header_part).context("decode JWT header")?)
-            .context("parse JWT header")?;
+    let header: Header = serde_json::from_slice(
+        &decoder
+            .decode(header_part)
+            .map_err(|e| malformed(anyhow::Error::new(e).context("decode JWT header")))?,
+    )
+    .map_err(|e| malformed(anyhow::Error::new(e).context("parse JWT header")))?;
     if header.alg != "ES256" || header.typ.as_deref().is_some_and(|typ| typ != "JWT") {
-        bail!("unsupported JWT header");
+        return Err(untrusted("unsupported JWT header"));
     }
 
-    let key_der = decode_public_key(public_key_pem)?;
+    let key_der = decode_public_key(public_key_pem).map_err(|e| untrusted(&format!("{e:#}")))?;
     let signature = decoder
         .decode(signature_part)
-        .context("decode JWT signature")?;
+        .map_err(|e| malformed(anyhow::Error::new(e).context("decode JWT signature")))?;
     let signing_input = format!("{header_part}.{claims_part}");
     UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, key_der)
         .verify(signing_input.as_bytes(), &signature)
-        .map_err(|_| anyhow::anyhow!("invalid JWT signature"))?;
+        .map_err(|_| untrusted("invalid JWT signature"))?;
 
-    let claims: VerifiedClaims =
-        serde_json::from_slice(&decoder.decode(claims_part).context("decode JWT claims")?)
-            .context("parse JWT claims")?;
+    let claims: VerifiedClaims = serde_json::from_slice(
+        &decoder
+            .decode(claims_part)
+            .map_err(|e| malformed(anyhow::Error::new(e).context("decode JWT claims")))?,
+    )
+    .map_err(|e| malformed(anyhow::Error::new(e).context("parse JWT claims")))?;
     if claims.iss.trim_end_matches('/') != expected_issuer.trim_end_matches('/') {
-        bail!("JWT issuer mismatch");
+        return Err(untrusted("JWT issuer mismatch"));
     }
     if claims.sub != expected_machine {
-        bail!("JWT machine binding mismatch");
+        return Err(untrusted("JWT machine binding mismatch"));
     }
     if claims.exp <= chrono::Utc::now().timestamp() {
-        bail!("JWT expired");
+        return Err(expired("JWT expired"));
     }
     if !matches!(claims.tier.as_str(), "pro" | "trial") {
-        bail!("JWT carries unsupported tier");
+        return Err(untrusted("JWT carries unsupported tier"));
     }
     if let Some(expiry) = &claims.licence_exp {
-        let expiry =
-            chrono::DateTime::parse_from_rfc3339(expiry).context("invalid licence_exp claim")?;
+        let expiry = chrono::DateTime::parse_from_rfc3339(expiry)
+            .map_err(|e| malformed(anyhow::Error::new(e).context("invalid licence_exp claim")))?;
         if expiry <= chrono::Utc::now() {
-            bail!("licence expired");
+            return Err(expired("licence expired"));
         }
     }
     Ok(claims)

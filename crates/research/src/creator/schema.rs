@@ -47,6 +47,9 @@ pub const TABLES: &[&str] = &[
     "creator_jobs",
     "creator_job_transitions",
     "creator_workspace",
+    "creator_viewer_samples",
+    "creator_stream_events",
+    "creator_metric_availability",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -74,6 +77,10 @@ const DROP_JOB_LIFECYCLE_V3: &str = include_str!("schema_v3.down.sql");
 const PROJECT_WORKSPACE_V4: &str = include_str!("schema_v4.sql");
 
 const DROP_PROJECT_WORKSPACE_V4: &str = include_str!("schema_v4.down.sql");
+
+const OBSERVATION_SERIES_V5: &str = include_str!("schema_v5.sql");
+
+const DROP_OBSERVATION_SERIES_V5: &str = include_str!("schema_v5.down.sql");
 
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
@@ -108,6 +115,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_project_workspace",
         up: PROJECT_WORKSPACE_V4,
         down: DROP_PROJECT_WORKSPACE_V4,
+    },
+    Migration {
+        version: 5,
+        name: "creator_observation_series",
+        up: OBSERVATION_SERIES_V5,
+        down: DROP_OBSERVATION_SERIES_V5,
     },
 ];
 

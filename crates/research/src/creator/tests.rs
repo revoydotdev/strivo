@@ -11,7 +11,11 @@
 //! [`workspace`], with what it refuses in [`workspace_malformed`] and what
 //! reversing it costs in [`workspace_rollback`]. The OBS multitrack
 //! import — track identification and the sample alignment that keeps the stems
-//! together — is in [`multitrack`].
+//! together — is in [`multitrack`]. The synchronised stream events and viewer
+//! samples — the observation series, their per-sample uncertainty and the
+//! coverage figure they produce — are in [`observations`], what they refuse in
+//! [`observations_malformed`], and what reversing their migration costs in
+//! [`observations_rollback`].
 
 mod fixtures;
 mod identity;
@@ -20,6 +24,9 @@ mod jobs_lifecycle;
 mod malformed;
 mod migration;
 mod multitrack;
+mod observations;
+mod observations_malformed;
+mod observations_rollback;
 mod readiness;
 mod rollback;
 mod time_clock;

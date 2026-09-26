@@ -28,10 +28,13 @@ fn the_version_four_rollback_destroys_the_workspace_and_nothing_else() {
 
     {
         let store = Store::open(&db).expect("store opens");
-        assert_eq!(
-            store.schema_version().expect("version"),
-            4,
-            "this database is at version 4"
+        // At least 4, not exactly 4: this rehearses *version 4's* reverse
+        // step, and later migrations stack on top of it. Asserting `== 4`
+        // made this the first thing any future migration broke, which is a
+        // test about the build's version rather than about this down file.
+        assert!(
+            store.schema_version().expect("version") >= 4,
+            "a version-4 rehearsal needs a database at version 4 or later"
         );
         let p = project("streamer");
         store.insert_project(&p).expect("project inserted");

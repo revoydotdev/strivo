@@ -54,6 +54,7 @@
 //! them; the correspondence is pinned by a test that drives the real
 //! `PipelineRegistry`. See [`jobs`]'s module doc for the full argument.
 
+mod coverage;
 mod entities;
 mod ids;
 mod import;
@@ -62,21 +63,28 @@ mod multitrack;
 mod multitrack_align;
 mod multitrack_model;
 mod multitrack_session;
+mod observation_error;
+mod observations;
 mod readiness;
 mod relink;
 mod render_plan;
 mod schema;
 mod store;
+mod store_availability;
 mod store_delivery;
 mod store_jobs;
+mod store_observations;
 mod store_sources;
 mod store_time;
 mod store_workspace;
+mod stream_event;
+mod viewer_sample;
 mod workspace;
 
 #[cfg(test)]
 mod tests;
 
+pub use coverage::{Coverage, CoverageGap, GapReason};
 pub use entities::{
     Artifact, Availability, CaptureSession, CompositionRevision, MetricObservation, Project,
     Publication, ReleasePackage, RenderPlan, SourceAsset, TranscriptRevision, Variant,
@@ -104,6 +112,11 @@ pub use multitrack_session::{
     read_multitrack_session, restore_multitrack_session, GapAttributes, Placement, RestoredSession,
     SessionAttributes, TrackAttributes,
 };
+pub use observation_error::ObservationError;
+pub use observations::{
+    CaptureWindow, MetricAvailability, MetricName, SamplePosition, UnavailableReason, MAX_BATCH,
+    MAX_LABEL_BYTES, MAX_METRIC_BYTES,
+};
 pub use readiness::{
     Blocker, FrameTiming, IngestStep, ProbeReport, Readiness, ReadinessError, StepState, Tool,
     Toolchain, VideoStream,
@@ -113,7 +126,10 @@ pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};
 pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 pub use store::Store;
 pub use store_jobs::{MoveJob, NewJob};
+pub use store_observations::CountedTable;
 pub use store_time::ClockSegmentRow;
+pub use stream_event::{EventKind, RawStreamEvent, StreamEvent};
+pub use viewer_sample::{RawViewerSample, ViewerSample};
 pub use workspace::{
     revision_fingerprint, Resolved, Selection, View, ViewState, Workspace, WorkspaceError,
     WorkspaceResult,

@@ -552,10 +552,8 @@ fn dag_payload(
                     })
                 })
                 .collect();
-            let runnable = !nodes.is_empty()
-                && nodes
-                    .iter()
-                    .all(|n| n["runnable"].as_bool() == Some(true));
+            let runnable =
+                !nodes.is_empty() && nodes.iter().all(|n| n["runnable"].as_bool() == Some(true));
             json!({
                 "id": p.id,
                 "name": p.name,
@@ -569,7 +567,6 @@ fn dag_payload(
         .collect();
     json!({ "pipelines": payload })
 }
-
 
 #[cfg(feature = "creator")]
 async fn pipeline_runs(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {

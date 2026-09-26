@@ -475,8 +475,7 @@ async fn pipelines_dag_reports_runnability_from_the_capability_registry() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: serde_json::Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-            .unwrap();
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     let pipelines = body["pipelines"].as_array().expect("pipelines array");
     assert!(!pipelines.is_empty(), "no blueprints returned");
 
@@ -504,7 +503,10 @@ async fn pipelines_dag_reports_runnability_from_the_capability_registry() {
             if missing.is_empty() {
                 seen_runnable += 1;
                 assert!(
-                    !node["providers"].as_array().expect("providers array").is_empty(),
+                    !node["providers"]
+                        .as_array()
+                        .expect("providers array")
+                        .is_empty(),
                     "node {} claims runnable with no executor behind it",
                     node["id"]
                 );

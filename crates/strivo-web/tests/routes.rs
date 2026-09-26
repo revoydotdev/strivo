@@ -1671,6 +1671,11 @@ fn vendored_files() -> Vec<String> {
     names
 }
 
+/// `build.rs` drops `assets/vendor/` inside `if !creator_enabled` and keeps it
+/// otherwise, so reachability is a per-edition invariant with one true answer
+/// per configuration. The `#[cfg]` on this test and on its Creator counterpart
+/// look alike and are opposites; this is where that asymmetry is recorded.
+#[cfg(not(feature = "creator"))]
 #[tokio::test]
 async fn vendor_tree_is_not_reachable_from_a_pvr_build() {
     let vendor = vendored_files();
@@ -1695,6 +1700,43 @@ async fn vendor_tree_is_not_reachable_from_a_pvr_build() {
             "/assets/vendor/{name} is served by a PVR build; {} bytes of third-party \\
              code would ship inside every PVR binary",
             name
+        );
+    }
+}
+
+/// The mirror of the PVR exclusion, and the reason that exclusion needs a
+/// counterpart: a Creator build that stopped serving these paths would break
+/// the timeline and the node graph exactly the way a wrong Content-Type does —
+/// a fetch that fails silently in the browser.
+#[cfg(feature = "creator")]
+#[tokio::test]
+async fn vendor_tree_is_reachable_from_a_creator_build() {
+    let vendor = vendored_files();
+    assert!(
+        vendor.len() >= 3,
+        "expected the three vendored browser libraries in {}, found {:?}",
+        source_vendor_dir().display(),
+        vendor
+    );
+
+    for name in &vendor {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/assets/vendor/{name}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app().oneshot(request).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "/assets/vendor/{name} is unreachable in a Creator build, which embeds it"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/javascript; charset=utf-8"),
+            "/assets/vendor/{name} must reach the browser as JavaScript"
         );
     }
 }

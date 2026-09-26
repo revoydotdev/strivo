@@ -55,13 +55,24 @@ async fn get(state: &strivo_web::server::AppState, path: &str) -> (StatusCode, s
 }
 
 /// Where the render route writes, derived the same way the route derives it.
-fn rendered_path(sandbox: &Sandbox) -> PathBuf {
+/// Where a render put its artifact, read from the render's own answer.
+///
+/// Not re-derived from the recording id: the route writes one immutable file
+/// per attempt, because a stable `<recording_id>.mkv` meant a second render
+/// silently overwrote an artifact a user had already approved.
+fn rendered_path(sandbox: &Sandbox, body: &serde_json::Value) -> PathBuf {
+    let reported = body["output_path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the render reported no output_path: {body}"));
+    assert!(
+        !body["artifact_id"].as_str().unwrap_or_default().is_empty(),
+        "the render named no artifact: {body}"
+    );
     sandbox
         .recording
         .parent()
         .expect("recording parent")
-        .join("edl")
-        .join(format!("{}.mkv", sandbox.recording_id))
+        .join(reported)
 }
 
 /// Write one of the six per-recording sidecars the resolver reads.
@@ -187,7 +198,7 @@ async fn the_two_routes_compile_one_plan() {
         "the preview route and the render route must compile one plan from one revision"
     );
     assert!(
-        rendered_path(&sandbox).exists(),
+        rendered_path(&sandbox, &render_body).exists(),
         "the render route must produce the artifact it planned"
     );
 }

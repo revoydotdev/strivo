@@ -306,6 +306,7 @@ pub fn render(
         plan: exported.plan,
         output: exported.output,
         bytes: exported.bytes,
+        attempt: exported.attempt,
     })
 }
 
@@ -325,8 +326,12 @@ pub struct PreviewResponse {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RenderResponse {
     pub plan: CompiledPlan,
+    /// The immutable per-attempt path this render wrote.
     pub output: PathBuf,
     pub bytes: u64,
+    /// The address of this artifact. Two renders of one recording carry two of
+    /// these, so neither can be mistaken for the other and neither destroys it.
+    pub attempt: strivo_editor::render::AttemptId,
 }
 
 /// The media path a cut names. The plan deliberately carries a cut index, not

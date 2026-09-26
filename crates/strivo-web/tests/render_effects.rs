@@ -107,13 +107,30 @@ fn digest(bytes: &[u8]) -> String {
     out.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn rendered_path(sandbox: &Sandbox) -> PathBuf {
-    sandbox
+/// Where a render put its artifact, read from the render's own answer.
+///
+/// Not re-derived from the recording id. The route writes one immutable file
+/// per attempt rather than a stable `<recording_id>.mkv`, because a stable name
+/// meant a second render of the same recording silently overwrote an artifact a
+/// user had already approved.
+fn rendered_path(sandbox: &Sandbox, body: &serde_json::Value) -> PathBuf {
+    let reported = body["output_path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the render reported no output_path: {body}"));
+    assert!(
+        !body["artifact_id"].as_str().unwrap_or_default().is_empty(),
+        "the render named no artifact: {body}"
+    );
+    let path = sandbox
         .recording
         .parent()
         .expect("recording parent")
-        .join("edl")
-        .join(format!("{}.mkv", sandbox.recording_id))
+        .join(reported);
+    assert!(
+        path.starts_with(sandbox.recording.parent().expect("recording parent")),
+        "the reported artifact escaped the recordings root: {path:?}"
+    );
+    path
 }
 
 fn sidecar_path(recording_id: &str, name: &str) -> PathBuf {
@@ -140,7 +157,7 @@ async fn video_fingerprint_of_last_render(sandbox: &Sandbox) -> String {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    video_fingerprint(&rendered_path(sandbox))
+    video_fingerprint(&rendered_path(sandbox, &body))
 }
 
 /// The plan the preview route currently reports, read as JSON.
@@ -176,7 +193,7 @@ async fn render_and_read_audio(sandbox: &Sandbox, control: &str) -> String {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{control}: {body}");
-    audio_fingerprint(&rendered_path(sandbox))
+    audio_fingerprint(&rendered_path(sandbox, &body))
 }
 
 /// Save the two-second baseline cut every fixture starts from.
@@ -270,7 +287,7 @@ async fn pitch_time_shortens_the_decoded_output_by_the_tempo_factor() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let full = (decoded_audio_bytes(&rendered_path(&sandbox)) / 100) as f64;
+    let full = (decoded_audio_bytes(&rendered_path(&sandbox, &body)) / 100) as f64;
 
     write_sidecar(
         &sandbox.recording_id,
@@ -284,7 +301,7 @@ async fn pitch_time_shortens_the_decoded_output_by_the_tempo_factor() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let halved = (decoded_audio_bytes(&rendered_path(&sandbox)) / 100) as f64;
+    let halved = (decoded_audio_bytes(&rendered_path(&sandbox, &body)) / 100) as f64;
     // The **audio** length, not the container's: rubberband time-stretches the
     // signal and the muxer keeps the video's timestamps, so `format.duration`
     // reports the picture's length and would read as "no change" for a control
@@ -440,7 +457,7 @@ async fn a_per_cut_fade_is_baked_into_the_decoded_video() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let before = video_fingerprint(&rendered_path(&sandbox));
+    let before = video_fingerprint(&rendered_path(&sandbox, &body));
 
     let faded = serde_json::json!({
         "recording_id": "ignored-by-the-server",
@@ -460,7 +477,7 @@ async fn a_per_cut_fade_is_baked_into_the_decoded_video() {
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_ne!(
-        video_fingerprint(&rendered_path(&sandbox)),
+        video_fingerprint(&rendered_path(&sandbox, &body)),
         before,
         "a one-second fade in and out must change the decoded video"
     );

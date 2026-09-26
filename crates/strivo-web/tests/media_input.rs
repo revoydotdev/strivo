@@ -331,11 +331,27 @@ async fn an_authorized_in_root_edit_still_renders() {
         .await;
     assert_eq!(status, StatusCode::OK, "render: {body}");
 
-    let rendered = sb.root.join("edl").join(format!("{}.mkv", sb.recording_id));
+    // The path comes from the render's own answer rather than being re-derived
+    // here. The route writes one immutable file per attempt rather than a
+    // stable `<recording_id>.mkv`, because a stable name meant a second render
+    // silently overwrote an artifact a user had already approved.
+    let artifact_id = body["artifact_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the render must name its artifact: {body}"));
+    assert!(
+        !artifact_id.is_empty(),
+        "an empty artifact id addresses nothing: {body}"
+    );
+    let rendered = sb
+        .root
+        .join(body["output_path"].as_str().expect("output_path"));
     assert!(
         rendered.is_file(),
-        "no rendered file at {}",
-        rendered.display()
+        "the render reported {rendered:?} but wrote no file there"
+    );
+    assert!(
+        rendered.starts_with(&sb.root),
+        "the reported artifact escaped the sandbox root: {rendered:?}"
     );
     let read = probe(&rendered).expect("the render is real media");
     assert!(

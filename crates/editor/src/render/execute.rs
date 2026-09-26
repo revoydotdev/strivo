@@ -8,11 +8,19 @@
 //! A preview creates no file and spawns nothing, so a preview cannot leave a
 //! scratch directory behind — which is the difference between the two callers
 //! that is about behaviour rather than about the plan.
+//!
+//! ## One attempt, one owner
+//!
+//! Every `export` mints an [`AttemptId`](super::attempt::AttemptId) and hands
+//! it down. The scratch directory and the refusal to overwrite are both keyed
+//! on that id, so two renders of the same subject at the same time cannot share
+//! either. That is not a promise about careful callers: it is the path.
 
 use std::path::Path;
 use std::process::Command;
 
 use super::approximate::{approximations, Approximation};
+use super::attempt::{self, AttemptId};
 use super::compile::compile;
 use super::error::RenderError;
 use super::invoke;
@@ -40,8 +48,14 @@ pub struct Preview {
 pub struct Export {
     /// The same value [`preview`] compiles.
     pub plan: CompiledPlan,
+    /// The immutable path this attempt wrote. Every export mints its own, so
+    /// no two exports of one recording can name the same file.
     pub output: std::path::PathBuf,
+    /// The validated size of the artifact at `output` — never a tool's claim
+    /// about what it wrote.
     pub bytes: u64,
+    /// The attempt that produced this export, and the address of its artifact.
+    pub attempt: AttemptId,
 }
 
 /// Compile a request without touching the filesystem or a media tool.
@@ -77,22 +91,14 @@ pub fn export(
             return Err(RenderError::BurnOverVideoGraph);
         }
     }
-    let bytes = execute(&plan, edl, output, subtitle)?;
+    let attempt = AttemptId::mint();
+    let bytes = execute(&plan, edl, output, subtitle, &attempt)?;
     Ok(Export {
         plan,
         output: output.to_path_buf(),
         bytes,
+        attempt,
     })
-}
-
-/// Removes the scratch directory on drop, including on an early `?` return or
-/// a panic — so a failed render never leaves per-clip sub-renders behind.
-struct Scratch(std::path::PathBuf);
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 fn io(detail: impl std::fmt::Display) -> RenderError {
@@ -106,14 +112,20 @@ fn execute(
     edl: &Edl,
     output: &Path,
     subtitle: Option<&Path>,
+    attempt: &AttemptId,
 ) -> Result<u64, RenderError> {
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(io)?;
-    // Named after the plan's subject, not a fixed directory: two exports of two
-    // revisions at once must not share a scratch directory, and a fixed name
-    // would be a second render path's race waiting to happen.
-    let scratch = parent.join(format!(".plan-{}", scrub(&plan.subject)));
-    let _scratch = Scratch(scratch.clone());
+    // Refused before any work: a path that already holds a file holds an
+    // artifact, and a render is not a licence to destroy one. Checked here
+    // rather than after the concat so a refused attempt costs no ffmpeg at all.
+    if output.symlink_metadata().is_ok() {
+        return Err(RenderError::OutputExists {
+            path: output.to_path_buf(),
+        });
+    }
+    let scratch = attempt::scratch_dir(parent, &plan.subject, attempt);
+    let _scratch = attempt::Scratch(scratch.clone());
     std::fs::create_dir_all(&scratch).map_err(io)?;
 
     let mut clips = Vec::with_capacity(plan.clips.len());
@@ -156,23 +168,7 @@ fn execute(
         ))?;
         std::fs::rename(&normalised, output).map_err(io)?;
     }
-    std::fs::metadata(output).map(|m| m.len()).map_err(io)
-}
-
-/// A filename-safe stem for a scratch directory. A recording id is already
-/// filename-safe, but a plan's subject may be a project id, and a path
-/// separator in a scratch path would write outside the output directory.
-fn scrub(subject: &str) -> String {
-    subject
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    attempt::validate_output(output)
 }
 
 fn run(args: &[String]) -> Result<(), RenderError> {

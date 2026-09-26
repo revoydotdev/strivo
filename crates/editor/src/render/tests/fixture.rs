@@ -199,11 +199,64 @@ pub(super) fn on_fixture(name: &str) -> Option<(RenderRequest, Edl, std::path::P
     }
     let dir = scratch(name);
     let fixture = source_fixture(&dir);
+    Some((request(), edl_on(&fixture), dir))
+}
+
+/// The revision, with every cut pointed at `fixture` instead of the literal
+/// `/recordings/stream-01.mkv`.
+pub(super) fn edl_on(fixture: &std::path::Path) -> Edl {
     let mut revision = edl();
     for cut in &mut revision.cuts {
         cut.kind = CutKind::Source {
             source_path: fixture.to_string_lossy().into_owned(),
         };
     }
-    Some((request(), revision, dir))
+    revision
+}
+
+/// A source big enough that a render spends real wall time in it.
+///
+/// The 64x36 fixture renders in single-digit milliseconds, which is a race
+/// window too small to hit on purpose — and a concurrency test that cannot
+/// lose is a concurrency test that proves nothing. 320x180 at 25 fps for four
+/// seconds puts each per-cut sub-render in the tens of milliseconds, and the
+/// request's loudness target adds two more passes, so two overlapping renders
+/// have five ffmpeg invocations apiece to interleave inside.
+pub(super) fn wide_source_fixture(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("wide.mkv");
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-loglevel", "error"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=4:size=320x180:rate=25",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+        ])
+        .args([
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ])
+        .arg(&path)
+        .status()
+        .expect("ffmpeg must be on PATH to synthesize the wide fixture");
+    assert!(status.success(), "failed to synthesize the wide fixture");
+    path
+}
+
+pub(super) fn on_wide_fixture(name: &str) -> Option<(RenderRequest, Edl, std::path::PathBuf)> {
+    if !ffmpeg_available() {
+        return None;
+    }
+    let dir = scratch(name);
+    let fixture = wide_source_fixture(&dir);
+    Some((request(), edl_on(&fixture), dir))
 }

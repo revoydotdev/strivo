@@ -75,6 +75,22 @@ pub enum RenderError {
     /// plan does not own a caller's labels; guessing one would silently drop
     /// either the overlay or the captions. Refused rather than mis-wired.
     BurnOverVideoGraph,
+    /// The output path already holds a file, so rendering into it would
+    /// destroy an artifact somebody may already have approved. Distinct from
+    /// every refusal above: this one is not about the *revision*, it is about
+    /// the destination, and the fix is a new artifact rather than a new edit.
+    /// A render writes a new path per attempt precisely so this cannot be
+    /// reached by accident.
+    OutputExists { path: std::path::PathBuf },
+    /// The tool reported success and wrote no file at all.
+    MissingOutput {
+        path: std::path::PathBuf,
+        detail: String,
+    },
+    /// The tool reported success and left a zero-byte file. Not a render: a
+    /// container with no stream in it is indistinguishable from a real artifact
+    /// by its size alone, so it is refused rather than counted.
+    EmptyOutput { path: std::path::PathBuf },
     /// Anything the executor hit: a locator the revision no longer has, a
     /// write that failed, a media tool that exited non-zero. The cause is in
     /// the detail because a caller can only act on the text.
@@ -131,6 +147,23 @@ impl fmt::Display for RenderError {
             Self::BurnOverVideoGraph => f.write_str(
                 "captions cannot burn in over a video filter graph yet: the graph's \
                  output label has to be threaded into the subtitle filter",
+            ),
+            Self::OutputExists { path } => write!(
+                f,
+                "{} already holds an artifact; render to a new path so the existing \
+                 one survives",
+                path.display()
+            ),
+            Self::MissingOutput { path, detail } => write!(
+                f,
+                "the renderer reported success but wrote nothing to {}: {detail}",
+                path.display()
+            ),
+            Self::EmptyOutput { path } => write!(
+                f,
+                "{} is zero bytes, which is a container with no stream in it rather \
+                 than a render",
+                path.display()
             ),
             Self::Execute { detail } => f.write_str(detail),
         }

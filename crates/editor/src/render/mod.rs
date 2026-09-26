@@ -37,6 +37,14 @@
 //! time and no millisecond column. `f64` appears on **gains, ratios and dB**
 //! only, which are not time.
 //!
+//! ## One attempt, one owner
+//!
+//! Every render attempt gets an [`AttemptId`](attempt::AttemptId), a scratch
+//! directory derived from it and an output path derived from it — see
+//! [`attempt`]. Naming them after the subject instead is what let two renders
+//! of one recording destroy each other's files, so the subject appears in both
+//! paths for legibility and decides nothing.
+//!
 //! ## Validation is not here
 //!
 //! Admission of a *revision's inputs* — is this path inside the media root,
@@ -47,6 +55,7 @@
 //! inconsistent about.
 
 mod approximate;
+pub(crate) mod attempt;
 mod compile;
 mod compose;
 mod error;
@@ -60,6 +69,7 @@ mod request;
 mod tests;
 
 pub use approximate::{approximations, Approximation};
+pub use attempt::{output_path, validate_output, AttemptId};
 pub use compile::compile;
 pub use error::RenderError;
 pub use execute::{export, preview, Export, Preview};

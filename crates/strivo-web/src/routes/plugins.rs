@@ -1842,8 +1842,16 @@ async fn editor_revisions_restore(
     }
 }
 
-/// `POST /api/v1/plugins/editor/<recording_id>/render` — bake the EDL
-/// into a final file under `<recording_parent>/edl/<recording_id>.mkv`.
+/// `POST /api/v1/plugins/editor/<recording_id>/render` — bake the EDL into a
+/// final file under `<recording_parent>/edl/`.
+///
+/// One file **per attempt**, named by a minted attempt id rather than by the
+/// recording. The route used to write a stable `<recording_id>.mkv`, so a second
+/// render of the same recording overwrote the first in place: an artifact a user
+/// had already approved and downloaded was destroyed by an unrelated later
+/// render, with nothing in the response saying so. The attempt id is returned as
+/// `artifact_id`, so two renders of one recording are two addressable artifacts
+/// and a caller can say which is which.
 async fn editor_render(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -1890,7 +1898,12 @@ async fn editor_render(
         |c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_',
         "_",
     );
-    let output = out_dir.join(format!("{safe}.mkv"));
+    let output = strivo_editor::render::output_path(
+        &out_dir,
+        &safe,
+        &strivo_editor::render::AttemptId::mint(),
+        "mkv",
+    );
     // One resolver reads all six per-recording sidecars — branding, insert FX,
     // pitch/time, sub-mix, volume automation and the caption style — so the
     // four this route used to skip cannot be skipped by accident again. A
@@ -1912,6 +1925,7 @@ async fn editor_render(
     match render {
         Ok(Ok(done)) => Json(json!({
             "ok": true,
+            "artifact_id": done.attempt.to_string(),
             "output_path": done.output.to_string_lossy(),
             "bytes": done.bytes,
             "total_duration": edl.total_duration(),

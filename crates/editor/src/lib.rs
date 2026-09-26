@@ -24,7 +24,7 @@
 //! Storage is in [`store`]; the editor crate is pure-data + thin
 //! ffmpeg wrapper.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -33,27 +33,6 @@ use serde::{Deserialize, Serialize};
 pub mod render;
 pub mod store;
 pub mod time;
-
-/// RAII guard for the `.edl-temp` scratch directory. Removes the directory
-/// on drop — including on early `?` returns and panics from the per-cut
-/// loop — so a failed render never leaves sub-clip files behind to
-/// compound pressure on the bounded `Disk` resource. Cleanup is
-/// best-effort: IO errors while removing are ignored, since a failure
-/// to tidy up must not fail the render itself.
-struct TempDirGuard(PathBuf);
-
-impl std::ops::Deref for TempDirGuard {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -275,7 +254,17 @@ pub fn render_edl_with_filters(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let temp_dir = TempDirGuard(edl_dir.join(".edl-temp"));
+    // Per attempt, like the plan executor's scratch. A fixed `.edl-temp` under
+    // the output parent was a shared directory: two renders into one output
+    // directory overwrote each other's per-cut sub-clips, and the first to
+    // finish deleted the other's working directory. Nothing in production calls
+    // this renderer any more, but it is `pub`, so a new caller would have
+    // inherited the same defect.
+    let temp_dir = render::attempt::Scratch(render::attempt::scratch_dir(
+        &edl_dir,
+        &edl.recording_id,
+        &render::AttemptId::mint(),
+    ));
     std::fs::create_dir_all(&*temp_dir).ok();
 
     // Strategy: for each cut, render a temporary sub-clip with seek
@@ -385,6 +374,17 @@ pub fn render_edl_with_filters(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every scratch directory still under `parent`, whatever it is called.
+    fn scratch_entries(parent: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".plan-") || name.starts_with(".edl-temp"))
+            .collect()
+    }
 
     fn src_cut(start: f32, end: f32) -> Cut {
         Cut {
@@ -548,10 +548,13 @@ mod tests {
             "expected render to fail on a missing source file"
         );
 
-        let scratch = dir.join(".edl-temp");
-        assert!(
-            !scratch.exists(),
-            "scratch dir {scratch:?} should have been cleaned up after a failed render"
+        // Every scratch entry, not one named path: the directory is named per
+        // attempt, so asserting a fixed name is gone passes whether or not the
+        // render ever made one.
+        assert_eq!(
+            scratch_entries(&dir),
+            Vec::<String>::new(),
+            "scratch left behind after a failed render"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -665,11 +668,11 @@ mod tests {
             "expected render to fail on cut 1's missing source file"
         );
 
-        let scratch = dir.join(".edl-temp");
-        assert!(
-            !scratch.exists(),
-            "scratch dir {scratch:?} (and cut 0's sub-clip inside it) should have been \
-             cleaned up after a failed multi-cut render"
+        assert_eq!(
+            scratch_entries(&dir),
+            Vec::<String>::new(),
+            "scratch left behind after a failed multi-cut render, cut 0's \
+             sub-clip included"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

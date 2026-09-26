@@ -22,7 +22,6 @@ pub fn check_external_tools() {
 
 pub mod config;
 pub mod daemon;
-pub mod edl;
 pub mod events;
 pub mod intents;
 pub mod ipc;

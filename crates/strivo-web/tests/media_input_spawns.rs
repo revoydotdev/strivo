@@ -183,7 +183,7 @@ fn plant(sb: &Sandbox, path: &Path, start_sec: f32, end_sec: f32) {
         }],
     };
     let store = strivo_editor::store::EdlStore::open(&editor_store_path()).expect("editor store");
-    store.save_with_label(&edl, "planted").expect("plant");
+    store.save(None, &edl, "planted").expect("plant");
 }
 
 #[tokio::test]

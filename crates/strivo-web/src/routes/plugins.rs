@@ -1686,16 +1686,27 @@ async fn editor_load(
         Ok(s) => s,
         Err(e) => return Problem::internal(format!("open store: {e}")).into_response(),
     };
-    let edl = match store.load(&recording_id).ok().flatten() {
-        Some(e) => e,
+    // "Current" is the newest revision and nothing else. Reporting its id
+    // lets a client hand it back as a save's base, which is what makes a
+    // concurrent save detectable instead of a silent overwrite.
+    let current = match store.current(&recording_id) {
+        Ok(c) => c,
+        Err(e) => return Problem::internal(format!("load: {e}")).into_response(),
+    };
+    let (revision_id, edl) = match current {
+        Some(c) => (Some(c.revision_id), c.edl),
         None => {
             let dur = probe_duration_async(&input).await.unwrap_or(0.0);
-            strivo_editor::Edl::from_source(&recording_id, &input.to_string_lossy(), dur)
+            (
+                None,
+                strivo_editor::Edl::from_source(&recording_id, &input.to_string_lossy(), dur),
+            )
         }
     };
     Json(json!({
         "edl": edl,
         "total_duration": edl.total_duration(),
+        "revision_id": revision_id,
     }))
     .into_response()
 }
@@ -1707,6 +1718,12 @@ pub(super) struct EditorSaveQuery {
     /// undo targets. Defaults to "manual edit" when absent.
     #[serde(default)]
     label: Option<String>,
+    /// The revision this edit was made against, as reported by the load. When
+    /// it is no longer the newest revision, someone else saved in between and
+    /// the write is refused with 409 rather than overwriting their work.
+    /// Optional: a client that did not read first is making a first save.
+    #[serde(default)]
+    base_revision_id: Option<i64>,
 }
 
 /// `POST /api/v1/plugins/editor/<recording_id>` — save the EDL the SPA
@@ -1746,10 +1763,19 @@ async fn editor_save(
         Err(e) => return Problem::internal(format!("open store: {e}")).into_response(),
     };
     let label = q.label.as_deref().unwrap_or("manual edit");
-    if let Err(e) = store.save_with_label(&edl, label) {
-        return Problem::internal(format!("save: {e}")).into_response();
+    match store.save(q.base_revision_id, &edl, label) {
+        Ok(written) => Json(json!({
+            "ok": true,
+            "revision_id": written.revision_id,
+            "total_duration": edl.total_duration(),
+        }))
+        .into_response(),
+        Err(strivo_editor::store::RevisionError::Conflict { base, current }) => Problem::conflict(
+            format!("edit-conflict/stale-base: {base} is not current ({current})"),
+        )
+        .into_response(),
+        Err(e) => Problem::internal(format!("save: {e}")).into_response(),
     }
-    Json(json!({ "ok": true, "total_duration": edl.total_duration() })).into_response()
 }
 
 /// `GET /api/v1/plugins/editor/<recording_id>/revisions` — newest-first
@@ -1796,22 +1822,24 @@ async fn editor_revisions_restore(
         Ok(s) => s,
         Err(e) => return Problem::internal(format!("open store: {e}")).into_response(),
     };
-    let edl = match store.load_revision(&recording_id, rev_id) {
-        Ok(Some(e)) => e,
-        Ok(None) => return Problem::not_found("revision not found").into_response(),
-        Err(e) => return Problem::internal(format!("load: {e}")).into_response(),
-    };
+    // Activation is one transaction: read, validate, append. An unusable
+    // target leaves the current edit exactly as it was. The recording identity
+    // comes from this path, never from the stored document's own bytes.
     let label = format!("revert to v{rev_id}");
-    if let Err(e) = store.save_with_label(&edl, &label) {
-        return Problem::internal(format!("save: {e}")).into_response();
+    match store.activate(&recording_id, rev_id, &label) {
+        Ok(restored) => Json(json!({
+            "ok": true,
+            "edl": restored.edl,
+            "total_duration": restored.edl.total_duration(),
+            "revision_id": restored.revision_id,
+            "label": label,
+        }))
+        .into_response(),
+        Err(strivo_editor::store::RevisionError::NotFound { .. }) => {
+            Problem::not_found("revision not found").into_response()
+        }
+        Err(e) => Problem::internal(format!("restore: {e}")).into_response(),
     }
-    Json(json!({
-        "ok": true,
-        "edl": edl,
-        "total_duration": edl.total_duration(),
-        "label": label,
-    }))
-    .into_response()
 }
 
 /// `POST /api/v1/plugins/editor/<recording_id>/render` — bake the EDL
@@ -3186,29 +3214,45 @@ fn read_recording_components(
         "captions_style".into(),
         load(captions_style_path(recording_id)),
     );
-    // EDL state lives in a SQLite shared by all recordings; pull just this
-    // one's row via the existing helper.
-    let edl_json = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
+    // A scene names the revision it captured; it does not copy the edit. The
+    // bytes live in exactly one table, so a scene can never hold an edit that
+    // has since been changed, and restoring one activates a real revision.
+    // No revision yet means no edit to name, which `compose` drops.
+    let revision_id = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
         Ok(store) => store
-            .load(recording_id)
+            .current(recording_id)
             .ok()
             .flatten()
-            .and_then(|edl| serde_json::to_value(&edl).ok())
-            .unwrap_or(serde_json::Value::Null),
-        Err(_) => serde_json::Value::Null,
+            .map(|c| c.revision_id),
+        Err(_) => None,
     };
-    out.insert("editor".into(), edl_json);
+    out.insert(
+        "editor".into(),
+        match revision_id {
+            Some(id) => serde_json::json!({ "revision_id": id }),
+            None => serde_json::Value::Null,
+        },
+    );
     out
 }
 
 /// Write each component in the manifest back to its plugin's storage.
-/// Returns the names of components that were restored vs skipped.
+/// Returns the names restored, the names skipped, and a stable reason token per
+/// skipped name — a skip that does not say why is indistinguishable from a
+/// write that failed, and the operator cannot act on either.
+type ComponentOutcome = (
+    Vec<String>,
+    Vec<String>,
+    std::collections::BTreeMap<String, String>,
+);
+
 fn write_recording_components(
     recording_id: &str,
     manifest: &strivo_scenes::SceneManifest,
-) -> (Vec<String>, Vec<String>) {
+) -> ComponentOutcome {
     let mut restored = Vec::new();
     let mut skipped = Vec::new();
+    let mut reasons = std::collections::BTreeMap::new();
     let write_file = |p: std::path::PathBuf, v: &serde_json::Value| -> bool {
         if let Some(parent) = p.parent() {
             if std::fs::create_dir_all(parent).is_err() {
@@ -3221,38 +3265,56 @@ fn write_recording_components(
             .is_some()
     };
     for (name, value) in strivo_scenes::decompose(manifest) {
-        let ok = match name {
-            "branding" => write_file(branding_path(recording_id), value),
-            "automation" => write_file(automation_path(recording_id), value),
-            "captions_style" => write_file(captions_style_path(recording_id), value),
-            "editor" => {
-                // EDL deserialises through the editor crate to validate
-                // shape before we commit it to the shared store.
-                match serde_json::from_value::<strivo_editor::Edl>(value.clone()) {
-                    Ok(mut edl) => {
-                        edl.recording_id = recording_id.to_string();
-                        edl.compact();
-                        if let Ok(store) =
-                            strivo_editor::store::EdlStore::open(&editor_store_path())
-                        {
-                            store.save_with_label(&edl, "restored from scene").is_ok()
-                        } else {
-                            false
-                        }
-                    }
-                    Err(_) => false,
-                }
-            }
-            _ => false, // Unknown component — preserve forward-compat by
-                        // listing it as skipped rather than crashing.
+        // `Err(reason)` is reported; only a genuine write failure is `Err(write-failed)`.
+        let outcome: Result<(), &str> = match name {
+            "branding" => write_file(branding_path(recording_id), value)
+                .then_some(())
+                .ok_or("write-failed"),
+            "automation" => write_file(automation_path(recording_id), value)
+                .then_some(())
+                .ok_or("write-failed"),
+            "captions_style" => write_file(captions_style_path(recording_id), value)
+                .then_some(())
+                .ok_or("write-failed"),
+            "editor" => restore_editor_component(recording_id, value),
+            _ => Err("unknown-component"),
         };
-        if ok {
-            restored.push(name.to_string());
-        } else {
-            skipped.push(name.to_string());
+        match outcome {
+            Ok(()) => restored.push(name.to_string()),
+            Err(reason) => {
+                skipped.push(name.to_string());
+                reasons.insert(name.to_string(), reason.to_string());
+            }
         }
     }
-    (restored, skipped)
+    (restored, skipped, reasons)
+}
+
+/// Activate the revision a scene named. A manifest captured before the
+/// unification stored a verbatim copy of the edit here; that shape is refused
+/// with a token that names it, because applying a copy is exactly the second
+/// source of truth this removed, and silently ignoring it would leave the
+/// operator believing their scene restored.
+fn restore_editor_component(
+    recording_id: &str,
+    value: &serde_json::Value,
+) -> Result<(), &'static str> {
+    let Some(revision_id) = value.get("revision_id").and_then(|v| v.as_i64()) else {
+        return Err("retired-scene-editor-copy");
+    };
+    let store = strivo_editor::store::EdlStore::open(&editor_store_path())
+        .map_err(|_| "store-unavailable")?;
+    store
+        .activate(recording_id, revision_id, "restored from scene")
+        .map(|_| ())
+        .map_err(|e| match e {
+            strivo_editor::store::RevisionError::NotFound { .. } => "revision-missing",
+            strivo_editor::store::RevisionError::ForeignRecording { .. } => "revision-foreign",
+            strivo_editor::store::RevisionError::UnsupportedVersion { .. } => {
+                "revision-unsupported-version"
+            }
+            _ => "revision-unusable",
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -3347,13 +3409,14 @@ async fn scenes_restore(
         Ok(None) => return Problem::not_found("scene not found").into_response(),
         Err(e) => return Problem::internal(format!("load: {e}")).into_response(),
     };
-    let (restored, skipped) = write_recording_components(&recording_id, &manifest);
+    let (restored, skipped, reasons) = write_recording_components(&recording_id, &manifest);
     Json(json!({
         "ok": true,
         "id": manifest.id,
         "name": manifest.name,
         "restored": restored,
         "skipped": skipped,
+        "skipped_reasons": reasons,
     }))
     .into_response()
 }

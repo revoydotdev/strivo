@@ -369,7 +369,7 @@ async fn a_render_refuses_a_stored_edl_that_names_a_path_outside_the_root() {
         }],
     };
     let store = strivo_editor::store::EdlStore::open(&editor_store_path()).expect("editor store");
-    store.save_with_label(&planted, "planted").expect("plant");
+    store.save(None, &planted, "planted").expect("plant");
 
     let (status, body) = sb
         .post(
@@ -418,14 +418,20 @@ async fn a_non_finite_coordinate_does_not_survive_the_editor_store() {
     };
     let store = strivo_editor::store::EdlStore::open(&editor_store_path()).expect("editor store");
     store
-        .save_with_label(&planted, "planted")
+        .save(None, &planted, "planted")
         .expect("write attempt");
 
+    // The read now *refuses* rather than reporting "no edit": the old `load`
+    // turned an unparseable row into `None`, which is indistinguishable from a
+    // recording that was never edited. Asserting the refusal also keeps this
+    // test from passing for free had the store written nothing at all.
     assert!(
-        store.load(&sb.recording_id).ok().flatten().is_none(),
-        "a document with a non-finite coordinate loaded back intact; if this now \
-         passes, a persistence format other than JSON is in play and the \
-         non-finite branch of the gate is reachable and needs a route test"
+        matches!(
+            store.current(&sb.recording_id),
+            Err(strivo_editor::store::RevisionError::Unreadable { .. })
+        ),
+        "a document with a non-finite coordinate must be refused on read, not \
+         silently reported as absent"
     );
 }
 

@@ -1,0 +1,24 @@
+-- Version 6, reversed: the source rights notes and the review requirement
+-- they carry.
+--
+-- **The drop destroys the recorded review decisions.** That is the honest cost
+-- of reversing the version that introduced them: there is no earlier version
+-- of these decisions to fall back to, and keeping them would mean a second
+-- place recording who reviewed what. It is why
+-- `docs/RESEARCH-PLATFORM-ROADMAP.md:72` permits a destructive `down` only
+-- when rehearsed from a backup, and why the rehearsal copies the file.
+--
+-- The consequences are stated rather than papered over. After this, every
+-- source reads as *undecided on all three axes* — which
+-- `super::rights::eligibility_of` treats as not publishable. So a rollback
+-- does not open anything up; it closes everything down, and a re-migration
+-- brings back an empty table rather than resurrecting the dropped notes. That
+-- asymmetry is deliberate and is the fail-closed direction.
+--
+-- The version line is NOT stamped here. It belongs to `schema::rollback`,
+-- which writes it in the same transaction as this file's statements.
+--
+-- `SELECT` nothing. A `down` that reported what it removed would be a second
+-- place summarising the schema.
+
+DROP TABLE IF EXISTS creator_source_notes;

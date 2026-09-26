@@ -68,12 +68,14 @@ mod observations;
 mod readiness;
 mod relink;
 mod render_plan;
+mod rights;
 mod schema;
 mod store;
 mod store_availability;
 mod store_delivery;
 mod store_jobs;
 mod store_observations;
+mod store_rights;
 mod store_sources;
 mod store_time;
 mod store_workspace;
@@ -123,10 +125,15 @@ pub use readiness::{
 };
 pub use relink::{relink, unresolved_sources, RelinkRejection};
 pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};
+pub use rights::{
+    eligibility_of, is_stale as rights_is_stale, Axis, AxisBlocker, CalendarDate, Consent,
+    Eligibility, Ineligible, Licence, Ownership, RightsError, SourceNote, MAX_NOTE_BYTES,
+};
 pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 pub use store::Store;
 pub use store_jobs::{MoveJob, NewJob};
 pub use store_observations::CountedTable;
+pub use store_rights::PublicationReport;
 pub use store_time::ClockSegmentRow;
 pub use stream_event::{EventKind, RawStreamEvent, StreamEvent};
 pub use viewer_sample::{RawViewerSample, ViewerSample};

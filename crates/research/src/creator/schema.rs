@@ -50,6 +50,7 @@ pub const TABLES: &[&str] = &[
     "creator_viewer_samples",
     "creator_stream_events",
     "creator_metric_availability",
+    "creator_source_notes",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -82,15 +83,23 @@ const OBSERVATION_SERIES_V5: &str = include_str!("schema_v5.sql");
 
 const DROP_OBSERVATION_SERIES_V5: &str = include_str!("schema_v5.down.sql");
 
+const SOURCE_RIGHTS_V6: &str = include_str!("schema_v6.sql");
+
+const DROP_SOURCE_RIGHTS_V6: &str = include_str!("schema_v6.down.sql");
+
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
 /// millisecond durations with integer microseconds and adds the wall-clock
 /// to media-time segments; version 3 is the durable job and artifact
 /// lifecycle; version 4 is the persistent project workspace — one row per
 /// project carrying the one selected revision every view reads, the playhead,
-/// the selection range, the active view and unsaved work. Versions 1 to 3 are
-/// frozen — committed history with rehearsed rollbacks, and a database
-/// already at those versions migrates forward from the bytes they wrote.
+/// the selection range, the active view and unsaved work; version 5 is the
+/// observation series; version 6 is the source rights notes, and it adds a
+/// table with **no eligibility column** because publication eligibility is
+/// derived from the note rather than stored beside it (see
+/// [`super::rights`]). Versions 1 to 3 are frozen — committed history with
+/// rehearsed rollbacks, and a database already at those versions migrates
+/// forward from the bytes they wrote.
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -121,6 +130,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_observation_series",
         up: OBSERVATION_SERIES_V5,
         down: DROP_OBSERVATION_SERIES_V5,
+    },
+    Migration {
+        version: 6,
+        name: "creator_source_rights",
+        up: SOURCE_RIGHTS_V6,
+        down: DROP_SOURCE_RIGHTS_V6,
     },
 ];
 

@@ -54,7 +54,7 @@ impl Store {
         self.conn.execute(
             "INSERT INTO creator_artifacts
              (id,project_id,variant_id,render_plan_id,kind,content_hash,locator,bytes,
-              width,height,duration_ms,created_at)
+              width,height,duration_us,created_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 a.id.to_string(),
@@ -67,7 +67,7 @@ impl Store {
                 a.bytes.map(|b| b as i64),
                 a.width.map(i64::from),
                 a.height.map(i64::from),
-                a.duration_ms.map(|d| d as i64),
+                a.duration.map(|d| d.micros()),
                 a.created_at,
             ],
         )?;

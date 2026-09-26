@@ -42,6 +42,7 @@ pub const TABLES: &[&str] = &[
     "creator_release_packages",
     "creator_publications",
     "creator_metric_observations",
+    "creator_clock_segments",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -58,14 +59,30 @@ const CREATE_V1: &str = include_str!("schema_v1.sql");
 
 const DROP_V1: &str = include_str!("schema_v1.down.sql");
 
-/// Every migration, in order. Currently one: the whole Creator identity
-/// schema. Todo 22's time-model columns land here as version 2.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "creator_identity",
-    up: CREATE_V1,
-    down: DROP_V1,
-}];
+const TIME_MODEL_V2: &str = include_str!("schema_v2.sql");
+
+const DROP_TIME_MODEL_V2: &str = include_str!("schema_v2.down.sql");
+
+/// Every migration, in order. Version 1 is the whole Creator identity
+/// schema; version 2 is the canonical time model, which replaces version 1's
+/// millisecond durations with integer microseconds and adds the wall-clock
+/// to media-time segments. Version 1 is frozen — it is committed history,
+/// and a database already at version 1 migrates forward from the bytes
+/// version 1 wrote.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "creator_identity",
+        up: CREATE_V1,
+        down: DROP_V1,
+    },
+    Migration {
+        version: 2,
+        name: "creator_time_model",
+        up: TIME_MODEL_V2,
+        down: DROP_TIME_MODEL_V2,
+    },
+];
 
 /// The version this build understands, or the error a newer database gets.
 #[must_use]
@@ -167,9 +184,33 @@ fn apply_one(conn: &mut Connection, m: &Migration) -> Result<(), ResearchError> 
     }
 }
 
+/// Record `version` on this schema's version line, or remove the line
+/// entirely at version 0 — a database that has never had this schema has no
+/// line, and leaving a `0` behind would make `applied_version` and the
+/// tables disagree.
+fn stamp(conn: &Connection, version: i64) -> Result<(), ResearchError> {
+    if version <= 0 {
+        conn.execute("DELETE FROM schema_meta WHERE key=?1", [VERSION_KEY])?;
+    } else {
+        conn.execute(
+            "INSERT INTO schema_meta(key,value) VALUES(?1,?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            rusqlite::params![VERSION_KEY, version.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
 /// Roll the schema back to `target`, one explicit `down` per step. Destructive
 /// by construction: only ever run against a backup copy, which is what the
 /// rehearsal does.
+///
+/// The version line moves down with the schema, in the same transaction as
+/// the `down` that justifies it. A rollback that left the line where it was
+/// would make the next open re-apply a migration whose statements had already
+/// been undone — the database would claim version 2 while holding version 1's
+/// tables, and `duration_us` would be "migrated" onto a schema that no longer
+/// has the column.
 pub fn rollback(
     conn: &mut Connection,
     target: i64,
@@ -182,12 +223,15 @@ pub fn rollback(
     }
     for m in migrations.iter().rev().filter(|m| m.version > target) {
         conn.execute_batch("BEGIN IMMEDIATE")?;
-        let outcome = conn.execute_batch(m.down);
+        let outcome = (|| -> Result<(), ResearchError> {
+            conn.execute_batch(m.down)?;
+            stamp(conn, m.version - 1)
+        })();
         match outcome {
             Ok(()) => conn.execute_batch("COMMIT")?,
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");
-                return Err(e.into());
+                return Err(e);
             }
         }
     }

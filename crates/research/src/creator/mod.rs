@@ -30,10 +30,19 @@
 //! would have been a knob nobody could turn off, and a default-off one would
 //! have silently removed these tests from `cargo test --workspace`.
 //!
-//! What is deliberately **not** here yet: the time model (todo 22 owns
-//! `ClockMap` and the interval map), the render compiler (todo 23), and the
-//! job/artifact lifecycle columns (todo 24). Where a field belongs to one of
-//! those it is either stored as an opaque document or left out, and it is
+//! **One time model, and it is not defined here.** [`MediaTime`] is
+//! `strivo_editor::time::MediaTime` — integer microseconds, the single
+//! representation every Creator timestamp uses. It is re-exported rather
+//! than re-wrapped, because a second newtype over the same integer is a
+//! second time model wearing a different name. Schema version 2 replaced
+//! version 1's `duration_ms` columns with `duration_us` and **dropped** the
+//! old ones: a database that carried both would have two answers to "how
+//! long is this source". The `f32` seconds in the legacy edit decision list
+//! are read at exactly one named boundary, `strivo_editor::time::Cut::span`.
+//!
+//! What is deliberately **not** here yet: the render compiler (todo 23) and
+//! the job/artifact lifecycle columns (todo 24). Where a field belongs to one
+//! of those it is either stored as an opaque document or left out, and it is
 //! said so at the field.
 
 mod entities;
@@ -42,6 +51,7 @@ mod schema;
 mod store;
 mod store_delivery;
 mod store_sources;
+mod store_time;
 
 #[cfg(test)]
 mod tests;
@@ -57,8 +67,11 @@ pub use ids::{
 };
 pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 pub use store::Store;
+pub use store_time::ClockSegmentRow;
 
 use std::path::Path;
+
+pub use strivo_editor::time::MediaTime;
 
 use crate::Result;
 

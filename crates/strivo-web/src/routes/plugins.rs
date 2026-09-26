@@ -2005,16 +2005,36 @@ async fn chat_density_compute(
     } else {
         return Problem::bad_request("supply either `csv` or `log` body").into_response();
     };
-    // Duration = max event time + 5% pad so the strip isn't clipped.
-    let max_t = events.iter().map(|e| e.time_sec).fold(0.0_f32, f32::max);
-    let duration_sec = (max_t * 1.05).max(body.bucket_secs * 2.0);
-    let bucket_secs = body.bucket_secs.max(5.0);
-    let points = strivo_chat_density::compute_density(&events, duration_sec, bucket_secs);
+    // Duration = max event time + 5% pad so the strip isn't clipped. The
+    // request's `bucket_secs` is seconds on the wire and becomes whole
+    // microseconds here, at the boundary; the response reports seconds back
+    // so the SPA's existing contract is unchanged.
+    use strivo_editor::time::MediaTime;
+
+    let Some(bucket) = MediaTime::from_secs_f64(f64::from(body.bucket_secs.max(5.0))).ok() else {
+        return Problem::bad_request("bucket_secs is not a real duration").into_response();
+    };
+    let last = events.iter().map(|e| e.at).max().unwrap_or(MediaTime::ZERO);
+    // A 5% pad on the last event, and never fewer than two buckets, so a
+    // short or empty log still produces a readable strip.
+    let Some(duration) = MediaTime::from_micros(last.micros() + last.micros() / 20)
+        .ok()
+        .map(|padded| {
+            if padded.micros() >= 2 * bucket.micros() {
+                padded
+            } else {
+                MediaTime::from_micros(2 * bucket.micros()).unwrap_or(bucket)
+            }
+        })
+    else {
+        return Problem::bad_request("recording is too long to represent").into_response();
+    };
+    let points = strivo_chat_density::compute_density(&events, duration, bucket);
     Json(json!({
         "recording_id": recording_id,
         "event_count": events.len(),
-        "duration_sec": duration_sec,
-        "bucket_secs": bucket_secs,
+        "duration_sec": duration.micros() as f64 / 1_000_000.0,
+        "bucket_secs": bucket.micros() as f64 / 1_000_000.0,
         "points": points,
     }))
     .into_response()

@@ -3349,6 +3349,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "strivo-editor",
 ]
 
 [[package]]
@@ -3556,6 +3557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strivo-editor",
  "tempfile",
  "thiserror 2.0.20",
  "uuid",

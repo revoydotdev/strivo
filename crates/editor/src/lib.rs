@@ -31,6 +31,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub mod store;
+pub mod time;
 
 /// RAII guard for the `.edl-temp` scratch directory. Removes the directory
 /// on drop — including on early `?` returns and panics from the per-cut

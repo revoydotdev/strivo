@@ -4,7 +4,7 @@
 use super::super::entities::*;
 use super::super::ids::*;
 use super::super::store::Store;
-use super::fixtures::{at, project, revision, source};
+use super::fixtures::{at, dur, project, revision, source};
 use crate::ResearchError;
 
 /// Given a store with one project and one source
@@ -172,7 +172,7 @@ fn every_creator_type_has_a_durable_row() {
         bytes: Some(1024),
         width: Some(1080),
         height: Some(1920),
-        duration_ms: Some(60_000),
+        duration: Some(dur(60_000)),
         created_at: at("2026-09-07T02:00:00Z"),
     };
     store.insert_artifact(&artifact).expect("artifact inserted");

@@ -85,7 +85,7 @@ pub fn version_of(conn: &Connection) -> i64 {
 
 /// Given a database carrying the research kernel's rows and no Creator schema
 /// When the Creator schema is applied
-/// Then the version moves 0 -> 1, every Creator table appears, and the
+/// Then the version moves 0 -> 2, every Creator table appears, and the
 /// kernel's rows are exactly what they were.
 #[test]
 fn forward_migration_adds_the_schema_and_keeps_prior_state() {
@@ -103,8 +103,8 @@ fn forward_migration_adds_the_schema_and_keeps_prior_state() {
     let mut conn = Connection::open(&path).expect("reopen");
     let version = schema::migrate(&mut conn, MIGRATIONS).expect("migration applies");
 
-    assert_eq!(version, 1, "the version moved");
-    assert_eq!(version_of(&conn), 1, "and it is what the file records");
+    assert_eq!(version, 2, "the version moved");
+    assert_eq!(version_of(&conn), 2, "and it is what the file records");
     assert_eq!(
         creator_tables(&conn).len(),
         TABLES.len(),
@@ -221,7 +221,7 @@ fn an_interrupted_migration_leaves_the_previous_version_intact() {
 
     // The next open converges rather than reporting a stuck migration.
     let store = Store::open(&path).expect("the real migration applies on the next run");
-    assert_eq!(store.schema_version().expect("version"), 1);
+    assert_eq!(store.schema_version().expect("version"), 2);
     assert_eq!(store.creator_tables().expect("tables").len(), TABLES.len());
 }
 

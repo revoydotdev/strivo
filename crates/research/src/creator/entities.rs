@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use strivo_editor::time::MediaTime;
 
 use super::ids::*;
 
@@ -66,7 +67,11 @@ pub struct SourceAsset {
     /// `video`, `audio`, `chat`, `document`, …
     pub track_type: String,
     pub codec: String,
-    pub duration_ms: Option<u64>,
+    /// Integer microseconds on the source's own timeline. The single time
+    /// representation for the whole Creator edition; the millisecond column
+    /// version 1 wrote was replaced by schema version 2 rather than kept
+    /// beside it.
+    pub duration: Option<MediaTime>,
     pub created_at: String,
 }
 
@@ -81,8 +86,11 @@ impl SourceAsset {
     }
 }
 
-/// One capture run. Wall-clock bounds only — media time is todo 22's
-/// `ClockMap`, which needs the interval model before it can be stored here.
+/// One capture run. The wall-clock bounds below are the run's own; the
+/// relationship between them and the media timeline is
+/// [`ClockSegment`](crate::creator::ClockSegment) rows, one per capture
+/// part, because a reconnect leaves a hole in the wall clock that a single
+/// rate cannot express.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptureSession {
     pub id: CaptureSessionId,
@@ -173,7 +181,9 @@ pub struct Artifact {
     pub bytes: Option<u64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    pub duration_ms: Option<u64>,
+    /// Integer microseconds of the produced output, the same unit and the
+    /// same source as a [`SourceAsset`]'s.
+    pub duration: Option<MediaTime>,
     pub created_at: String,
 }
 

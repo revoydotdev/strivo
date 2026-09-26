@@ -18,6 +18,11 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 sha2 = "0.10"
+# The canonical time model: integer microseconds, the interval map and the
+# clock map. Same edition boundary as this crate — both are optional
+# dependencies of strivo-web that only the `creator` feature activates, so a
+# PVR build compiles neither.
+strivo-editor = { path = "../editor" }
 
 [dev-dependencies]
 tempfile = "3"

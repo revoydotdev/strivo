@@ -5,11 +5,20 @@
 
 use std::path::PathBuf;
 
+use strivo_editor::time::MediaTime;
+
 use super::super::entities::*;
 use super::super::ids::*;
 
 pub fn at(ts: &str) -> String {
     ts.to_string()
+}
+
+/// A duration in whole milliseconds, which is how a caller states one; the
+/// fixture's own inputs stay readable in the unit a person thinks in and the
+/// conversion happens once, here.
+pub fn dur(millis: i64) -> MediaTime {
+    MediaTime::from_millis(millis).expect("a non-negative duration")
 }
 
 pub fn project(name: &str) -> Project {
@@ -37,7 +46,7 @@ pub fn source(project_id: ProjectId, locator: Option<PathBuf>) -> SourceAsset {
         rights_json: "{}".into(),
         track_type: "video".into(),
         codec: "h264".into(),
-        duration_ms: Some(7_200_000),
+        duration: Some(dur(7_200_000)),
         created_at: at("2026-09-07T00:00:00Z"),
     }
 }

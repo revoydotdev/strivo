@@ -30,7 +30,7 @@ fn rollback_rehearsal_from_a_backup_restores_the_prior_state() {
     assert_eq!(before.0, 0, "the backup is a version 0 database");
     assert!(before.2.is_empty(), "with no Creator tables");
 
-    // Version 1: the Creator schema, and a row written through it.
+    // The Creator schema, and a row written through it.
     {
         let store = Store::open(&db).expect("creator store opens");
         store
@@ -51,7 +51,10 @@ fn rollback_rehearsal_from_a_backup_restores_the_prior_state() {
         let conn = Connection::open(&db).expect("reopen");
         (version_of(&conn), creator_tables(&conn))
     };
-    assert_eq!(after_migrate.0, 1, "the live database is at version 1");
+    assert_eq!(
+        after_migrate.0, 2,
+        "the live database is at the current version"
+    );
     assert!(!after_migrate.1.is_empty(), "and has Creator tables");
 
     // The rollback rehearsal: restore the backup over the migrated file.

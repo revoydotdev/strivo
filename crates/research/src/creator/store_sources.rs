@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use rusqlite::{params, OptionalExtension};
+use strivo_editor::time::MediaTime;
 
 use super::entities::*;
 use super::ids::*;
@@ -16,7 +17,7 @@ impl Store {
         self.conn.execute(
             "INSERT INTO creator_source_assets
              (id,project_id,kind,title,media_fingerprint,locator,origin,rights_json,
-              track_type,codec,duration_ms,created_at)
+              track_type,codec,duration_us,created_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 s.id.to_string(),
@@ -29,7 +30,7 @@ impl Store {
                 s.rights_json,
                 s.track_type,
                 s.codec,
-                s.duration_ms.map(|d| d as i64),
+                s.duration.map(|d| d.micros()),
                 s.created_at,
             ],
         )?;
@@ -43,7 +44,7 @@ impl Store {
             .conn
             .query_row(
                 "SELECT id,project_id,kind,title,media_fingerprint,locator,origin,rights_json,
-                        track_type,codec,duration_ms,created_at
+                        track_type,codec,duration_us,created_at
                  FROM creator_source_assets WHERE id=?1",
                 [id.to_string()],
                 |r| {
@@ -67,7 +68,17 @@ impl Store {
                         rights_json: r.get(7)?,
                         track_type: r.get(8)?,
                         codec: r.get(9)?,
-                        duration_ms: r.get::<_, Option<i64>>(10)?.map(|d| d as u64),
+                        duration: r
+                            .get::<_, Option<i64>>(10)?
+                            .map(MediaTime::from_micros)
+                            .transpose()
+                            .map_err(|e| {
+                                rusqlite::Error::InvalidColumnType(
+                                    10,
+                                    e.to_string(),
+                                    rusqlite::types::Type::Integer,
+                                )
+                            })?,
                         created_at: r.get(11)?,
                     })
                 },

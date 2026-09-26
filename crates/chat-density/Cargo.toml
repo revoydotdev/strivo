@@ -15,3 +15,6 @@ path = "src/lib.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+# The canonical time model. Same edition boundary as this crate: both are
+# optional dependencies of strivo-web that only `creator` activates.
+strivo-editor = { path = "../editor" }

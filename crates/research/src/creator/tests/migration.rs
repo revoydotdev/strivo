@@ -103,8 +103,24 @@ fn forward_migration_adds_the_schema_and_keeps_prior_state() {
     let mut conn = Connection::open(&path).expect("reopen");
     let version = schema::migrate(&mut conn, MIGRATIONS).expect("migration applies");
 
-    assert_eq!(version, 2, "the version moved");
-    assert_eq!(version_of(&conn), 2, "and it is what the file records");
+    // Tracked to the migration list rather than to a number, so appending a
+    // version does not silently turn this into a test that asserts a stale
+    // value and a migration that applies nothing.
+    assert_eq!(
+        version,
+        schema::latest_version(),
+        "the version moved to the latest this build knows"
+    );
+    assert_eq!(
+        version_of(&conn),
+        schema::latest_version(),
+        "and it is what the file records"
+    );
+    assert!(
+        version > 2,
+        "a fresh file really did apply more than the two versions that predate \
+         the job lifecycle, so this is not a vacuous pass"
+    );
     assert_eq!(
         creator_tables(&conn).len(),
         TABLES.len(),
@@ -221,7 +237,11 @@ fn an_interrupted_migration_leaves_the_previous_version_intact() {
 
     // The next open converges rather than reporting a stuck migration.
     let store = Store::open(&path).expect("the real migration applies on the next run");
-    assert_eq!(store.schema_version().expect("version"), 2);
+    assert_eq!(
+        store.schema_version().expect("version"),
+        schema::latest_version(),
+        "the interrupted run converges to the latest version, not to the one it died in"
+    );
     assert_eq!(store.creator_tables().expect("tables").len(), TABLES.len());
 }
 

@@ -40,16 +40,24 @@
 //! long is this source". The `f32` seconds in the legacy edit decision list
 //! are read at exactly one named boundary, `strivo_editor::time::Cut::span`.
 //!
-//! What is deliberately **not** here yet: the render compiler (todo 23) and
-//! the job/artifact lifecycle columns (todo 24). Where a field belongs to one
-//! of those it is either stored as an opaque document or left out, and it is
-//! said so at the field.
+//! What is deliberately **not** here yet: the render compiler (todo 23).
+//! Where a field belongs to it, it is either stored as an opaque document or
+//! left out, and it is said so at the field.
+//!
+//! **The job and artifact lifecycle (todo 24) is here, in [`jobs`], and it is
+//! the pipeline's state machine rather than a second one.** Its state names
+//! are `strivo_core::pipeline::stage::StageState`'s, re-declared because this
+//! crate sits *below* the daemon in the dependency graph and cannot import
+//! them; the correspondence is pinned by a test that drives the real
+//! `PipelineRegistry`. See [`jobs`]'s module doc for the full argument.
 
 mod entities;
 mod ids;
+mod jobs;
 mod schema;
 mod store;
 mod store_delivery;
+mod store_jobs;
 mod store_sources;
 mod store_time;
 
@@ -61,12 +69,17 @@ pub use entities::{
     Publication, ReleasePackage, RenderPlan, SourceAsset, TranscriptRevision, Variant,
 };
 pub use ids::{
-    ArtifactId, CaptureSessionId, CompositionRevisionId, MetricObservationId, ProjectId,
+    ArtifactId, CaptureSessionId, CompositionRevisionId, JobId, MetricObservationId, ProjectId,
     PublicationId, ReleasePackageId, RenderPlanId, ResearchProjectId, SourceAssetId,
     TranscriptRevisionId, VariantId,
 };
+pub use jobs::{
+    immutable_output_path, is_legal, CacheKey, Job, JobInputs, JobState, JobTransition,
+    MAX_ATTEMPTS, TRANSITIONS,
+};
 pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 pub use store::Store;
+pub use store_jobs::{MoveJob, NewJob};
 pub use store_time::ClockSegmentRow;
 
 use std::path::Path;

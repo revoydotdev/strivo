@@ -27,8 +27,9 @@ use crate::ResearchError;
 /// The `schema_meta` key holding this schema's version line.
 pub const VERSION_KEY: &str = "creator_schema_version";
 
-/// Every table migration 1 creates, in dependency order. A PVR install has
-/// none of them; this list is what a test asserts against.
+/// Every Creator table the current version has, in dependency order. A PVR
+/// install has none of them; this list is what a test asserts against, and
+/// what a late migration's `ALTER`s are appended to.
 pub const TABLES: &[&str] = &[
     "creator_projects",
     "creator_project_research_links",
@@ -43,6 +44,8 @@ pub const TABLES: &[&str] = &[
     "creator_publications",
     "creator_metric_observations",
     "creator_clock_segments",
+    "creator_jobs",
+    "creator_job_transitions",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -63,12 +66,17 @@ const TIME_MODEL_V2: &str = include_str!("schema_v2.sql");
 
 const DROP_TIME_MODEL_V2: &str = include_str!("schema_v2.down.sql");
 
+const JOB_LIFECYCLE_V3: &str = include_str!("schema_v3.sql");
+
+const DROP_JOB_LIFECYCLE_V3: &str = include_str!("schema_v3.down.sql");
+
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
 /// millisecond durations with integer microseconds and adds the wall-clock
-/// to media-time segments. Version 1 is frozen — it is committed history,
-/// and a database already at version 1 migrates forward from the bytes
-/// version 1 wrote.
+/// to media-time segments; version 3 is the durable job and artifact
+/// lifecycle. Versions 1 and 2 are frozen — committed history with rehearsed
+/// rollbacks, and a database already at those versions migrates forward from
+/// the bytes they wrote.
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -81,6 +89,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_time_model",
         up: TIME_MODEL_V2,
         down: DROP_TIME_MODEL_V2,
+    },
+    Migration {
+        version: 3,
+        name: "creator_job_lifecycle",
+        up: JOB_LIFECYCLE_V3,
+        down: DROP_JOB_LIFECYCLE_V3,
     },
 ];
 
@@ -211,6 +225,15 @@ fn stamp(conn: &Connection, version: i64) -> Result<(), ResearchError> {
 /// been undone — the database would claim version 2 while holding version 1's
 /// tables, and `duration_us` would be "migrated" onto a schema that no longer
 /// has the column.
+///
+/// **Only a version the database actually reached has its `down` run.** The
+/// list is this build's, which may be longer than what a given file went
+/// through — a database recorded at version 2, opened by a build that also
+/// carries version 3. Rolling that one to 1 used to run version 3's `down`
+/// first, on a schema version 3 never touched, and died on the first statement
+/// naming a column or table that was never added. The filter is
+/// `version > target && version <= start`, so the steps walked are exactly the
+/// ones that were applied, in reverse.
 pub fn rollback(
     conn: &mut Connection,
     target: i64,
@@ -221,7 +244,11 @@ pub fn rollback(
     if start <= target {
         return Ok(start);
     }
-    for m in migrations.iter().rev().filter(|m| m.version > target) {
+    for m in migrations
+        .iter()
+        .rev()
+        .filter(|m| m.version > target && m.version <= start)
+    {
         conn.execute_batch("BEGIN IMMEDIATE")?;
         let outcome = (|| -> Result<(), ResearchError> {
             conn.execute_batch(m.down)?;

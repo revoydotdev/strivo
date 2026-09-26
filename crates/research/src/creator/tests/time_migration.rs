@@ -60,8 +60,12 @@ fn a_version_one_database_migrates_its_durations_to_microseconds() {
         .expect("the v1 value is readable");
     assert_eq!(before, 7_200_000, "the fixture starts in milliseconds");
 
-    let version = schema::migrate(&mut conn, MIGRATIONS).expect("version 2 applies");
-    assert_eq!(version, 2);
+    let version = schema::migrate(&mut conn, MIGRATIONS).expect("every version applies");
+    assert_eq!(
+        version,
+        schema::latest_version(),
+        "the whole list applied, not just the time model"
+    );
 
     assert_eq!(
         source_duration_us(&conn, &a),
@@ -112,7 +116,10 @@ fn the_version_two_down_reverses_the_conversion_and_its_loss() {
     let asset = uuid::Uuid::new_v4().to_string();
     let session = uuid::Uuid::new_v4().to_string();
     seed_v1_source(&conn, &asset, &project, Some(1_000));
-    schema::migrate(&mut conn, MIGRATIONS).expect("version 2 applies");
+    // Only the first two migrations, so the fixture really is the version 2
+    // database this test reverses. Migrating the whole list would put it at
+    // the latest version and the `down` under test would never run.
+    schema::migrate(&mut conn, &MIGRATIONS[..2]).expect("version 2 applies");
     // 1 500 us is not a whole number of milliseconds, so the reverse
     // conversion cannot be exact.
     conn.execute(

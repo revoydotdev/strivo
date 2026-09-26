@@ -52,7 +52,8 @@ fn rollback_rehearsal_from_a_backup_restores_the_prior_state() {
         (version_of(&conn), creator_tables(&conn))
     };
     assert_eq!(
-        after_migrate.0, 2,
+        after_migrate.0,
+        schema::latest_version(),
         "the live database is at the current version"
     );
     assert!(!after_migrate.1.is_empty(), "and has Creator tables");

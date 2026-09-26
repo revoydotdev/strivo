@@ -92,6 +92,12 @@ typed_ids!(
     RenderPlanId,
     /// A produced output, identified by its content hash rather than a path.
     ArtifactId,
+    /// One durable creator job: a render, a transcription, a publication.
+    ///
+    /// A job **is** the lifecycle. The artifacts it produces hang off it, and
+    /// its `cache_key` is what lets an unchanged set of inputs reuse an earlier
+    /// output instead of running again.
+    JobId,
     /// An approved artifact plus its metadata, ready to release.
     ReleasePackageId,
     /// One destination posting of a release package.

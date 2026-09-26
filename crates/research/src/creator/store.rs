@@ -54,6 +54,18 @@ impl Store {
         Self { conn }
     }
 
+    /// Run one statement, bypassing every writer. For the malformed-input
+    /// tests, which have to produce the state a hand-edited or corrupt
+    /// database holds — something no public method will write, because
+    /// writing it is the defect.
+    #[cfg(test)]
+    pub fn raw_execute(&self, sql: &str, args: &[String]) -> Result<()> {
+        let refs: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(|a| a as &dyn rusqlite::ToSql).collect();
+        self.conn.execute(sql, refs.as_slice())?;
+        Ok(())
+    }
+
     /// The version line currently recorded, for diagnostics and tests.
     pub fn schema_version(&self) -> Result<i64> {
         schema::applied_version(&self.conn)

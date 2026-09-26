@@ -31,7 +31,28 @@ test.use({ viewport: { width: 1440, height: 900 } });
 
 // #/play is a real ROUTES entry (008-pvr.js:318-338) and was missing here
 // until the WCAG pass added it; the two lanes disagreed on the route list.
-const ROUTES = ["library", "recordings", "schedule", "watch", "play", "chat", "settings", "system", "logs"];
+const PVR_ROUTES = ["library", "recordings", "schedule", "watch", "play", "chat", "settings", "system", "logs"];
+
+/** The Creator-gated routes, measured against the same budgets. They were
+ *  absent from this lane, so a 28px hit-target floor and a 12px type floor were
+ *  being enforced on the PVR edition and merely assumed on the Creator one.
+ *  The lane's letterbox and viewport-overflow checks stay PVR-only: they are
+ *  about the player's tile geometry, which no Creator route has. */
+const CREATOR_ROUTES = [
+  "timeline",
+  "studio",
+  "analytics",
+  "publish",
+  "pipelines",
+  "plugins",
+  "dataviz",
+  "archive",
+];
+
+const ROUTES = [
+  ...PVR_ROUTES.map((r) => [r, "PVR"] as const),
+  ...CREATOR_ROUTES.map((r) => [r, "Creator"] as const),
+];
 
 // Live stream ids served by mock-server.mjs /multistream/tiles.
 const MOCK_STREAMS = ["Twitch:twitch-live-1", "YouTube:UClive0000000000000000aa"];
@@ -170,8 +191,8 @@ async function visibleDialogs(page: Page): Promise<string[]> {
   });
 }
 
-for (const route of ROUTES) {
-  test.describe(`#/${route}`, () => {
+for (const [route, edition] of ROUTES) {
+  test.describe(`${edition} #/${route}`, () => {
     test("hit targets are at least 28px", async ({ page }) => {
       await open(page, route);
       const all = await smallHitTargets(page);

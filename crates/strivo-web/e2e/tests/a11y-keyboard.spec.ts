@@ -99,8 +99,36 @@ async function focusableVisible(page: Page) {
   }, TABBABLE);
 }
 
-for (const route of ["library", "recordings", "settings", "system", "logs"]) {
-  test(`#/${route}: every visible control is reachable by Tab alone`, async ({ page }) => {
+/** The five PVR routes this lane originally covered. Kept as its own list
+ *  because the two groups are asserted separately below: a Creator route that
+ *  cannot be reached by Tab is a different defect from a PVR one, and the
+ *  failure message has to say which surface it was on. */
+const PVR_ROUTES = ["library", "recordings", "settings", "system", "logs"];
+
+/** The Creator-gated routes (012-pvr.js `CREATOR_ROUTES`). They were absent
+ *  from this lane while `a11y-scan.spec.ts` already swept them for axe, so
+ *  "keyboard-operable" was being claimed for the whole UI on the strength of
+ *  five PVR screens. The timeline is the hard case among them: a lane full of
+ *  absolutely-positioned clips, addressed by a key map rather than by Tab
+ *  order. */
+const CREATOR_ROUTES = [
+  "timeline",
+  "studio",
+  "analytics",
+  "publish",
+  "pipelines",
+  "plugins",
+  "dataviz",
+  "archive",
+];
+
+const ALL_ROUTES = [
+  ...PVR_ROUTES.map((r) => [r, "PVR"] as const),
+  ...CREATOR_ROUTES.map((r) => [r, "Creator"] as const),
+];
+
+for (const [route, edition] of ALL_ROUTES) {
+  test(`${edition} #/${route}: every visible control is reachable by Tab alone`, async ({ page }) => {
     await open(page, route);
 
     const focusable = await focusableVisible(page);
@@ -129,7 +157,7 @@ for (const route of ["library", "recordings", "settings", "system", "logs"]) {
     expect(notControls, `#/${route}: tab stops that are not native controls`).toEqual([]);
   });
 
-  test(`#/${route}: no positive tabindex (WCAG 2.4.3 focus order)`, async ({ page }) => {
+  test(`${edition} #/${route}: no positive tabindex (WCAG 2.4.3 focus order)`, async ({ page }) => {
     await open(page, route);
     const positive = await page.evaluate(() =>
       [...document.querySelectorAll("[tabindex]")]

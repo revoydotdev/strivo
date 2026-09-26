@@ -160,6 +160,10 @@ const timelineState = {
   capability: null,
   busy: false,
   notice: null,
+  noticeSeq: 0,
+  // The pointer gesture in flight, or null. One slot: a second pointer
+  // during a drag is ignored rather than tracked.
+  drag: null,
 };
 
 // One integer microsecond value read off the wire, or `null` for a refusal.
@@ -236,7 +240,10 @@ function timelineStyles() {
 .tl-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-md,16px)}
 .tl-toolbar{display:flex;flex-wrap:wrap;gap:var(--space-xs,8px);align-items:center}
 .tl-track{position:relative;height:56px;border-radius:var(--radius-md,8px);
-  background:var(--surface);border:1px solid var(--border);overflow:hidden}
+  background:var(--surface);border:1px solid var(--border);overflow:hidden;
+  /* A drag here is horizontal, and a vertical page scroll must still work on
+     a touch screen, so this claims only the horizontal axis. */
+  touch-action:pan-y}
 .tl-lane{position:relative;height:100%}
 /* A clip is a dark surface with an accent edge, not a block of accent with
    light text on it: #eef3f8 on --primary measures 3.79:1, which fails AA for
@@ -246,7 +253,13 @@ function timelineStyles() {
   background:var(--surface-overlay);color:var(--fg);
   border:1px solid var(--border-lighter);border-left:3px solid var(--primary);
   display:flex;align-items:center;padding:0 var(--space-xs,8px);cursor:grab;
-  font-size:var(--fs-sm,13px);overflow:hidden;white-space:nowrap}
+  font-size:var(--fs-sm,13px);overflow:hidden;white-space:nowrap;
+  touch-action:none;
+  /* DESIGN.md:206 and :217 — focus is a 150ms glow fade-in, hover a 150ms
+     lift. Both are duration-token values, and both are reduced away below. */
+  transition:outline-color var(--dur-short,150ms) var(--ease-move,ease-in-out),
+    background-color var(--dur-short,150ms) var(--ease-move,ease-in-out)}
+.tl-clip:hover{transform:translateY(-1px)}
 .tl-clip[data-selected="true"]{outline:2px solid var(--accent2);outline-offset:-2px}
 .tl-clip:focus-visible{outline:2px solid var(--accent2);outline-offset:-2px}
 .tl-clip[data-linked="true"]{border-style:dashed}
@@ -256,9 +269,26 @@ function timelineStyles() {
   background:var(--surface);border:1px solid var(--border)}
 .tl-state[data-kind="degraded"]{border-color:var(--secondary)}
 .tl-state[data-kind="failed"]{border-color:var(--recording)}
-.tl-notice{font-size:var(--fs-sm,13px);color:var(--fg-muted)}
+.tl-notice{font-size:var(--fs-sm,13px);color:var(--fg-muted);margin:0}
 .tl-kbd{display:inline-block;padding:0 4px;border-radius:var(--radius-sm,4px);
   border:1px solid var(--border);font-family:var(--font-mono,monospace)}
+/* DESIGN.md:189 — 4 columns below 768px. The min-width:0 is load-bearing
+   rather than tidy: a flex item's automatic minimum size is its min-content
+   width, so eight toolbar buttons set an 824px floor and #content — itself a
+   grid item — then refuses to shrink below it, which is a timeline that cannot
+   be reviewed on a phone at all. Labels wrap instead of clipping a key hint. */
+@media (max-width:768px){
+  .tl-toolbar>.sm{flex:1 1 45%;min-width:0;white-space:normal;height:auto}
+  .tl-track{height:64px}
+}
+/* Reduced motion, both signals (todo 18's F-18/F-19 pair). The global button
+   transition in 000-pvr.css is not inside a reduce block, so a timeline button
+   would keep animating for a user who asked it not to; the descendant selector
+   outranks it without an !important. */
+@media (prefers-reduced-motion: reduce){
+  .tl-wrap *{transition:none;animation:none;transform:none}
+}
+html.reduce-motion .tl-wrap *{transition:none;animation:none;transform:none}
 `;
   document.head.appendChild(style);
 }

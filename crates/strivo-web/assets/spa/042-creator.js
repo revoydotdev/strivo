@@ -51,8 +51,25 @@ function timelineClock(us) {
 
 function timelineNotice() {
   if (!timelineState.notice) return "";
-  return `<p class="tl-notice" data-tl-notice="${htmlEscape(timelineState.notice.kind)}"
-    role="status">${htmlEscape(timelineState.notice.text)}</p>`;
+  return htmlEscape(timelineState.notice.text);
+}
+
+// The notice is a live region, so it is created ONCE by the route and patched
+// in place. Re-rendering its container's innerHTML destroyed and recreated the
+// region on every paint, which announces nothing: assistive tech sees a fresh
+// empty node rather than a change.
+function timelinePaintNotice() {
+  const el = document.getElementById("tl-live");
+  if (!el) return;
+  const notice = timelineState.notice;
+  const text = notice ? notice.text : "";
+  if (el.textContent !== text) el.textContent = text;
+  if (notice) el.dataset.tlNotice = notice.kind;
+  else delete el.dataset.tlNotice;
+  // `aria-busy` marks the lane, not the region: a busy ANCESTOR of a live
+  // region tells assistive tech to hold the announcement back.
+  const lane = document.getElementById("tl-clips");
+  if (lane) lane.setAttribute("aria-busy", String(Boolean(timelineState.busy)));
 }
 
 // Repaint without destroying focus. Replacing the lane's innerHTML on every
@@ -74,8 +91,8 @@ function timelinePaint() {
   } else {
     host.innerHTML = timelineRenderClips();
   }
-  const noticeSlot = document.getElementById("tl-notice-slot");
-  if (noticeSlot) noticeSlot.innerHTML = timelineNotice();
+  timelinePaintNotice();
+  if (timelineState.plan) timelineSyncControls();
   const playhead = document.getElementById("tl-playhead");
   if (playhead && plan && plan.output_duration) {
     playhead.style.left = `${(timelineState.playheadUs / plan.output_duration) *
@@ -103,9 +120,20 @@ function timelinePatchClips(host, plan) {
 
 // One edit, sent as an intent. The plan that comes back is the only thing
 // painted, so the surface cannot drift from the render.
-async function timelineCommit(edit) {
+//
+// `label` names the operation for a request that carries no `edit` — a caption
+// change is a document edit, so it rides the same endpoint with `edit: null`
+// and the notice would otherwise read "null applied".
+async function timelineCommit(edit, label) {
   if (timelineState.busy) return;
   timelineState.busy = true;
+  const what = label || (edit && edit.op) || "edit";
+  // Announced before the await, not after: the round trip is the long part,
+  // and an announcement that only appears once the work is over is not an
+  // announcement of anything in progress.
+  timelineSay({ kind: "compiling", text: `Compiling the plan — ${what}…` });
+  const announced = timelineState.noticeSeq;
+  timelinePaint();
   const before = timelineState.request;
   try {
     const result = await timelineApi(edit);
@@ -116,16 +144,18 @@ async function timelineCommit(edit) {
     timelineState.request = result.request;
     timelineState.plan = result.plan;
     timelineState.snapPoints = result.snap_points_us || [];
-    timelineState.notice = result.clamps && result.clamps.length
+    if (timelineState.noticeSeq === announced) timelineState.notice = result.clamps && result.clamps.length
       ? {
           kind: "clamped",
           text: `Clamped to the source: ${result.clamps
             .map((c) => `clip ${c.clip} ${c.edge} → ${timelineClock(c.applied_micros)}`)
             .join(", ")}`,
         }
-      : { kind: "applied", text: `${edit.op} applied.` };
+      : { kind: "applied", text: `${what} applied.` };
   } catch (e) {
-    timelineState.notice = { kind: "failed", text: e instanceof Error ? e.message : String(e) };
+    if (timelineState.noticeSeq === announced) {
+      timelineState.notice = { kind: "failed", text: e instanceof Error ? e.message : String(e) };
+    }
   } finally {
     timelineState.busy = false;
     timelinePaint();
@@ -162,7 +192,7 @@ function timelineSnapPlayhead() {
   }
   if (best !== null) {
     timelineState.playheadUs = best;
-    timelineState.notice = { kind: "snapped", text: `Playhead snapped to ${timelineClock(best)}.` };
+    timelineSay({ kind: "snapped", text: `Playhead snapped to ${timelineClock(best)}.` });
   }
   return best;
 }
@@ -182,29 +212,204 @@ function timelineUndo() {
   timelineReload().then(timelinePaint);
 }
 
-function timelineExportNotice() {
-  const plan = timelineState.plan;
-  timelineState.notice = {
-    kind: "export",
-    text: `Export contract: ${plan.clips.length} clip(s), ${plan.output_duration} us, revision ${plan.revision}.`,
-  };
+// Any notice written through here bumps a sequence. A compile takes time, and
+// a creator can press something during it — the answer then arrives and
+// silently replaces whatever they just asked for, so the export contract
+// vanishes under a "split applied." and the surface looks broken. A commit
+// only publishes its result if nothing has been announced since it started.
+function timelineSay(notice) {
+  timelineState.noticeSeq = (timelineState.noticeSeq || 0) + 1;
+  timelineState.notice = notice;
 }
 
-// Keyboard-first: every edit has a key, and the key path is the tested one.
-// A mouse drag commits the same intents, so the two cannot diverge.
+function timelineExportNotice() {
+  const plan = timelineState.plan;
+  const cues = (timelineState.request.captions || {}).cues || [];
+  timelineSay({
+    kind: "export",
+    text: `Export contract: ${plan.clips.length} clip(s), ${plan.output_duration} us, ` +
+      `${cues.length} caption cue(s), revision ${plan.revision}.`,
+  });
+}
+
+// Captioning is a document edit, not a plan edit: the cues live on the request
+// the surface already holds, and the compiler resolves them through the
+// interval map. A cue goes at the selected clip's own source start, which is
+// inside a span the composition kept — the compiler refuses a cue inside a cut
+// the composition deleted, and this placement cannot be one.
+function timelineCaptionAt(index) {
+  const clip = timelineState.plan.clips[index];
+  if (!clip) return null;
+  const at = clip.span.range.start;
+  const cues = (timelineState.request.captions || {}).cues || [];
+  return cues.find((cue) => cue.at === at) || null;
+}
+
+function timelineToggleCaption() {
+  const index = timelineState.selected;
+  if (index < 0 || !timelineState.plan.clips[index]) {
+    timelineSay({ kind: "empty", text: "Select a clip to caption." });
+    timelinePaint();
+    return;
+  }
+  // Refuse BEFORE touching the request. This operation edits the document in
+  // place rather than posting an intent, so a compile already in flight would
+  // answer with its own echo of the old request and silently discard the cue —
+  // a lost edit with no error anywhere.
+  if (timelineState.busy) {
+    timelineSay({ kind: "empty", text: "Still compiling — caption again in a moment." });
+    timelinePaint();
+    return;
+  }
+  const clip = timelineState.plan.clips[index];
+  const at = clip.span.range.start;
+  const cues = ((timelineState.request.captions || {}).cues || []).filter((cue) => cue.at !== at);
+  const adding = !timelineCaptionAt(index);
+  if (adding) cues.push({ at, duration: clip.span.range.end - at });
+  timelineState.request.captions = {
+    ...timelineState.request.captions,
+    mode: cues.length ? "sidecar" : "none",
+    coordinate: "source",
+    cues,
+  };
+  timelineCommit(null, adding ? "caption" : "uncaption");
+}
+
+// The caption control is a toggle, so its state is `aria-pressed` — and the
+// name follows the state, because "Caption" on an already-captioned clip
+// promises an action that removes the caption.
+function timelineSyncControls() {
+  const button = document.getElementById("tl-caption");
+  if (!button) return;
+  const on = timelineState.selected >= 0 && Boolean(timelineCaptionAt(timelineState.selected));
+  button.setAttribute("aria-pressed", String(on));
+  button.setAttribute(
+    "aria-label",
+    on ? "Remove the caption from the selected clip" : "Caption the selected clip",
+  );
+}
+
+// ── Pointer ──────────────────────────────────────────────────────────────
+// A drag is the same intent a key posts, so the two cannot diverge. The three
+// gestures are: scrub the playhead on the empty lane, slip a clip by its body,
+// trim a clip by either edge. Every one of them has a key.
+const TIMELINE_DRAG_SLOP = 4;
+const TIMELINE_EDGE_PX = 8;
+
+function timelineUsAtX(lane, clientX) {
+  const rect = lane.getBoundingClientRect();
+  const total = timelineState.plan ? timelineState.plan.output_duration : 0;
+  if (!rect.width || !total) return 0;
+  const raw = ((clientX - rect.left) / rect.width) * total;
+  return Math.max(0, Math.min(total, Math.round(raw)));
+}
+
+function timelineOnPointerDown(event) {
+  const plan = timelineState.plan;
+  const lane = document.getElementById("tl-clips");
+  if (event.button !== 0 || !plan || !lane) return;
+  const clipEl = event.target.closest && event.target.closest("[data-tl-clip]");
+  if (!clipEl) {
+    timelineState.drag = { mode: "scrub", startX: event.clientX };
+  } else {
+    const rect = clipEl.getBoundingClientRect();
+    timelineState.selected = Number(clipEl.dataset.tlClip);
+    const edge =
+      event.clientX - rect.left <= TIMELINE_EDGE_PX
+        ? "in"
+        : rect.right - event.clientX <= TIMELINE_EDGE_PX
+          ? "out"
+          : null;
+    timelineState.drag = edge
+      ? { mode: "trim", index: timelineState.selected, edge, startX: event.clientX }
+      : {
+          mode: "slip",
+          index: timelineState.selected,
+          startX: event.clientX,
+          from: timelineUsAtX(lane, event.clientX),
+        };
+  }
+  event.currentTarget.setPointerCapture(event.pointerId);
+  timelinePaint();
+}
+
+function timelineOnPointerMove(event) {
+  const drag = timelineState.drag;
+  const lane = document.getElementById("tl-clips");
+  if (!drag || !lane || !timelineState.plan) return;
+  if (Math.abs(event.clientX - drag.startX) < TIMELINE_DRAG_SLOP) return;
+  const at = timelineUsAtX(lane, event.clientX);
+  if (drag.mode === "scrub") {
+    timelineState.playheadUs = at;
+    timelinePaint();
+    return;
+  }
+  const clip = timelineState.plan.clips[drag.index];
+  const el = lane.children[drag.index];
+  if (!clip || !el) return;
+  const total = timelineState.plan.output_duration || 1;
+  const width = timelineState.laneWidth || lane.clientWidth;
+  // Preview only: nothing is committed until the pointer is released, and the
+  // plan the surface holds is untouched either way.
+  if (drag.mode === "slip") {
+    el.style.left = `${(clip.output.start / total) * width + ((at - drag.from) / total) * width}px`;
+  } else {
+    const start = drag.edge === "in" ? Math.min(at, clip.output.end - 1) : clip.output.start;
+    const end = drag.edge === "out" ? Math.max(at, start + 1) : clip.output.end;
+    el.style.left = `${(start / total) * width}px`;
+    el.style.width = `${Math.max(2, ((end - start) / total) * width)}px`;
+  }
+}
+
+function timelineOnPointerUp(event) {
+  const drag = timelineState.drag;
+  if (!drag) return;
+  timelineState.drag = null;
+  const lane = document.getElementById("tl-clips");
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  if (drag.mode === "scrub" || !lane) {
+    timelinePaint();
+    return;
+  }
+  const at = timelineUsAtX(lane, event.clientX);
+  if (drag.mode === "slip") timelineCommit({ op: "slip", clip: drag.index, by: at - drag.from });
+  else timelineCommit({ op: "trim", clip: drag.index, edge: drag.edge, to: at });
+  // The clip keeps focus so the gesture can be finished or undone by key.
+  timelineFocusSelected();
+}
+
+function timelineOnPointerCancel() {
+  timelineState.drag = null;
+  timelinePaint();
+}
+
+// Keyboard-first: every operation has a key, and the key path is the tested
+// one. A pointer drag posts the same intents, so the two cannot diverge.
 function timelineOnKeydown(event) {
   const clipEl = event.target.closest && event.target.closest("[data-tl-clip]");
   const plan = timelineState.plan;
   if (!plan || !plan.clips.length) return;
   const frame = timelineFrameUs();
+  // Focusing a clip does NOT select it — the selection is what the arrow keys
+  // move, and a surface that selected on focus made the first arrow press walk
+  // away from the clip you had just tabbed to. The key acts on the focused
+  // clip when there is one and on the selection otherwise, which is also what
+  // lets it work from a toolbar button.
+  const focused = clipEl ? Number(clipEl.dataset.tlClip) : -1;
   if (event.key === "Escape") {
     timelineState.selected = -1;
     timelineState.notice = null;
+    timelineState.noticeSeq = (timelineState.noticeSeq || 0) + 1;
     timelinePaint();
     event.preventDefault();
     return;
   }
   if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    // Shift is the slip modifier, handled below, so a held shift must not also
+    // walk the selection.
+    if (event.shiftKey) return;
     const step = event.key === "ArrowRight" ? 1 : -1;
     timelineState.selected = Math.max(
       0,
@@ -215,8 +420,8 @@ function timelineOnKeydown(event) {
     event.preventDefault();
     return;
   }
-  // The playhead is not a property of a clip, so these two work whether the
-  // lane or a clip holds focus.
+  // The playhead is not a property of a clip, so these work wherever focus
+  // sits inside the timeline.
   if (event.key === "," || event.key === ".") {
     const delta = event.key === "." ? frame : -frame;
     timelineState.playheadUs = Math.max(
@@ -244,11 +449,21 @@ function timelineOnKeydown(event) {
     event.preventDefault();
     return;
   }
-  // Everything below acts on one clip, so it needs one under focus. The
-  // playhead keys above deliberately do not: a playhead is not a clip's.
-  if (!clipEl) return;
-  const index = Number(clipEl.dataset.tlClip);
-  timelineState.selected = index;
+  if (event.key === "c") {
+    timelineToggleCaption();
+    event.preventDefault();
+    return;
+  }
+  // Everything below acts on a clip, and says so rather than refusing
+  // silently: a key that does nothing reads as a broken surface.
+  const index = focused >= 0 ? focused : timelineState.selected;
+  if (index < 0) {
+    if ("sxyltc".includes(event.key) || (event.shiftKey && event.key.startsWith("Arrow"))) {
+      timelineSay({ kind: "empty", text: "Select a clip first — Tab to the lane, then an arrow key." });
+      timelinePaint();
+    }
+    return;
+  }
   const clip = plan.clips[index];
   if (event.key === "[") {
     timelineState.playheadUs = timelineMicros(clip.output.start, "clip output start");
@@ -268,6 +483,25 @@ function timelineOnKeydown(event) {
   } else if (event.key === "l") {
     const partner = (index + 1) % plan.clips.length;
     timelineCommit({ op: "link", clip: index, with: partner, linked: true });
+    event.preventDefault();
+  } else if (event.key === "t" || event.key === "y") {
+    // The keyboard twin of dragging an edge: both edges, because a drag can
+    // reach either and an operation reachable only by pointer is a gap.
+    timelineCommit({
+      op: "trim",
+      clip: index,
+      edge: event.key === "t" ? "out" : "in",
+      to: timelineState.playheadUs,
+    });
+    event.preventDefault();
+  } else if (event.shiftKey && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+    // The keyboard twin of dragging a clip's body. A slip slides the source
+    // inside fixed out-points, so the composition does not move.
+    timelineCommit({
+      op: "slip",
+      clip: index,
+      by: event.key === "ArrowRight" ? frame : -frame,
+    });
     event.preventDefault();
   }
 }

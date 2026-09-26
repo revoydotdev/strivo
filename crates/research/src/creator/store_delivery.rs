@@ -1,16 +1,20 @@
 //! The delivery chain: variant → render plan → artifact → release package →
 //! publication → metric observation.
 //!
-//! Inserts only. Every type in this file has a durable identity and a schema
-//! row, and the things that *read* them back are the jobs and routes that
-//! todo 23/24 build. Writing a `get` here today would be a method with no
-//! caller.
+//! Inserts, plus the one `get` a caller has earned. Every type in this file has
+//! a durable identity and a schema row, and the things that *read* them back are
+//! the jobs and routes that todo 23/24 build — so a `get` with no caller is not
+//! written. [`Store::artifact`] is the exception: import's manifest is an
+//! artifact row, and a test that cannot read its own manifest back is a test
+//! that proves the job points at nothing.
 
 use rusqlite::params;
 
 use super::entities::*;
+use super::ids::{ArtifactId, ProjectId, RenderPlanId, VariantId};
 use super::store::Store;
 use crate::Result;
+use strivo_editor::time::MediaTime;
 
 impl Store {
     pub fn insert_variant(&self, v: &Variant) -> Result<()> {
@@ -72,6 +76,65 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// One artifact by its identity, or `None` for an id that names no row.
+    /// The `creator_artifacts` row is the only place an artifact's bytes are
+    /// described, so a reader that cannot ask for it is a reader inferring an
+    /// artifact's shape from the job that claims to have made it.
+    pub fn artifact(&self, id: ArtifactId) -> Result<Option<Artifact>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id,project_id,variant_id,render_plan_id,kind,content_hash,locator,bytes,
+                        width,height,duration_us,created_at
+                 FROM creator_artifacts WHERE id=?1",
+                [id.to_string()],
+                |r| {
+                    let uuid = |i: usize, v: String| -> rusqlite::Result<uuid::Uuid> {
+                        uuid::Uuid::parse_str(&v).map_err(|e| {
+                            rusqlite::Error::InvalidColumnType(
+                                i,
+                                e.to_string(),
+                                rusqlite::types::Type::Text,
+                            )
+                        })
+                    };
+                    Ok(Artifact {
+                        id: ArtifactId::from_uuid(uuid(0, r.get(0)?)?),
+                        project_id: ProjectId::from_uuid(uuid(1, r.get(1)?)?),
+                        variant_id: r
+                            .get::<_, Option<String>>(2)?
+                            .map(|v| uuid(2, v))
+                            .transpose()?
+                            .map(VariantId::from_uuid),
+                        render_plan_id: r
+                            .get::<_, Option<String>>(3)?
+                            .map(|v| uuid(3, v))
+                            .transpose()?
+                            .map(RenderPlanId::from_uuid),
+                        kind: r.get(4)?,
+                        content_hash: r.get(5)?,
+                        locator: r.get::<_, Option<String>>(6)?.map(std::path::PathBuf::from),
+                        bytes: r.get::<_, Option<i64>>(7)?.map(|b| b as u64),
+                        width: r.get::<_, Option<i64>>(8)?.map(|w| w as u32),
+                        height: r.get::<_, Option<i64>>(9)?.map(|h| h as u32),
+                        duration: r
+                            .get::<_, Option<i64>>(10)?
+                            .map(MediaTime::from_micros)
+                            .transpose()
+                            .map_err(|e| {
+                                rusqlite::Error::InvalidColumnType(
+                                    10,
+                                    e.to_string(),
+                                    rusqlite::types::Type::Integer,
+                                )
+                            })?,
+                        created_at: r.get(11)?,
+                    })
+                },
+            )
+            .ok())
     }
 
     pub fn insert_release_package(&self, r: &ReleasePackage) -> Result<()> {

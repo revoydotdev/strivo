@@ -13,6 +13,7 @@
 
 mod fixtures;
 mod identity;
+mod import;
 mod jobs_lifecycle;
 mod malformed;
 mod migration;

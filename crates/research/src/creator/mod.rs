@@ -56,7 +56,9 @@
 
 mod entities;
 mod ids;
+mod import;
 mod jobs;
+mod relink;
 mod render_plan;
 mod schema;
 mod store;
@@ -79,10 +81,15 @@ pub use ids::{
     PublicationId, ReleasePackageId, RenderPlanId, ResearchProjectId, SourceAssetId,
     TranscriptRevisionId, VariantId,
 };
+pub use import::{
+    fingerprint, import_files, AdmittedFile, ImportEntry, ImportManifest, ImportOutcome,
+    ImportRequest,
+};
 pub use jobs::{
     immutable_output_path, is_legal, CacheKey, Job, JobInputs, JobState, JobTransition,
     MAX_ATTEMPTS, TRANSITIONS,
 };
+pub use relink::{relink, unresolved_sources, RelinkRejection};
 pub use render_plan::{compile_render_plan, content_hash, is_stale, read_plan};
 pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 pub use store::Store;

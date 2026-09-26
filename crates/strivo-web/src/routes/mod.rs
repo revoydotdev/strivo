@@ -32,6 +32,12 @@ pub mod login;
 // guard and compiling it out keeps its vocabulary out of the PVR surface.
 #[cfg(feature = "creator")]
 pub mod media_input;
+// Local file and folder import (report item C01). Creator-only: a PVR install
+// has no way to name a file the daemon did not record, and no surface that
+// would accept one. Compiling it out rather than mounting it inert keeps
+// `import`, `relink` and their vocabulary out of the PVR binary entirely.
+#[cfg(feature = "creator")]
+pub mod import;
 // Multi-stream tile layout for the watch player. Core (single + multi view),
 // not a Pro plugin — always compiled so the PVR build's player works.
 pub mod multistream;

@@ -845,6 +845,9 @@ pub fn router() -> Router<AppState> {
             )
             .route("/api/v1/marketplace/catalog", get(marketplace_catalog))
             .route("/api/v1/plugins/{plugin}/{verb}", post(plugin_rpc));
+        // Local import: the routes that admit a client-named path and turn it
+        // into a project source. Absent from a PVR build entirely.
+        r = r.merge(crate::routes::import::router());
     }
 
     r

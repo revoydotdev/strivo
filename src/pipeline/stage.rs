@@ -100,6 +100,34 @@ pub enum ResourceLock {
     File { path: String },
 }
 
+impl ResourceLock {
+    /// A lock as one line: the kind and the capacity that bounds it. `File`
+    /// carries a path, so this is text a caller must treat as untrusted.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Gpu => "gpu".to_string(),
+            Self::Cpu { cap } => format!("cpu:{cap}"),
+            Self::Disk { cap } => format!("disk:{cap}"),
+            Self::Api { name, cap } => format!("api:{name}:{cap}"),
+            Self::File { path } => format!("file:{path}"),
+        }
+    }
+}
+
+/// One violated rule: its stable id, the executor's own message, and which
+/// stage/edge/lock broke it where the rule has one.
+///
+/// `reason` is `&'static str` because it is the exact string the executor has
+/// always returned for that rule and this struct must not be able to change
+/// it. `detail` is the new part — an editor can only show a useful error if
+/// the refusal points at something the user can delete or edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuleViolation {
+    pub rule: &'static str,
+    pub reason: &'static str,
+    pub detail: Option<String>,
+}
+
 /// Where a stage is in its lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StageState {
@@ -296,39 +324,55 @@ impl Pipeline {
     /// Reject cyclic dependencies. Called once at submission; the executor
     /// trusts the graph thereafter.
     pub fn assert_acyclic(&self) -> Result<(), &'static str> {
-        let mut visited: HashSet<StageId> = HashSet::new();
-        let mut stack: HashSet<StageId> = HashSet::new();
-        for s in &self.stages {
-            if Self::dfs(self, s.id, &mut visited, &mut stack) {
-                return Err("pipeline DAG contains a cycle");
-            }
-        }
-        Ok(())
+        self.cycle()
+            .map(|_| "pipeline DAG contains a cycle")
+            .map_or(Ok(()), Err)
     }
 
+    /// The cycle, if there is one, as the ordered stage ids that close it —
+    /// so the offending edge is the last hop. `assert_acyclic` reports only
+    /// that a cycle exists, which over ten stages names nothing a user can
+    /// delete.
+    pub fn cycle(&self) -> Option<Vec<StageId>> {
+        let mut visited: HashSet<StageId> = HashSet::new();
+        let mut stack: Vec<StageId> = Vec::new();
+        for s in &self.stages {
+            if let Some(loop_) = Self::dfs(self, s.id, &mut visited, &mut stack) {
+                return Some(loop_);
+            }
+        }
+        None
+    }
+
+    /// `None` when `node` closes no cycle; otherwise the cycle in walk order,
+    /// starting and ending at the same stage, so the offending edge is the
+    /// last hop. `stack` doubles as the current path, which is what lets the
+    /// cycle be reconstructed rather than merely detected.
     fn dfs(
         pipe: &Pipeline,
         node: StageId,
         visited: &mut HashSet<StageId>,
-        stack: &mut HashSet<StageId>,
-    ) -> bool {
-        if stack.contains(&node) {
-            return true;
+        stack: &mut Vec<StageId>,
+    ) -> Option<Vec<StageId>> {
+        if let Some(at) = stack.iter().position(|id| *id == node) {
+            let mut loop_ = stack[at..].to_vec();
+            loop_.push(node);
+            return Some(loop_);
         }
         if visited.contains(&node) {
-            return false;
+            return None;
         }
-        stack.insert(node);
+        stack.push(node);
         if let Some(s) = pipe.stages.iter().find(|s| s.id == node) {
             for &input in &s.inputs {
-                if Self::dfs(pipe, input, visited, stack) {
-                    return true;
+                if let Some(loop_) = Self::dfs(pipe, input, visited, stack) {
+                    return Some(loop_);
                 }
             }
         }
-        stack.remove(&node);
+        stack.pop();
         visited.insert(node);
-        false
+        None
     }
 
     pub fn cancel_all(&self) {

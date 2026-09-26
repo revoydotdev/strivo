@@ -392,6 +392,102 @@ function broadcast(eventObj) {
   for (const c of sseClients) c.write(frame);
 }
 
+// The authoring surface's store (todo 53). Reset with the other module-level
+// stores so a reused server cannot serve a template a previous run saved.
+const templateStore = new Map();
+
+// The registry names the editor matches a dispatch against. A FIXTURE, and
+// deliberately the same list `/api/v1/plugins` answers with, because in
+// production both come from one `PluginRegistry` and a mock that disagreed
+// with itself would be a second answer to "can this run".
+const REGISTRY_PLUGINS = ["crunchr", "insights", "archiver", "viewguard"];
+
+const A_TRANSCRIBE = "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a";
+const A_PUBLISH = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
+
+function authorStage(over) {
+  return {
+    id: A_TRANSCRIBE, name: "Transcribe", kind: { Custom: "crunchr.transcribe" },
+    inputs: [], state: "Pending", attempts: 0, max_attempts: 3,
+    fallback_provider: null, requires: [], cost_cents_estimate: 0,
+    dispatch: { plugin: "crunchr", verb: "transcribe", selection: [], payload: null },
+    artifacts: [], ...over,
+  };
+}
+
+function authorPipeline() {
+  return {
+    id: "77777777-7777-4777-8777-777777777777",
+    name: "Authoring fixture",
+    stages: [
+      authorStage({}),
+      authorStage({
+        id: A_PUBLISH, name: "Publish",
+        kind: { Custom: "archiver.publish" },
+        inputs: [A_TRANSCRIBE],
+        dispatch: { plugin: "archiver", verb: "publish", selection: [], payload: null },
+      }),
+    ],
+    state: "Pending", started_at_secs: null, completed_at_secs: null,
+    subject_id: null, trigger: "manual", error: null,
+  };
+}
+
+// The seven rules, so the mock answers a save the way the real route does.
+// This is a re-implementation and it is deliberate: the browser lane needs a
+// 400 with an `errors` array and a 409 with a `history/conflict` body to
+// drive, and the lane that PROVES the rules is
+// `crates/strivo-web/tests/pipeline_authoring.rs`, against the real
+// `pipeline_templates::save`. This copy is allowed to be wrong; that one is
+// not, and a change here cannot make a real save pass.
+function authorErrors(pipeline) {
+  const out = [];
+  const stages = pipeline.stages || [];
+  const ids = new Set(stages.map((s) => s.id));
+  const seen = new Set();
+  for (const s of stages) {
+    if (seen.has(s.id)) out.push({ rule: "duplicate-stage-id", reason: "pipeline contains duplicate stage ids", detail: `Two stages share the id ${s.id}.` });
+    seen.add(s.id);
+  }
+  if (!stages.length) out.push({ rule: "empty-stage-list", reason: "pipeline must contain at least one stage", detail: null });
+  for (const s of stages) {
+    for (const i of s.inputs || []) {
+      if (!ids.has(i)) out.push({ rule: "dangling-input", reason: "pipeline references an unknown input stage", detail: `${s.name} reads ${i}, which is not a stage here.` });
+    }
+    if (!s.max_attempts) out.push({ rule: "zero-capacity", reason: "pipeline contains a zero retry or resource capacity", detail: `${s.name} allows 0 attempts.` });
+    for (const lock of s.requires || []) {
+      const tag = Object.keys(lock)[0];
+      if (tag !== "Gpu" && lock[tag].cap === 0) out.push({ rule: "zero-capacity", reason: "pipeline contains a zero retry or resource capacity", detail: `${s.name} locks ${tag} at 0.` });
+    }
+    const d = s.dispatch;
+    if (d && (!String(d.plugin || "").trim() || !String(d.verb || "").trim())) out.push({ rule: "empty-dispatch", reason: "pipeline contains an empty dispatch target", detail: `${s.name} has a dispatch with an empty plugin or verb.` });
+    else if (d && !REGISTRY_PLUGINS.includes(String(d.plugin).trim())) out.push({ rule: "unknown-dispatch-target", reason: "pipeline dispatches to a plugin this build does not register", detail: `${s.name} dispatches to ${d.plugin}, which this build does not register.` });
+  }
+  // A cycle: walk, and report the closed loop in order.
+  const byId = new Map(stages.map((s) => [s.id, s]));
+  const visited = new Set();
+  const walk = (id, stack) => {
+    const at = stack.indexOf(id);
+    if (at !== -1) return stack.slice(at).concat([id]);
+    if (visited.has(id)) return null;
+    stack.push(id);
+    const s = byId.get(id);
+    if (s) for (const i of s.inputs || []) { const f = walk(i, stack); if (f) return f; }
+    stack.pop();
+    visited.add(id);
+    return null;
+  };
+  for (const s of stages) {
+    const f = walk(s.id, []);
+    if (f) {
+      const names = f.map((id) => (byId.get(id) || {}).name || id);
+      out.push({ rule: "acyclic", reason: "pipeline DAG contains a cycle", detail: `${names.join(" \u2192 ")} \u2192 ${names[0]}.` });
+      break;
+    }
+  }
+  return out;
+}
+
 // The pipeline graph the Pipelines page draws (todo 52).
 //
 // A FIXTURE, not a derivation: the mock deliberately does not re-implement
@@ -541,6 +637,7 @@ const server = createServer(async (req, res) => {
   if (path === "/__test__/reset" && req.method === "POST") {
     abRenderStore.clear();
     submixStore.clear();
+    templateStore.clear();
     settingsState = structuredClone(DEFAULT_SETTINGS);
     return json(res, 200, { status: "ok" });
   }
@@ -958,6 +1055,65 @@ const server = createServer(async (req, res) => {
         }],
         graph: PIPELINE_GRAPH,
       });
+
+    // ── Authoring (todo 53) ───────────────────────────────────────────
+    if (p === "/pipelines/templates" && req.method === "GET") {
+      const templates = [{
+        id: "authoring_fixture", source: "shipped", revision: "fixture-rev-1",
+        pipeline: authorPipeline(),
+      }];
+      // A graph that already carries a duplicate stage id. The editor mints
+      // ids and never types them, so this defect cannot be produced through
+      // the editor's own controls — it can only arrive on load, which is why
+      // the lane drives it from a payload.
+      const dupe = authorPipeline();
+      dupe.name = "Duplicate ids";
+      dupe.stages[1] = { ...dupe.stages[1], id: dupe.stages[0].id };
+      templates.push({
+        id: "duplicate_ids", source: "authored", revision: "fixture-rev-2",
+        pipeline: dupe,
+      });
+      for (const stored of templateStore.values()) {
+        templates.push({ id: stored.id, source: "authored", revision: stored.revision, pipeline: stored.pipeline });
+      }
+      return json(res, 200, {
+        templates,
+        registry: { plugins: REGISTRY_PLUGINS },
+        rules: ["acyclic", "empty-stage-list", "duplicate-stage-id", "dangling-input", "zero-capacity", "empty-dispatch", "unknown-dispatch-target"],
+        unreadable: [],
+      });
+    }
+    {
+      const m = p.match(/^\/pipelines\/templates\/([^/]+)$/);
+      if (m && req.method === "PUT") {
+        const id = decodeURIComponent(m[1]);
+        const body = await readBody(req);
+        const pipeline = body && body.pipeline;
+        if (!pipeline || !Array.isArray(pipeline.stages)) {
+          return json(res, 400, { code: "graph/invalid", status: 400, detail: "malformed request", errors: [] });
+        }
+        // Validation BEFORE the conflict check and before any write, as the
+        // real route does: a graph that breaks a rule is refused on its own
+        // merits, so the browser's own refusal is the first line of defence
+        // and this is the second.
+        const errors = authorErrors(pipeline);
+        if (errors.length) {
+          return json(res, 400, { code: "graph/invalid", title: "Unprocessable Content", status: 400, detail: (errors[0].detail || errors[0].reason), errors });
+        }
+        const current = templateStore.get(id);
+        if (body.base_revision !== (current ? current.revision : null)) {
+          return json(res, 409, {
+            code: "history/conflict", title: "Conflict", status: 409,
+            detail: `this edit was made against revision ${body.base_revision}, but ${current ? current.revision : "none"} is now current`,
+            base: body.base_revision === null ? "new" : body.base_revision,
+            current: current ? current.revision : "",
+          });
+        }
+        const revision = `rev-${templateStore.size + 1}-${Buffer.from(JSON.stringify(pipeline)).length}`;
+        templateStore.set(id, { id, revision, pipeline });
+        return json(res, 200, { ok: true, id, revision, errors: [] });
+      }
+    }
 
     // ── Plugin data surface (read-only) ──────────────────────────────
     if (p === "/plugins")

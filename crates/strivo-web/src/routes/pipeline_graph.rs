@@ -24,7 +24,7 @@
 //! stage in the product as unrunnable. The per-plugin enable toggle is the
 //! executor's runtime state, not a static property of the graph.
 
-use strivo_core::pipeline::stage::{PipelineState, ResourceLock, Stage, StageState};
+use strivo_core::pipeline::stage::{PipelineState, RuleViolation, Stage, StageState};
 use strivo_core::pipeline::Pipeline;
 use strivo_core::plugin::registry::PluginRegistry;
 
@@ -146,11 +146,7 @@ fn node_value(stage: &Stage, registry: &PluginRegistry) -> Value {
     let (plugin, missing) = match stage.dispatch.as_ref() {
         None => (None, json!(["no dispatch target"])),
         Some(dispatch) => {
-            if registry
-                .plugin_statuses()
-                .iter()
-                .any(|(name, _, _)| *name == dispatch.plugin)
-            {
+            if registered_plugin_names(registry).contains(&dispatch.plugin) {
                 (Some(dispatch.plugin.as_str()), json!([]))
             } else {
                 (
@@ -167,7 +163,7 @@ fn node_value(stage: &Stage, registry: &PluginRegistry) -> Value {
         "state": stage_state_name(&stage.state),
         "attempts": stage.attempts,
         "max_attempts": stage.max_attempts,
-        "requires": stage.requires.iter().map(lock_label).collect::<Vec<_>>(),
+        "requires": stage.requires.iter().map(|l| l.label()).collect::<Vec<_>>(),
         "cost_cents_estimate": stage.cost_cents_estimate,
         "artifacts": stage.artifacts.len(),
         "fallback_provider": stage.fallback_provider,
@@ -279,15 +275,52 @@ fn stage_state_name(state: &StageState) -> &'static str {
     }
 }
 
-/// A resource lock as the graph shows it: the kind, and the capacity that
-/// bounds it. `File` carries a path, which the surface treats as untrusted
-/// text.
-fn lock_label(lock: &ResourceLock) -> String {
-    match lock {
-        ResourceLock::Gpu => "gpu".to_string(),
-        ResourceLock::Cpu { cap } => format!("cpu:{cap}"),
-        ResourceLock::Disk { cap } => format!("disk:{cap}"),
-        ResourceLock::Api { name, cap } => format!("api:{name}:{cap}"),
-        ResourceLock::File { path } => format!("file:{path}"),
-    }
+/// The plugin names this build's executor registry answers to — the same
+/// registry `PluginRegistry::execute_stage` dispatches through, read once so
+/// the graph and the editor cannot resolve a name two different ways.
+pub fn registered_plugin_names(registry: &PluginRegistry) -> Vec<String> {
+    registry
+        .plugin_statuses()
+        .into_iter()
+        .map(|(name, _, _)| name.to_string())
+        .collect()
+}
+
+/// The seventh authoring rule, and the one the executor's own `validate`
+/// cannot express: `StageKind::Custom` carries an opaque identifier, so
+/// `validate` only checks that `dispatch.plugin`/`verb` are non-empty. A
+/// graph naming a plugin no build registers therefore passes all six rules,
+/// saves, renders as runnable, and fails at dispatch — hours later, on a
+/// recording.
+///
+/// The check is the registry's answer, read off the same
+/// [`registered_plugin_names`] the node verdict uses. The browser is handed
+/// that list in the payload and matches against it, so the client never
+/// becomes a second opinion about what can run.
+pub const RULE_UNKNOWN_DISPATCH: &str = "unknown-dispatch-target";
+
+/// Every stage whose dispatch names a plugin this build does not register.
+/// A stage with no dispatch at all is not reported: `dispatch: None` is
+/// valid for a source or artifact node, and rule 6 already covers a dispatch
+/// that is present but empty.
+pub fn authoring_violations(pipeline: &Pipeline, registry: &PluginRegistry) -> Vec<RuleViolation> {
+    let known = registered_plugin_names(registry);
+    pipeline
+        .stages
+        .iter()
+        .filter_map(|stage| {
+            let dispatch = stage.dispatch.as_ref()?;
+            if known.contains(&dispatch.plugin) {
+                return None;
+            }
+            Some(RuleViolation {
+                rule: RULE_UNKNOWN_DISPATCH,
+                reason: "pipeline dispatches to a plugin this build does not register",
+                detail: Some(format!(
+                    "{} dispatches {}·{} — this build registers no such plugin, so it would fail at dispatch",
+                    stage.name, dispatch.plugin, dispatch.verb
+                )),
+            })
+        })
+        .collect()
 }

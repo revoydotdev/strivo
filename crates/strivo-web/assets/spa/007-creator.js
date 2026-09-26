@@ -120,6 +120,10 @@
   viewguardTrend: () => API._fetch("/plugins/viewguard/trend"),
   pipelinesDag: () => API._fetch("/pipelines/dag"),
   pipelineRuns: () => API._fetch("/pipelines/runs"),
+  // The authoring surface's own read. Not `/pipelines/dag`: that route
+  // serves the capability-tag blueprint model, which is documentation, and
+  // the editor authors the executor's own `Pipeline`.
+  pipelineTemplates: () => API._fetch("/pipelines/templates"),
   pipelineRun: (recordingId, template = "creator_publish") =>
     API._fetch("/pipelines/runs", {
       method: "POST",

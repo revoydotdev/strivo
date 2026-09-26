@@ -267,30 +267,47 @@ test("pipelines renders its DAG and is reachable, ungated, on a Creator build", 
 
   await page.goto("/app#/pipelines");
   await expect(page.locator("h1.page-title")).toHaveText("Pipelines");
-  // The nodes carry the runnable/blueprint verdict the SPA renders from
-  // (013-creator.js:75-102). A blueprint node is labelled honestly.
-  await expect(page.locator(".pl-node").first()).toBeVisible();
 
-  // The rendered node count must equal the server's node count, summed over
-  // every pipeline. Asserting `labels.length > 0` would be a tautology
-  // against itself, so the denominator comes from the API instead.
-  const expectedNodes = dag.body.pipelines.reduce(
-    (n: number, p: { nodes: unknown[] }) => n + (p.nodes?.length ?? 0),
+  // Todo 52 replaced the capability-tag blueprint display with a node graph
+  // over the executor's own `Pipeline`, so `.pl-node` / `.pl-node-status` and
+  // the "runnable"/"blueprint" labels no longer exist. What replaced them is
+  // the `graph` key of the same response `GET /api/v1/pipelines/runs`
+  // returns. `/api/v1/pipelines/dag` above is deliberately still asserted: it
+  // is todo 6's delivered surface and todo 56 retires it, not this todo.
+  const runs = await apiJson(request, "get", "/api/v1/pipelines/runs");
+  expect(runs.status).toBe(200);
+  const graphs = runs.body.graph?.graphs ?? [];
+  expect(graphs.length, "a Creator build draws a graph per run and per template").toBeGreaterThan(0);
+
+  // The denominator comes from the API, never from the page, so this is not a
+  // tautology against itself.
+  const expectedNodes = graphs.reduce(
+    (n: number, g: { nodes: unknown[] }) => n + (g.nodes?.length ?? 0),
     0,
   );
-  expect(expectedNodes, "the Creator DAG ships at least one node").toBeGreaterThan(0);
-  await expect(page.locator(".pl-node")).toHaveCount(expectedNodes);
-  await expect(page.locator(".pl-node-status")).toHaveCount(expectedNodes);
-
-  const labels = await page.locator(".pl-node-status").allTextContents();
-  expect(labels.every((l) => l === "runnable" || l === "blueprint")).toBe(true);
-  // A node with no executor is a blueprint and says so in its tooltip.
-  const blueprintTitles = await page.locator(".pl-node.is-roadmap").evaluateAll((els) =>
-    els.map((e) => e.getAttribute("title") ?? ""),
+  const expectedEdges = graphs.reduce(
+    (n: number, g: { edges: unknown[] }) => n + (g.edges?.length ?? 0),
+    0,
   );
-  expect(
-    blueprintTitles.length,
-    "a Creator build with no registered producers renders every node as a blueprint",
-  ).toBeGreaterThanOrEqual(0);
-  for (const t of blueprintTitles) expect(t).toContain("blueprint — no executor for");
+  expect(expectedNodes, "the shipped graphs have nodes").toBeGreaterThan(0);
+  await expect(page.locator("[data-pg-node]")).toHaveCount(expectedNodes);
+  await expect(page.locator(".x6-edge")).toHaveCount(expectedEdges);
+
+  // Both halves of every node, as separate attributes: `data-pg-stage-state`
+  // is the job table, `data-pg-runnable` is this build's executor registry.
+  const nodes = page.locator("[data-pg-node]");
+  for (let i = 0; i < (await nodes.count()); i += 1) {
+    await expect(nodes.nth(i)).toHaveAttribute("data-pg-stage-state", /.+/);
+    await expect(nodes.nth(i)).toHaveAttribute("data-pg-runnable", /^(true|false)$/);
+  }
+
+  // A node with no executor names which one is missing — todo 6's contract,
+  // now carried by the graph rather than by a blueprint badge.
+  const absent = await page
+    .locator('[data-pg-node][data-pg-runnable="false"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
+  for (const label of absent) {
+    expect(label).toContain("No executor in this build");
+    expect(label.length).toBeLessThan(400);
+  }
 });

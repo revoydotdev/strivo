@@ -497,6 +497,75 @@ async fn pipelines_dag(headers: HeaderMap, State(state): State<AppState>) -> imp
     .into_response()
 }
 
+/// The save request: the graph itself, and the revision it was built on.
+/// `base_revision` is `null` for a first save.
+#[cfg(feature = "creator")]
+#[derive(Debug, Deserialize)]
+struct TemplateSave {
+    base_revision: Option<String>,
+    pipeline: strivo_core::pipeline::Pipeline,
+}
+
+/// `GET /api/v1/pipelines/templates` — every template in the exact shape a
+/// save takes back, plus the registry's plugin names and the rule ids.
+///
+/// One payload rather than three endpoints because the editor cannot
+/// validate rule 7 without the registry's list, and a list fetched from a
+/// second endpoint is a list that can be fetched after the graph changed.
+#[cfg(feature = "creator")]
+async fn pipelines_templates_list(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    Json(crate::routes::pipeline_templates::authoring_payload(
+        &pipeline_templates(Uuid::nil()),
+        &registered_plugins(),
+    ))
+    .into_response()
+}
+
+/// `PUT /api/v1/pipelines/templates/<id>` — validate, then save.
+///
+/// The seven rules run here, before the file is touched, and the executor's
+/// own `validate` stays behind this as the backstop. A refusal carries every
+/// rule the graph broke, not the first: `graph/invalid` with an `errors`
+/// array, or `history/conflict` when the named base is no longer current.
+#[cfg(feature = "creator")]
+async fn pipelines_templates_save(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<TemplateSave>,
+) -> axum::response::Response {
+    if check_key(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    let registry = registered_plugins();
+    match crate::routes::pipeline_templates::save(
+        &id,
+        body.base_revision.as_deref(),
+        &body.pipeline,
+        &registry,
+    ) {
+        Ok(stored) => Json(json!({
+            "ok": true,
+            "id": stored.id,
+            "revision": stored.revision,
+            "errors": [],
+        }))
+        .into_response(),
+        Err(refusal) => {
+            let status =
+                StatusCode::from_u16(refusal.body()["status"].as_u64().unwrap_or(400) as u16)
+                    .unwrap_or(StatusCode::BAD_REQUEST);
+            (status, Json(refusal.body())).into_response()
+        }
+    }
+}
+
 /// The executor registry, built from the same
 /// [`strivo_plugins::register_all`] the daemon uses so a capability is
 /// never reported runnable here and unrunnable there. Plugin constructors
@@ -871,6 +940,11 @@ pub fn router() -> Router<AppState> {
             .route(
                 "/api/v1/pipelines/chains/{id}",
                 axum::routing::delete(pipelines_chains_delete),
+            )
+            .route("/api/v1/pipelines/templates", get(pipelines_templates_list))
+            .route(
+                "/api/v1/pipelines/templates/{id}",
+                axum::routing::put(pipelines_templates_save),
             )
             .route("/api/v1/marketplace/catalog", get(marketplace_catalog))
             .route("/api/v1/plugins/{plugin}/{verb}", post(plugin_rpc));

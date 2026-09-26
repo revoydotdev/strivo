@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use tokio::sync::{Mutex, Semaphore};
 
-use super::stage::{Pipeline, PipelineId, PipelineState, ResourceLock, Stage, StageId, StageState};
+use super::stage::{
+    Pipeline, PipelineId, PipelineState, ResourceLock, RuleViolation, Stage, StageId, StageState,
+};
 
 const MAX_PIPELINE_HISTORY: usize = 500;
 
@@ -88,44 +90,121 @@ impl PipelineRegistry {
         Ok(id)
     }
 
-    fn validate(pipeline: &Pipeline) -> Result<(), &'static str> {
-        pipeline.assert_acyclic()?;
+    /// The six rules a pipeline must satisfy before it is submitted, in the
+    /// order they are checked.
+    ///
+    /// Ids are part of the contract: a client surfaces them as inline errors
+    /// and branches on them rather than on prose, and the authoring surface
+    /// in `strivo-web` mirrors this exact list (asserted by
+    /// `crates/strivo-web/tests/pipeline_authoring.rs`, which reads the SPA
+    /// module source and compares the two sets).
+    pub const RULE_IDS: [&'static str; 6] = [
+        "acyclic",
+        "empty-stage-list",
+        "duplicate-stage-id",
+        "dangling-input",
+        "zero-capacity",
+        "empty-dispatch",
+    ];
+
+    /// Every rule `pipeline` breaks, in [`RULE_IDS`] order — not just the
+    /// first. The executor needs only the first (it refuses the submission);
+    /// an editor needs all of them at once, because a user fixing a graph
+    /// one error per save is a user fixing a graph ten times.
+    ///
+    /// `detail` names the offending stage, edge or lock where the rule has
+    /// one, so a refusal points at something deletable.
+    pub fn validation_errors(pipeline: &Pipeline) -> Vec<RuleViolation> {
+        let mut out: Vec<RuleViolation> = Vec::new();
+
+        if let Some(cycle) = pipeline.cycle() {
+            let names: Vec<String> = cycle
+                .iter()
+                .map(|id| {
+                    pipeline
+                        .stages
+                        .iter()
+                        .find(|s| s.id == *id)
+                        .map_or_else(|| id.to_string(), |s| s.name.clone())
+                })
+                .collect();
+            out.push(RuleViolation {
+                rule: Self::RULE_IDS[0],
+                reason: "pipeline DAG contains a cycle",
+                detail: Some(format!("{} → {}", names.join(" → "), names[0])),
+            });
+        }
         if pipeline.stages.is_empty() {
-            return Err("pipeline must contain at least one stage");
+            out.push(RuleViolation {
+                rule: Self::RULE_IDS[1],
+                reason: "pipeline must contain at least one stage",
+                detail: None,
+            });
         }
         let ids: std::collections::HashSet<_> = pipeline.stages.iter().map(|s| s.id).collect();
         if ids.len() != pipeline.stages.len() {
-            return Err("pipeline contains duplicate stage ids");
+            out.push(RuleViolation {
+                rule: Self::RULE_IDS[2],
+                reason: "pipeline contains duplicate stage ids",
+                detail: None,
+            });
         }
-        if pipeline
-            .stages
-            .iter()
-            .flat_map(|stage| &stage.inputs)
-            .any(|input| !ids.contains(input))
-        {
-            return Err("pipeline references an unknown input stage");
+        for stage in &pipeline.stages {
+            for input in stage.inputs.iter().filter(|i| !ids.contains(i)) {
+                out.push(RuleViolation {
+                    rule: Self::RULE_IDS[3],
+                    reason: "pipeline references an unknown input stage",
+                    detail: Some(format!("{} reads {input}", stage.name)),
+                });
+            }
         }
-        if pipeline.stages.iter().any(|stage| {
-            stage.max_attempts == 0
-                || stage.requires.iter().any(|lock| {
-                    matches!(
-                        lock,
-                        ResourceLock::Api { cap: 0, .. }
-                            | ResourceLock::Cpu { cap: 0 }
-                            | ResourceLock::Disk { cap: 0 }
-                    )
-                })
-        }) {
-            return Err("pipeline contains a zero retry or resource capacity");
+        for stage in &pipeline.stages {
+            if stage.max_attempts == 0 {
+                out.push(RuleViolation {
+                    rule: Self::RULE_IDS[4],
+                    reason: "pipeline contains a zero retry or resource capacity",
+                    detail: Some(format!("{} has max_attempts 0", stage.name)),
+                });
+            }
+            for lock in &stage.requires {
+                let cap = match lock {
+                    ResourceLock::Api { cap, .. }
+                    | ResourceLock::Cpu { cap }
+                    | ResourceLock::Disk { cap } => *cap,
+                    _ => continue,
+                };
+                if cap == 0 {
+                    out.push(RuleViolation {
+                        rule: Self::RULE_IDS[4],
+                        reason: "pipeline contains a zero retry or resource capacity",
+                        detail: Some(format!("{} locks {}", stage.name, lock.label())),
+                    });
+                }
+            }
         }
-        if pipeline.stages.iter().any(|stage| {
-            stage.dispatch.as_ref().is_some_and(|dispatch| {
+        for stage in &pipeline.stages {
+            if stage.dispatch.as_ref().is_some_and(|dispatch| {
                 dispatch.plugin.trim().is_empty() || dispatch.verb.trim().is_empty()
-            })
-        }) {
-            return Err("pipeline contains an empty dispatch target");
+            }) {
+                out.push(RuleViolation {
+                    rule: Self::RULE_IDS[5],
+                    reason: "pipeline contains an empty dispatch target",
+                    detail: Some(format!("{} has an empty plugin or verb", stage.name)),
+                });
+            }
         }
-        Ok(())
+        out
+    }
+
+    fn validate(pipeline: &Pipeline) -> Result<(), &'static str> {
+        // The backstop, deliberately last. The authoring surface in
+        // `strivo-web` runs `validation_errors` before a graph can be saved
+        // or run, so an invalid graph never reaches here; this stays because a
+        // caller with no editor in front of it still must not be able to
+        // submit one.
+        Self::validation_errors(pipeline)
+            .first()
+            .map_or(Ok(()), |violation| Err(violation.reason))
     }
 
     /// Open the durable registry. Interrupted running stages are re-queued:

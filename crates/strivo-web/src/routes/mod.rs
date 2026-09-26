@@ -63,6 +63,11 @@ pub mod plugins;
 // so the graph would render an empty page in the PVR surface.
 #[cfg(feature = "creator")]
 pub mod pipeline_graph;
+// Authored graph templates: the CRUD the browser editor writes to. Same
+// edition boundary and the same reason — the editor authors the Creator
+// pipeline model, and a PVR install has none to author.
+#[cfg(feature = "creator")]
+pub mod pipeline_templates;
 // The project workspace: one project, one selected revision, and the same
 // answer for every view (player, transcript, timeline, inspector, task status).
 // Creator-only because the table it reads is Creator-only — a PVR install has

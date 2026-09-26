@@ -83,11 +83,17 @@ async function renderPipelines(livePipeline) {
     </section>
     <h2 class="cfg-title">Pipeline graph <span class="pg-cap-hint">the executor's own stages and their inputs</span></h2>
     <div id="pg-graphs"></div>
+    <div id="pa-editor-host"></div>
   `);
   setupChromeHandlers();
   // The graph mounts after the page is on screen, and the vendored library
   // it draws with loads after that. Neither blocks first paint.
-  await renderPipelineGraphs(runPayload);
+  // Both mounts run after first paint and NEITHER is awaited before the
+  // other: `renderPipelineGraphs` waits on the vendored X6 import, which has
+  // an 8 s deadline, and awaiting it here held the editor — and its save
+  // button — hostage to a library the editor does not use.
+  renderPipelineGraphs(runPayload);
+  renderPipelineAuthoring();
 
   document.getElementById("pl-run-ultimate")?.addEventListener("click", () => {
     openRecordingPickerForPipeline({ name: "Ultimate creator publish", id: "creator_publish" }, finishedRecs);

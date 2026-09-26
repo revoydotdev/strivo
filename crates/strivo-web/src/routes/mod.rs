@@ -25,6 +25,13 @@ pub mod import_export;
 #[cfg(feature = "creator")]
 pub mod licence;
 pub mod login;
+// The media-input admission gate: every ffmpeg-bound media request passes it
+// before a child process exists. Creator-only because the only callers are the
+// Creator editor and clipper routes — in a PVR build no route hands a
+// client-supplied path or range to a media tool, so the gate has nothing to
+// guard and compiling it out keeps its vocabulary out of the PVR surface.
+#[cfg(feature = "creator")]
+pub mod media_input;
 // Multi-stream tile layout for the watch player. Core (single + multi view),
 // not a Pro plugin — always compiled so the PVR build's player works.
 pub mod multistream;

@@ -310,6 +310,31 @@ async fn clipper_extract(
         .duration_sec
         .unwrap_or(strivo_clipper::DEFAULT_CLIP_DURATION_SECS);
     let (start, duration) = strivo_clipper::clamp_request(body.start_sec, dur, None);
+    // `clamp_request` is called with no source duration, so nothing above has
+    // bounded `start` against the recording: `start_sec: 100000` on a 4-second
+    // file reaches ffmpeg as a seek past the end. The read position is the
+    // client's to choose and must be inside the source; the *length* stays
+    // `clamp_request`'s 10–90 s preference, because refusing a clip that runs
+    // past the end of a short recording is a product decision this gate does
+    // not get to make.
+    let start_time = match strivo_editor::time::MediaTime::from_secs_f64(f64::from(start)) {
+        Ok(t) => t,
+        Err(e) => {
+            return Problem::bad_request(format!("media-input/cut-range: {e}")).into_response()
+        }
+    };
+    match crate::routes::media_input::admit_source(&state, &input).await {
+        Ok(media) if start_time.micros() <= media.duration.micros() => {}
+        Ok(media) => {
+            return Problem::bad_request(format!(
+                "media-input/cut-out-of-range: {} us is outside the source's {} us",
+                start_time.micros(),
+                media.duration.micros()
+            ))
+            .into_response()
+        }
+        Err(rejection) => return rejection.to_problem().into_response(),
+    }
     let extension = input.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
     let fallback_stem = format!("clip_{:.0}", start);
     let safe_stem = sanitize_stem(if body.stem.is_empty() {
@@ -1702,6 +1727,19 @@ async fn editor_save(
     }
     let mut edl = body;
     edl.recording_id = recording_id.clone();
+    // Report item F03: the body carries client-named cut paths and
+    // client-named `start_sec`/`end_sec`, so this is the boundary where they
+    // enter. It runs before `compact()`, because compaction drops the
+    // zero-length cuts that are exactly the coordinates worth refusing.
+    let media_root = match state.config().await {
+        Ok(cfg) => cfg.recording_dir.clone(),
+        Err(e) => return Problem::internal(format!("config: {e}")).into_response(),
+    };
+    if let Err(rejection) =
+        crate::routes::media_input::admit_edl_at(&state, &media_root, &edl).await
+    {
+        return rejection.to_problem().into_response();
+    }
     edl.compact();
     let store = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
         Ok(s) => s,
@@ -1801,6 +1839,20 @@ async fn editor_render(
         Some(e) => e,
         None => return Problem::not_found("no EDL saved yet").into_response(),
     };
+    // A stored EDL is re-admitted here rather than trusted because
+    // `editor_save` admitted it: a revision written before this gate existed,
+    // or one written into `editor.db` by anything other than the save path, is
+    // exactly the input this check exists to refuse, and this is the line
+    // before the first ffmpeg of the render.
+    let media_root = match state.config().await {
+        Ok(cfg) => cfg.recording_dir.clone(),
+        Err(e) => return Problem::internal(format!("config: {e}")).into_response(),
+    };
+    if let Err(rejection) =
+        crate::routes::media_input::admit_edl_at(&state, &media_root, &edl).await
+    {
+        return rejection.to_problem().into_response();
+    }
     let out_dir = input
         .parent()
         .map(|p| p.join("edl"))

@@ -529,6 +529,22 @@ function cssEscape(s) {
   return String(s).replace(/[^A-Za-z0-9_-]/g, (m) => `\\${m}`);
 }
 
+// A native <details> has no Escape behaviour, so a keyboard user who opened
+// the Layout menu with Enter had no way back out except finding the toggle
+// again by hand. One document listener, guarded so a re-render does not
+// stack them.
+function bindLayoutMenuEscape() {
+  if (document.body.dataset.layoutMenuEscapeBound) return;
+  document.body.dataset.layoutMenuEscapeBound = "1";
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    document.querySelectorAll("details.ms-layout-menu[open]").forEach((details) => {
+      details.open = false;
+      details.querySelector("summary")?.focus();
+    });
+  });
+}
+
 function paintPlayerStage(watch, streams) {
   const layout = playerState.layout;
   // Fast path: if the tree shape didn't change, patch only the slots
@@ -595,6 +611,7 @@ function paintPlayerStage(watch, streams) {
         ? `<details class="ms-layout-menu"><summary>Layout ▾</summary>${wallControls}</details>`
         : wallControls}
     </div>`;
+  bindLayoutMenuEscape();
 
   // Capture existing iframes/videos before we blow the stage away so
   // we can re-attach them to the new layout intact. Adding a stream,

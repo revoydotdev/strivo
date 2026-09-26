@@ -45,7 +45,14 @@ test("R04: focusing a sortable header and pressing Enter/Space re-sorts the tabl
 
   const channelHeader = () => page.locator('th[data-sort="channel"]');
   await expect(channelHeader()).toHaveAttribute("tabindex", "0");
-  await expect(channelHeader()).toHaveAttribute("role", "button");
+  // No role override: `aria-sort` is only valid on columnheader/rowheader,
+  // and role="button" replaced the <th>'s implicit columnheader, so every
+  // sortable header reported "ARIA attribute is not allowed" (axe
+  // aria-allowed-attr, critical). Keyboard operability is tabindex plus the
+  // keydown listener; the native role is what makes the announced sort
+  // direction legal. This assertion used to demand role="button".
+  await expect(channelHeader()).not.toHaveAttribute("role", "button");
+  await expect(channelHeader()).toHaveAttribute("aria-sort", "none");
 
   await channelHeader().focus();
   await expect(channelHeader()).toBeFocused();
@@ -54,9 +61,11 @@ test("R04: focusing a sortable header and pressing Enter/Space re-sorts the tabl
   await expect(firstRowChannel()).toHaveText("Alpha");
 
   // Header re-renders on each sort; re-locate and press Space this time.
+  // It comes back FOCUSED, so this does not re-focus by hand — that is the
+  // defect the WCAG pass fixed (sorting used to drop focus on <body>, so a
+  // keyboard user could sort exactly once).
   const header2 = channelHeader();
-  await header2.focus();
-  await expect(header2).toBeFocused();
+  await expect(header2, "sorting threw focus away instead of restoring it").toBeFocused();
   await page.keyboard.press(" ");
   // Toggled back to descending: the filler channel (alphabetically last)
   // now leads, so the row is no longer Alpha.

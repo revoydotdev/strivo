@@ -21,7 +21,7 @@
 .rec-state-chip {
   display: inline-flex; align-items: center; gap: 0.4rem;
   padding: 0.18rem 0.6rem;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   background: rgba(255,255,255,0.05);
   border: 1px solid var(--border-light);
   border-radius: 999px;
@@ -46,7 +46,7 @@
 .rec-state-chip.state-file-error .rec-state-chip-dot { background: #f59e0b; }
 .rec-state-chip.state-scheduled  .rec-state-chip-dot { background: #a78bfa; }
 .rec-state-chip-count {
-  font-size: 0.7rem; opacity: 0.7;
+  font-size: var(--text-xs); opacity: 0.7;
   padding: 0 0.25rem;
   background: rgba(0,0,0,0.25);
   border-radius: 3px;
@@ -95,7 +95,7 @@
 .mon-status-banner {
   display: flex; flex-direction: column; gap: 0.25rem;
   padding: 0.55rem 0.8rem; margin: 0.5rem 0 0.8rem;
-  border-radius: 6px; font-size: 0.85em;
+  border-radius: 6px; font-size: var(--text-xs);
 }
 .mon-status-banner.ok {
   background: rgba(78,201,176,0.12);
@@ -113,16 +113,16 @@
 }
 @media (max-width: 720px) { .mon-limits-grid { grid-template-columns: 1fr; } }
 .mon-limit { display: flex; flex-direction: column; gap: 0.3rem; }
-.mon-limit-label { font-weight: 600; font-size: 0.85em; }
+.mon-limit-label { font-weight: 600; font-size: var(--text-xs); }
 .mon-limit-input {
   padding: 0.4rem 0.6rem;
   background: rgba(0,0,0,0.3);
   border: 1px solid var(--border-light);
   border-radius: 4px; color: inherit; font-family: monospace;
 }
-.mon-limit-hint { font-size: 0.78em; opacity: 0.65; }
+.mon-limit-hint { font-size: var(--text-xs); opacity: 0.65; }
 .mon-disk-gauge { display: flex; flex-direction: column; gap: 0.3rem; }
-.mon-disk-label { font-weight: 600; font-size: 0.85em; }
+.mon-disk-label { font-weight: 600; font-size: var(--text-xs); }
 .mon-disk-bar {
   height: 10px; border-radius: 5px;
   background: rgba(255,255,255,0.08);
@@ -133,4 +133,4 @@
   background: linear-gradient(90deg, var(--live), hsl(35,80%,55%), hsl(0,70%,55%));
   transition: width 0.2s ease;
 }
-.mon-disk-meta { font-size: 0.78em; opacity: 0.7; }
+.mon-disk-meta { font-size: var(--text-xs); opacity: 0.7; }

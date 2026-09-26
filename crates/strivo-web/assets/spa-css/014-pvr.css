@@ -1,6 +1,6 @@
 
 /* Logs date-range picker + clickable trace ids */
-.logs-daterange { display: inline-flex; gap: 0.3rem; align-items: center; font-size: 0.85em; }
+.logs-daterange { display: inline-flex; gap: 0.3rem; align-items: center; font-size: var(--text-xs); }
 .logs-date { padding: 0.3rem 0.4rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border-light); border-radius: 4px; color: inherit; font-family: inherit; }
 .logs-trace { color: var(--accent, #b07cff); text-decoration: none; border-bottom: 1px dotted currentColor; }
 .logs-trace:hover { background: rgba(176, 124, 255, 0.08); }

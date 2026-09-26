@@ -73,7 +73,7 @@ function buildCreatorDownloadSection(downloadRows, channelsAvailableForDownload)
       <p class="mon-help">Pulls new uploads from a YouTube channel as the monitor sees them. Leave the playlist field empty for the whole channel, or paste one or more playlist IDs to limit scope.</p>
       ${downloadRows || '<div class="empty sm">No channels are set to auto-download yet.</div>'}
       <form id="mon-dl-add" class="mon-add">
-        <select id="mon-dl-channel">
+        <select id="mon-dl-channel" aria-label="YouTube channel to auto-download">
           <option value="">Pick a YouTube channel…</option>
           ${channelsAvailableForDownload
             .map((c) => `<option value="${htmlEscape(`${c.platform}:${c.id}`)}">${htmlEscape(c.display_name || c.name)}</option>`)

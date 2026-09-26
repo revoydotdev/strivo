@@ -5,29 +5,33 @@ import { test, expect, type Page } from "@playwright/test";
 // per shortcut, a stage that fits the viewport, and tiles that don't
 // letterbox their video away.
 //
-// Enforcement (as of the 2026-09 density sweep round 2):
-//   - small hit targets, overlay count, and viewport overflow are ENFORCED
-//     unconditionally — every route was brought inside budget for these on
-//     this branch, so a regression should fail the suite, not just get
-//     logged. HIT_TARGET_ALLOWLIST below is the only escape hatch, and
-//     every entry on it carries a one-line reason.
-//   - tiny text and letterbox stay report-only (UX_BUDGET=enforce opts
-//     them in too): tiny-text still has real non-.micro offenders outside
-//     this lane's file ownership (008-pvr.css's .mon-status-banner et al,
-//     the multistream picker in 004b-pvr.css/018-pvr.js) that can't be
-//     closed from here, and letterbox is Lane A/B's player geometry, not
-//     this lane's surface, to assert on as a hard gate.
+// Enforcement: EVERY check below is now ENFORCED unconditionally — small
+// hit targets, tiny text, overlay count, viewport overflow and letterbox.
+// Tiny text and letterbox used to be report-only behind UX_BUDGET=enforce,
+// and were converted (WCAG 2.2 AA pass, todo 18):
+//   - tiny text: 35 sub-12px sites across all eight routes, all traced to a
+//     single cause — rem/em multipliers of 0.6-0.85 against the 14px
+//     `html` root at 000-pvr.css:113 — were lifted to var(--text-xs), the
+//     scale's own 12px floor. No threshold was moved and no site was
+//     reclassified as `.micro` to buy the pass.
+//   - letterbox: `.has-aspect` (004b) paired a definite `width: 100%` with
+//     `max-height: 100%`, and a definite width makes `max-height` clamp the
+//     height without feeding back into the width — so the clamped box was
+//     never the declared ratio. A 1x2 split-screen measured 1053x391 tiles
+//     (2.69:1) at 34% against a 10% budget. `.watch-content` is now a size
+//     container so the fit can use both axes.
 //
 // Measured at 1440×900 because that is the desktop size the sweep was
 // assessed at; the mock lane's default 1280×720 is kept for every other spec.
-const ENFORCE_EXTRA = (globalThis as any).process?.env?.UX_BUDGET === "enforce";
 const MIN_HIT = 28;
 const MIN_FONT_PX = 12;
 const MAX_LETTERBOX = 0.1;
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
-const ROUTES = ["library", "recordings", "schedule", "watch", "chat", "settings", "system", "logs"];
+// #/play is a real ROUTES entry (008-pvr.js:318-338) and was missing here
+// until the WCAG pass added it; the two lanes disagreed on the route list.
+const ROUTES = ["library", "recordings", "schedule", "watch", "play", "chat", "settings", "system", "logs"];
 
 // Live stream ids served by mock-server.mjs /multistream/tiles.
 const MOCK_STREAMS = ["Twitch:twitch-live-1", "YouTube:UClive0000000000000000aa"];
@@ -184,7 +188,7 @@ for (const route of ROUTES) {
 
     test("no text under 12px outside .micro", async ({ page }) => {
       await open(page, route);
-      report("tiny text", await tinyText(page), ENFORCE_EXTRA);
+      report("tiny text", await tinyText(page), true);
     });
 
     test("Ctrl+K opens exactly one overlay and Escape closes it", async ({ page }) => {
@@ -254,7 +258,7 @@ test.describe("#/watch tiles keep their video", () => {
         });
         return out;
       }, MAX_LETTERBOX);
-      report("letterboxed tiles (% wasted)", offenders, ENFORCE_EXTRA);
+      report("letterboxed tiles (% wasted)", offenders, true);
     });
   }
 });

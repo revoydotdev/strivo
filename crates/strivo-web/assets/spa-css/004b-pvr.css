@@ -40,7 +40,15 @@
  * `.watch-root.is-theater .ms-stage` — so it wins regardless of load order. */
 .watch-content .ms-stage.has-aspect {
   flex: none;
-  width: 100%;
+  /* Fit the preset's ratio inside the box on whichever axis is tighter.
+   * Neither pure form works alone: a definite `width: 100%` makes
+   * `max-height` clamp the height without feeding back into the width,
+   * and a definite `height: 100%` does the mirror image. Concretely, a
+   * 1x2 split-screen kept its full 1053px width and letterboxed both
+   * tiles 34%, and a 2x2 quadrant came out 1053x788 for a declared
+   * 16/9 with four 1.34:1 tiles. `100cqw`/`100cqh` (the size container
+   * is `.watch-content`) are what make "tighter axis" expressible. */
+  width: min(100cqw, 100cqh * var(--stage-aspect));
   height: auto;
   max-width: 100%;
   max-height: 100%;
@@ -158,7 +166,7 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
 }
 .ms-empty-pill:hover { background: rgba(255,255,255,0.16); border-color: var(--accent, #b07cff); }
 .ms-empty-pill > span { font-weight: 600; }
-.ms-empty-hint { font-size: 0.7rem; }
+.ms-empty-hint { font-size: var(--text-xs); }
 .ms-empty.is-drop-target { box-shadow: inset 0 0 0 3px var(--accent, #b07cff); }
 .ms-leaf.is-drop-target { box-shadow: inset 0 0 0 3px var(--accent, #b07cff); }
 .ms-leaf.is-dragging { opacity: 0.5; }
@@ -223,7 +231,7 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   gap: 2px;
 }
 .ms-picker-group-label {
-  font-size: 0.68rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--dim);
@@ -241,7 +249,7 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   border-radius: 8px;
   color: inherit;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--text-xs);
   padding: 0.25rem 0.45rem;
   cursor: pointer;
 }
@@ -250,9 +258,9 @@ body.ms-resizing { cursor: ew-resize; user-select: none; }
   border-color: var(--border-light);
   outline: none;
 }
-.ms-pick-dot { flex: none; font-size: 0.6rem; }
+.ms-pick-dot { flex: none; font-size: var(--text-xs); }
 .ms-pick-dot.live { color: var(--live); }
 .ms-pick-dot.rec { color: var(--recording); }
 .ms-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ms-pick-meta { color: var(--muted); font-size: 0.72rem; flex: none; }
+.ms-pick-meta { color: var(--muted); font-size: var(--text-xs); flex: none; }
 .ms-picker-empty { padding: 0.4rem; }

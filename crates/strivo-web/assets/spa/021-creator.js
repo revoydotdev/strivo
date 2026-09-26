@@ -112,7 +112,7 @@ async function renderProApp(paneKey) {
   const activeTab = pane.tabs.find((t) => t.slug === tabSlug) || pane.tabs[0];
 
   const tabStrip = pane.tabs.map((t) => `
-    <a class="pro-tab ${t.slug === activeTab.slug ? "is-active" : ""}" href="#/${paneKey}/${t.slug}">${htmlEscape(t.label)}</a>`).join("");
+    <a class="pro-tab ${t.slug === activeTab.slug ? "is-active" : ""}" href="#/${paneKey}/${t.slug}"${t.slug === activeTab.slug ? ' aria-current="page"' : ""}>${htmlEscape(t.label)}</a>`).join("");
 
   const inlinePane = paneKey === "studio" && (activeTab.slug === "ab" || activeTab.slug === "submix");
 
@@ -138,7 +138,7 @@ async function renderProApp(paneKey) {
   root.innerHTML = chrome(`
     <h1 class="page-title">${htmlEscape(pane.title)}</h1>
     <p class="page-subtitle">${htmlEscape(pane.subtitle)}</p>
-    <nav class="pro-tabs" role="tablist">${tabStrip}</nav>
+    <nav class="pro-tabs" aria-label="${htmlEscape(pane.title)} sections">${tabStrip}</nav>
     <section class="cfg-card pro-pane-card">${body}</section>
   `);
   setupChromeHandlers();

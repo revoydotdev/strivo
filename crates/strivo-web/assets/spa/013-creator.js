@@ -157,6 +157,7 @@ async function renderPipelines(livePipeline) {
     </section>
     <section class="cfg-card">
       <h2 class="cfg-title">Runs <span class="pg-cap-hint" id="pl-runs-count">${runListCount()}</span></h2>
+      <p class="pg-cap-hint" id="pl-run-status" role="status" aria-live="polite">${runStatusText()}</p>
       <div class="pg-list" id="pl-run-list">${runListHtml()}</div>
       ${runStore.length > RUNS_VISIBLE ? `<button class="sm" id="pl-runs-show-all">Show all ${runStore.length} runs</button>` : ""}
     </section>
@@ -187,6 +188,19 @@ function runListHtml() {
   );
 }
 
+// One sentence on the newest run, for the live region below. A pipeline's
+// stage transitions patch the run list in place, so without this a
+// screen-reader user is told nothing for the whole length of a long run —
+// the announcement the research roadmap asks for.
+function runStatusText() {
+  const run = runStore[0];
+  if (!run) return "";
+  const stages = run.stages || [];
+  const done = stages.filter((s) => s.state === "Done" || s.state === "Skipped").length;
+  const state = typeof run.state === "string" ? run.state : Object.keys(run.state || {})[0] || "Pending";
+  return `${run.name} — ${state}, ${done} of ${stages.length} stages done`;
+}
+
 // Repaint just the run list from the store. The DAG cards and the
 // recordings the "New run" picker needs are untouched, so a live transition
 // costs no network and no full-page churn.
@@ -196,6 +210,8 @@ function paintRunList() {
   list.innerHTML = runListHtml();
   const count = document.getElementById("pl-runs-count");
   if (count) count.textContent = runListCount();
+  const status = document.getElementById("pl-run-status");
+  if (status) status.textContent = runStatusText();
   const more = document.getElementById("pl-runs-show-all");
   if (more) more.hidden = showAllRuns;
   bindRunHandlers();

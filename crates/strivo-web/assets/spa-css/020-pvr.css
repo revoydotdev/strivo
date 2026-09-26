@@ -51,7 +51,7 @@
   list-style: none;
   cursor: pointer;
   user-select: none;
-  font-size: 0.85em;
+  font-size: var(--text-xs);
   padding: 0.2rem 0.5rem;
 }
 .ms-layout-menu[open] > summary { margin-bottom: 0.3rem; }
@@ -59,6 +59,12 @@
   min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   gap: 0.6rem;
+  /* Size container for `.has-aspect`'s fit-both-axes (004b). `.watch-root`
+   * is a grid with a definite height and `align-items: stretch`, so both
+   * axes here already come from the grid, never from the stage — size
+   * containment changes nothing. It is layout+style+size, NOT paint, so
+   * it adds no clipping and leaves the fullscreen top-layer escape. */
+  container-type: size;
 }
 /* Stage fills the remaining vertical space inside .watch-content; the
    `height: calc(100vh - 180px)` override on `.ms-stage` is replaced by
@@ -267,7 +273,7 @@
   gap: 0.2rem; min-width: 4ch;
 }
 .chat-compose-bar .cc-count {
-  font-size: 0.7rem; opacity: 0.6;
+  font-size: var(--text-xs); opacity: 0.6;
   text-align: right;
   font-family: var(--font-mono, ui-monospace, monospace);
 }

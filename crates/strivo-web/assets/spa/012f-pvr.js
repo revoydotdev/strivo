@@ -235,13 +235,18 @@ function recHeader(key, label) {
     recSort.col === key
       ? (recSort.dir === "asc" ? " ▲" : " ▼")
       : ' <span class="rec-th-sort-hint" aria-hidden="true">↕</span>';
-  // R04 — headers are keyboard-operable: tabbable + role="button" so
-  // Enter/Space (wired where the click handler is bound) can sort, not
-  // just a mouse click.
+  // R04 — headers are keyboard-operable: tabbable, with Enter/Space (wired
+  // where the click handler is bound, 012e) sorting. Deliberately NO
+  // role="button": `aria-sort` is only valid on columnheader/rowheader, and
+  // role="button" replaced the `th`'s implicit columnheader, so every
+  // sortable header reported "ARIA attribute is not allowed" (axe
+  // aria-allowed-attr, critical, 5 nodes on #/recordings). `tabindex` plus
+  // the keydown listener is the whole keyboard story; the native role is
+  // both correct and what makes the announced sort direction meaningful.
   const ariaSort = recSort.col === key
     ? (recSort.dir === "asc" ? "ascending" : "descending")
     : "none";
-  return `<th data-sort="${key}" class="rec-th-sortable micro" tabindex="0" role="button" aria-sort="${ariaSort}">${label}${arrow}</th>`;
+  return `<th data-sort="${key}" class="rec-th-sortable micro" tabindex="0" aria-sort="${ariaSort}">${label}${arrow}</th>`;
 }
 
 // Close every open "⋯" row menu (recordingRow's .rec-row-menu-list). One

@@ -184,6 +184,8 @@ function playlistListModal(ctx, playlists, loading = false) {
     modal = document.createElement("div");
     modal.id = "playlist-modal";
     modal.className = "app-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
     document.body.appendChild(modal);
     modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
   }

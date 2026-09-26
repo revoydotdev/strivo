@@ -4,20 +4,58 @@
 // Config is deferred until the entity is confirmed.
 let addWizard = null; // { platform, query } while a resolve is in flight
 
+const MODAL_FOCUSABLE =
+  "a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])";
+
+function modalFocusables(modal) {
+  return [...modal.querySelectorAll(MODAL_FOCUSABLE)].filter(
+    (el) => !el.disabled && el.getClientRects().length > 0 && !el.closest("[hidden]"),
+  );
+}
+
+// The dialog contract the confirm modal in 008-pvr.js already has (remember
+// the opener, move focus in, trap Tab, hand focus back on close). Without it
+// this wizard left focus on the trigger behind the overlay: Tab walked the
+// page underneath, and closing dropped focus on <body>.
+let _appModalPrevFocus = null;
+function openAppModal(modal) {
+  if (!_appModalPrevFocus) _appModalPrevFocus = document.activeElement;
+  modal.classList.add("open");
+  document.body.classList.add("modal-open");
+  const first = modalFocusables(modal)[0];
+  if (first) first.focus();
+}
+
 function openAddChannelWizard() {
   let modal = document.getElementById("add-channel-modal");
   if (!modal) {
     modal = document.createElement("div");
     modal.id = "add-channel-modal";
     modal.className = "app-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", "Add channel");
     document.body.appendChild(modal);
     modal.addEventListener("click", (e) => {
       if (e.target === modal) closeAppModal(modal);
     });
+    modal.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab") return;
+      const stops = modalFocusables(modal);
+      if (stops.length < 2) return;
+      const first = stops[0];
+      const last = stops[stops.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
   }
   paintAddWizardSearch(modal);
-  modal.classList.add("open");
-  document.body.classList.add("modal-open");
+  openAppModal(modal);
 }
 
 // One owner for the click-outside / ESC / route-change dismissal of all
@@ -27,6 +65,9 @@ function openAddChannelWizard() {
 function closeAppModal(modal) {
   if (!modal) return;
   modal.classList.remove("open");
+  const back = _appModalPrevFocus;
+  _appModalPrevFocus = null;
+  if (back && back.isConnected && back.focus) back.focus();
   // B3: decrement the modal-open counter, which auto-clears the body
   // class only when no other open modal remains. The DOM-query check
   // is kept as a defensive belt for callers that bypass bumpModalOpen.
@@ -128,6 +169,8 @@ function showPlaylistModal(opts) {
     modal = document.createElement("div");
     modal.id = "playlist-modal";
     modal.className = "app-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
     document.body.appendChild(modal);
     modal.addEventListener("click", (e) => {
       if (e.target === modal) modal.classList.remove("open");

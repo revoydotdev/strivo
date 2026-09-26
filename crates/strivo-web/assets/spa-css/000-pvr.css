@@ -587,7 +587,7 @@ th[data-sort]:hover {
   cursor: pointer;
 }
 .ch-sort-select:hover { border-color: var(--accent); }
-.ch-clear-notifications { white-space: nowrap; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: var(--radius-sm, 8px); padding: .2rem .4rem; font: inherit; font-size: .7rem; cursor: pointer; }
+.ch-clear-notifications { white-space: nowrap; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: var(--radius-sm, 8px); padding: .2rem .4rem; font: inherit; font-size: var(--text-xs); cursor: pointer; }
 .ch-clear-notifications:hover { color: var(--fg); border-color: var(--accent); }
 .ch-sort-select:focus-visible {
   outline: 2px solid var(--accent);
@@ -935,7 +935,10 @@ th[data-sort]:hover {
 .live-card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .live-card-badge {
   position: absolute; top: 0.3rem; left: 0.3rem;
-  background: var(--recording, #f04444); color: white;
+  /* White on raw --recording measures 3.81:1, under the 4.5:1 that 11px
+   * bold text needs (axe color-contrast, serious). Deepening the red with
+   * --bg keeps white — the dark-UI text colour — at 5.7:1. Token-only. */
+  background: color-mix(in srgb, var(--recording) 78%, var(--bg)); color: white;
   font-size: var(--text-micro, 11px); font-weight: 700; letter-spacing: 0.04em;
   padding: 0.1rem 0.3rem; border-radius: 3px;
   text-transform: uppercase;
@@ -1588,7 +1591,7 @@ select[aria-invalid="true"] {
   overflow-wrap: anywhere;
 }
 .cfg-badge {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
   text-transform: uppercase;
@@ -1604,7 +1607,7 @@ select[aria-invalid="true"] {
   grid-template-columns: 1.2rem auto 1fr;
   gap: 0.5rem;
   align-items: center;
-  font-size: 0.85rem;
+  font-size: var(--text-xs);
 }
 .sys-check .sys-sev { text-align: center; font-weight: 700; }
 .sys-check.ok .sys-sev { color: var(--live); }
@@ -2024,9 +2027,9 @@ a.media-pill:hover,
   gap: 0.8rem;
   margin-bottom: 0.75rem;
 }
-.logs-toolbar label { font-size: 0.8rem; color: var(--muted); }
+.logs-toolbar label { font-size: var(--text-xs); color: var(--muted); }
 .logs-toolbar select { width: auto; }
-.logs-file { font-size: 0.72rem; color: var(--muted); }
+.logs-file { font-size: var(--text-xs); color: var(--muted); }
 .logs-search {
   flex: 1;
   min-width: 200px;
@@ -2065,7 +2068,7 @@ a.media-pill:hover,
   padding: 0.75rem 1rem;
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   line-height: 1.5;
   word-break: break-word;
   max-width: 140ch;
@@ -2147,7 +2150,7 @@ a.media-pill:hover,
 }
 .sys-domain { margin-bottom: 0.8rem; }
 .sys-domain-title {
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);

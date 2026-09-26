@@ -1,7 +1,7 @@
 /* Logs toolbar — regex / follow checkboxes + invalid-regex hint. */
 .logs-toggle {
   display: inline-flex; gap: 0.3rem; align-items: center;
-  font-size: 0.85em;
+  font-size: var(--text-xs);
   padding: 0 0.4rem;
   opacity: 0.8;
 }

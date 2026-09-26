@@ -394,7 +394,7 @@ body.modal-open { overflow: hidden; }
 .stg-group + .stg-group { margin-top: 1.4rem; }
 .stg-group-title {
   margin: 0 0 0.6rem;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -423,7 +423,7 @@ body.modal-open { overflow: hidden; }
   background: rgba(0, 0, 0, 0.25);
   padding: 0.1rem 0.4rem;
   border-radius: 4px;
-  font-size: 0.85em;
+  font-size: var(--text-xs);
 }
 .stg-hint {
   display: inline-flex;
@@ -431,7 +431,7 @@ body.modal-open { overflow: hidden; }
   justify-content: center;
   width: 1.05em;
   height: 1.05em;
-  font-size: var(--text-micro, 11px);
+  font-size: var(--text-xs);
   border-radius: 50%;
   color: var(--accent2);
   cursor: help;

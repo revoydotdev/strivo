@@ -205,11 +205,20 @@ async function renderRecordings(context = captureRouteContext()) {
       } else {
         recSort = { col, dir: "asc" };
       }
-      renderRecordings().catch((e) => Toast.error(e.message)); // re-render header arrows + body
+      renderRecordings()
+        .then(() => {
+          // renderRecordings() replaces the whole <thead>, so the header the
+          // user just activated no longer exists and focus fell to <body> —
+          // a keyboard user could sort exactly once. Re-find it by the same
+          // key and put focus back.
+          document.querySelector(`th[data-sort="${col}"]`)?.focus();
+        })
+        .catch((e) => Toast.error(e.message));
     };
     th.addEventListener("click", sortBy);
     // R04 — Enter/Space activate sort for keyboard users (headers carry
-    // tabindex="0" + role="button" from recHeader()).
+    // tabindex="0" from recHeader(); no role override, so `aria-sort`
+    // stays valid on the native columnheader).
     th.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();

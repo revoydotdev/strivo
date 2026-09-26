@@ -893,7 +893,21 @@ async function loadCmdkDynamicItems() {
   cmdkDynamicLoaded = true;
 }
 
+// Focus is handed back to whatever opened the palette. Without it Escape
+// dropped focus on <body> and a keyboard user restarted the tab order from
+// the top of the page every time.
+let _cmdkPrevFocus = null;
+function closeCommandPalette() {
+  const el = document.getElementById("cmdk");
+  if (!el) return;
+  el.classList.remove("open");
+  const back = _cmdkPrevFocus;
+  _cmdkPrevFocus = null;
+  if (back && back.isConnected && back.focus) back.focus();
+}
+
 function toggleCommandPalette() {
+  if (!_cmdkPrevFocus) _cmdkPrevFocus = document.activeElement;
   let el = document.getElementById("cmdk");
   if (!el) {
     el = document.createElement("div");
@@ -902,12 +916,14 @@ function toggleCommandPalette() {
     el.innerHTML = `
       <div class="card">
         <input id="cmdk-input" class="grid-filter" type="text"
-               placeholder="Type a command, recording, or channel…" autocomplete="off" aria-label="Command palette">
-        <div id="cmdk-list" class="pl-list"></div>
+               placeholder="Type a command, recording, or channel…" autocomplete="off"
+               aria-label="Command palette" role="combobox" aria-expanded="true"
+               aria-controls="cmdk-list" aria-autocomplete="list">
+        <div id="cmdk-list" class="pl-list" role="listbox" aria-label="Commands"></div>
       </div>`;
     document.body.appendChild(el);
     el.addEventListener("click", (ev) => {
-      if (ev.target === el) el.classList.remove("open");
+      if (ev.target === el) closeCommandPalette();
     });
     el.querySelector("#cmdk-input").addEventListener("input", paintCmdk);
   }
@@ -939,14 +955,22 @@ function paintCmdk() {
   if (cmdkSelected >= cmdkItems.length) cmdkSelected = 0;
   const list = document.getElementById("cmdk-list");
   if (!list) return;
+  // role=option + aria-selected, with the input pointing at the current row
+  // via aria-activedescendant: the rows are click-only divs, so without
+  // this a screen reader announces an unlabelled list and no selection.
   list.innerHTML = cmdkItems
     .map(
       (c, i) =>
-        `<div class="pl-row ${i === cmdkSelected ? "sel" : ""}" data-i="${i}">${htmlEscape(
+        `<div class="pl-row ${i === cmdkSelected ? "sel" : ""}" role="option" id="cmdk-opt-${i}" aria-selected="${i === cmdkSelected}" data-i="${i}">${htmlEscape(
           c.label,
         )}</div>`,
     )
     .join("");
+  const input = document.getElementById("cmdk-input");
+  if (input) {
+    if (cmdkItems.length) input.setAttribute("aria-activedescendant", `cmdk-opt-${cmdkSelected}`);
+    else input.removeAttribute("aria-activedescendant");
+  }
   list.querySelectorAll(".pl-row").forEach((row) => {
     row.addEventListener("click", () => runCmdk(parseInt(row.dataset.i, 10)));
   });
@@ -956,7 +980,7 @@ function handleCmdkKey(e) {
   const el = document.getElementById("cmdk");
   if (e.key === "Escape") {
     e.preventDefault();
-    el.classList.remove("open");
+    closeCommandPalette();
   } else if (e.key === "ArrowDown") {
     e.preventDefault();
     cmdkSelected = Math.min(cmdkSelected + 1, cmdkItems.length - 1);

@@ -95,8 +95,8 @@ function archiveTabStripHtml(activeSlug) {
   const surfaces = typeof RESEARCH_SURFACES !== "undefined" ? RESEARCH_SURFACES : {};
   const tabs = [{ slug: "search", label: "Search" }, ...Object.entries(surfaces).map(([slug, s]) => ({ slug, label: s.label }))];
   if (tabs.length <= 1) return "";
-  return `<nav class="pro-tabs" role="tablist">${tabs.map((t) => `
-    <a class="pro-tab ${t.slug === activeSlug ? "is-active" : ""}" href="#/archive/${t.slug}">${htmlEscape(t.label)}</a>`).join("")}</nav>`;
+  return `<nav class="pro-tabs" aria-label="Archive sections">${tabs.map((t) => `
+    <a class="pro-tab ${t.slug === activeSlug ? "is-active" : ""}" href="#/archive/${t.slug}"${t.slug === activeSlug ? ' aria-current="page"' : ""}>${htmlEscape(t.label)}</a>`).join("")}</nav>`;
 }
 
 // Builds the ctx object handed to a mounted Coding Studio surface's

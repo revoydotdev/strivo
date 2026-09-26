@@ -13,6 +13,8 @@ pub mod chat_capture;
 pub mod creator_schema;
 pub mod csrf;
 pub mod ipc_client;
+#[cfg(feature = "creator")]
+pub mod mixer;
 pub mod problem;
 pub mod ratelimit;
 #[cfg(feature = "creator")]

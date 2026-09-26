@@ -24,6 +24,7 @@ mod argv;
 mod attempt_identity;
 mod fixture;
 mod isolation;
+mod mixer;
 mod refusals;
 
 // The shared fixture lives in `tests::fixture` so this module and its three

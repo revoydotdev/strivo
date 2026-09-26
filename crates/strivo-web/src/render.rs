@@ -13,6 +13,16 @@
 //! it. A second reader would be the second render path this module exists to
 //! remove.
 //!
+//! ## The mixer is a surface over this, not a second reader
+//!
+//! [`crate::mixer::MixerState`] is the one place the mute / solo / gain / pan /
+//! tap / ducking / cleanup / normalisation controls are entered, and it does not
+//! render: it projects them onto the **same** [`RenderRequest`] this function
+//! builds, so the mixer cannot be a second path to a plan however it is wired.
+//! When a `mixer` sidecar exists it is authoritative for the audio surface it
+//! covers; when it does not, this function behaves exactly as it did before the
+//! mixer existed, and the primitive sidecars it reads keep their own meaning.
+//!
 //! ## What the resolver does *not* do
 //!
 //! It does not spell a filter, and it does not validate: a sidecar that parses
@@ -116,6 +126,7 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
     // and resolves to no loudness stage when it does not.
     let loudness: Option<strivo_loudness::LoudnormTarget> =
         read_sidecar(&sidecar(recording_id, "loudness"))?;
+    let mixer: Option<crate::mixer::MixerState> = read_sidecar(&sidecar(recording_id, "mixer"))?;
 
     let mut effects: Vec<Step> = Vec::new();
     if let Some(pitch) = pitch.filter(|p| !p.is_identity()) {
@@ -124,6 +135,7 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
             kind: EffectKind::PitchTime,
             filter: pitch.to_filter(),
             arity: 1,
+            bus: None,
         });
     }
     if let Some(chain) = inserts.filter(|c| !c.is_empty()) {
@@ -132,6 +144,7 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
             kind: EffectKind::InsertFx,
             filter: chain.to_filter(),
             arity: 1,
+            bus: None,
         });
     }
     if let Some(bus) = submix.as_ref().filter(|b| !b.tracks.is_empty()) {
@@ -143,14 +156,16 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
             kind: EffectKind::SubMix,
             filter: bus.to_single_input_chain().unwrap_or_default(),
             arity: bus.signal_count(),
+            bus: None,
         });
     }
     if let Some(curve) = automation.filter(|a| !a.points.is_empty()) {
         effects.push(Step {
             id: "volume-automation".into(),
             kind: EffectKind::VolumeAutomation,
-            filter: curve.build_audio_filter(0.05),
+            filter: curve.build_audio_filter(),
             arity: 1,
+            bus: None,
         });
     }
 
@@ -160,7 +175,7 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
         branding.build_filter_chain("[0:v]").filter_complex
     };
 
-    let request = RenderRequest {
+    let mut request = RenderRequest {
         subject: recording_id.to_string(),
         revision: revision_label(edl),
         clips,
@@ -179,6 +194,8 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
             gain_db: 0.0,
             pan: 0.0,
             muted: false,
+            solo: false,
+            insert: String::new(),
             clips: (0..edl.cuts.len()).collect(),
         }],
         effects,
@@ -218,6 +235,9 @@ pub fn resolve(recording_id: &str, edl: &Edl) -> Result<Resolved, String> {
             renderer_version: ffmpeg_version(),
         },
     };
+    if let Some(mixer) = mixer {
+        mixer.apply(&mut request);
+    }
     Ok(Resolved {
         request,
         caption_style,

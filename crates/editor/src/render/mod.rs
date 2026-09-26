@@ -29,6 +29,32 @@
 //! answer to "what does this render as" for preview and export to disagree
 //! about.
 //!
+//! ## The mixer is inside that, not beside it
+//!
+//! Mute, solo, gain, pan, source and master routing, ducking, cleanup, fades and
+//! normalisation reach a plan as fields of a [`request::RenderRequest`] and are
+//! **resolved here, once**. Audibility in particular is decided by
+//! [`compose::compile_tracks`] into [`plan::Track::audible`] — mute beats solo,
+//! a solo silences the rest, and a muted-and-soloed track stays silent — and
+//! [`invoke::track_filter`] reads that one field. Two rules that would
+//! otherwise be conventions, and conventions are what two render paths disagree
+//! about:
+//!
+//! * **a master-bus effect is not a pre-master tap.** The whole-programme chain
+//!   runs on the sum, so a tap declared there is refused
+//!   ([`RenderError::TapInProgrammeChain`]) rather than quietly applied to every
+//!   bus. A tap belongs on [`request::TrackSpec::insert`], which the per-clip
+//!   sub-render runs before the sum.
+//! * **normalisation is measure-then-apply.** It lives on [`plan::Loudness`],
+//!   where the executor runs `loudnorm` twice, and a loudness stage in the
+//!   chain is refused ([`RenderError::LoudnessAsChainStep`]) because it would be
+//!   a second, single-pass normalisation of an already-normalised programme.
+//!
+//! A test that reads *the field the control writes* and compares it to the
+//! decoded artifact is the teeth-check for this: `strivo-web`'s `mixer.rs` and
+//! `mixer_falsifier.rs` do that, and the falsifier binary records the
+//! mutations that turn them red.
+//!
 //! ## Time
 //!
 //! Every coordinate and length here is a [`MediaTime`] — todo 22's single

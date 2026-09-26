@@ -52,6 +52,7 @@ fn effect(id: &str, kind: EffectKind, filter: &str) -> EffectStep {
         kind,
         filter: filter.into(),
         arity: 1,
+        bus: None,
     }
 }
 
@@ -84,6 +85,8 @@ pub fn request() -> RenderRequest {
             gain_db: 0.0,
             pan: 0.0,
             muted: false,
+            solo: false,
+            insert: String::new(),
             clips: vec![0, 1],
         }],
         effects: vec![

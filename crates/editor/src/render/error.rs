@@ -66,6 +66,14 @@ pub enum RenderError {
         mixes: usize,
         tracks: usize,
     },
+    /// A pre-master tap declared as a stage in the whole-programme chain. That
+    /// chain runs on the sum, so the filter would reach every bus; the correct
+    /// spelling is the tapped track's own `insert`, which runs before the sum.
+    TapInProgrammeChain { id: String, bus: String },
+    /// An effect step declared as a loudness stage. Normalisation is
+    /// measure-then-apply and lives on `plan.loudness`; as a chain step it would
+    /// run a *second*, single-pass normalisation after the measured one.
+    LoudnessAsChainStep { id: String },
     /// A burned-in caption with no subtitle document to attach. Distinct from
     /// [`Self::BurnWithoutStyle`]: that one is a missing *style*, this one is a
     /// missing *rendered file*, and the caller fixes them in different places.
@@ -140,6 +148,18 @@ impl fmt::Display for RenderError {
             } => write!(
                 f,
                 "{stage} mixes {mixes} signals but the plan routes only {tracks} track(s)"
+            ),
+            Self::TapInProgrammeChain { id, bus } => write!(
+                f,
+                "{id:?} declares itself a pre-master tap on bus {bus:?}, but the \
+                 programme chain runs on the sum of every bus and cannot reach \
+                 one bus alone; put the filter on that track's own insert chain"
+            ),
+            Self::LoudnessAsChainStep { id } => write!(
+                f,
+                "{id:?} is a loudness stage in the chain; normalisation is \
+                 measure-then-apply and belongs on the plan's loudness target, \
+                 where the executor runs it twice"
             ),
             Self::BurnWithoutSubtitle => {
                 f.write_str("captions are set to burn in but no subtitle document was supplied")

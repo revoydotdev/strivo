@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::RenderError;
 use super::plan::{Cue, PlanLayer, Track, Transition};
-use super::request::{CaptionMode, EffectStep, RenderRequest, TransitionSpec};
+use super::request::{CaptionMode, EffectKind, EffectStep, RenderRequest, TransitionSpec};
 use crate::time::{IntervalMap, Mapped, Timed};
 
 /// Refuse a repeated name. Every plan collection is keyed by something a human
@@ -109,6 +109,9 @@ pub(super) fn compile_tracks(
 ) -> Result<Vec<Track>, RenderError> {
     distinct("tracks", req.tracks.iter().map(|t| t.label.as_str()))?;
     let mut routed: BTreeSet<usize> = BTreeSet::new();
+    // Resolved once, before the loop, so the answer cannot depend on the order
+    // the tracks happen to be declared in.
+    let any_solo = req.tracks.iter().any(|t| t.solo);
     let mut tracks: Vec<Track> = Vec::with_capacity(req.tracks.len());
     for spec in &req.tracks {
         let mut clips = Vec::with_capacity(spec.clips.len());
@@ -125,11 +128,14 @@ pub(super) fn compile_tracks(
         }
         clips.sort_unstable();
         tracks.push(Track {
+            audible: !spec.muted && (!any_solo || spec.solo),
             label: spec.label.clone(),
             bus: spec.bus.clone(),
             gain_db: spec.gain_db,
             pan: spec.pan,
             muted: spec.muted,
+            solo: spec.solo,
+            insert: spec.insert.clone(),
             clips,
         });
     }
@@ -162,6 +168,16 @@ pub(super) fn compile_effects(
                 tracks: buses.len(),
             });
         }
+        // A pre-master tap cannot be a stage in the programme chain: that
+        // chain has one input, and the input is the sum of every bus. Accepting
+        // one would apply a user's voice high-pass to the game audio too and
+        // report success. Refused, naming the field that does express it.
+        if let Some(bus) = &effect.bus {
+            return Err(RenderError::TapInProgrammeChain {
+                id: effect.id.clone(),
+                bus: bus.clone(),
+            });
+        }
     }
     let mut kept: Vec<EffectStep> = req
         .effects
@@ -169,6 +185,20 @@ pub(super) fn compile_effects(
         .filter(|e| !e.filter.trim().is_empty())
         .cloned()
         .collect();
+    // Normalisation is the one stage that cannot be a chain step. It is
+    // measure-then-apply — `loudnorm` pass 1 reads the finished signal and pass
+    // 2 re-runs with those readings — and the executor already runs it from
+    // `plan.loudness`. Accepting it here as well would normalise the programme
+    // twice, and the second pass would undo the first's ceiling by a margin no
+    // test reading a single dB would catch. Refused, so the choice is a type's
+    // rather than a comment's.
+    for effect in &req.effects {
+        if effect.kind == EffectKind::Loudness {
+            return Err(RenderError::LoudnessAsChainStep {
+                id: effect.id.clone(),
+            });
+        }
+    }
     // `EffectKind`'s declaration order *is* the canonical order, so sorting by
     // it cannot drift from the comment that explains it. The id tiebreak keeps
     // two effects of one stage (a track chain and a master chain) stable.

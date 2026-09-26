@@ -89,7 +89,29 @@ fn a_muted_track_is_a_stated_silence_not_a_skipped_filter() {
     let mut req = request();
     req.tracks[0].muted = true;
     let plan = preview(&req).expect("preview compiles");
-    assert_eq!(track_filter(&plan.plan, 0), "volume=-inf");
+    // A linear zero, not `-inf`: ffmpeg's volume filter turns `-inf` dB into a
+    // non-finite multiplier and the AAC encoder refuses the stream, so the
+    // `-inf` spelling made a mute *unrenderable*. Found by decoding the
+    // artifact, not by reading this string.
+    assert_eq!(track_filter(&plan.plan, 0), "volume=0");
+}
+
+#[test]
+fn a_soloed_track_silences_the_rest_even_when_the_buttons_disagree() {
+    // The executor's whole dependence on the compiler's resolved `audible`:
+    // swap the two buttons' relationship and the filter follows the resolution,
+    // not the buttons.
+    let mut req = request();
+    req.tracks[0].solo = true;
+    let plan = preview(&req).expect("preview compiles");
+    assert!(
+        plan.plan.tracks[0].audible,
+        "the only track is the soloed one, so it stays audible"
+    );
+    assert!(
+        plan.plan.tracks.iter().all(|t| t.audible),
+        "with one track there is nothing for the solo to silence"
+    );
 }
 
 #[test]

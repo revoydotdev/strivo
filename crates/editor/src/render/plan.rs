@@ -66,7 +66,32 @@ pub struct Track {
     pub bus: String,
     pub gain_db: f64,
     pub pan: f64,
+    /// What the request asked for, carried through so the mixer surface can
+    /// show which button is down. **Not** what the render reads — see
+    /// [`Self::audible`].
     pub muted: bool,
+    /// What the request asked for, for the same reason.
+    pub solo: bool,
+    /// Whether this track reaches the programme. **The** answer, computed once
+    /// by the compiler from `muted`, `solo` and whether *any* track is soloed,
+    /// and read by both callers.
+    ///
+    /// The rules, in full, because "mute and solo are independent" is
+    /// conventional rather than universal and a convention is what two render
+    /// paths disagree about:
+    ///
+    /// * one or more tracks soloed ⇒ every non-soloed track is silent;
+    /// * a muted track is silent **even when soloed** — solo is a listening
+    ///   aid, not an unmute;
+    /// * nothing soloed ⇒ exactly the muted tracks are silent.
+    ///
+    /// [`super::invoke::track_filter`] reads this field and nothing else, so a
+    /// track cannot be audible in the preview and silent in the render.
+    pub audible: bool,
+    /// This track's pre-master tap, verbatim from the request. Applied to the
+    /// track's own clips, not to the sum — see
+    /// [`super::request::TrackSpec::insert`].
+    pub insert: String,
     /// Indices into [`CompiledPlan::clips`], ascending.
     pub clips: Vec<usize>,
 }

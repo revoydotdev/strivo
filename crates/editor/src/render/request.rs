@@ -161,6 +161,13 @@ pub struct TransitionSpec {
 /// first because it changes the length everything downstream is measured
 /// against, then the inserts, then the bus mix, then automation, then
 /// loudness last because it is the only stage that reads the finished signal.
+///
+/// **Loudness is a rank, not a chain stage.** [`Self::Loudness`] exists so the
+/// order has a name for the last position, and a request that uses it as a step
+/// is refused ([`super::RenderError::LoudnessAsChainStep`]) — normalisation is
+/// measure-then-apply and the executor runs it from [`super::plan::Loudness`],
+/// twice. A loudness step in the chain would be a third, single-pass
+/// normalisation of an already-normalised programme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectKind {
@@ -215,6 +222,19 @@ pub struct EffectStep {
     /// compiler can then refuse a bus the plan has no tracks for, instead of
     /// emitting a graph that silently drops the tracks it cannot reach.
     pub arity: usize,
+    /// Declares that this stage is a **pre-master tap** on one bus rather than
+    /// a master-bus effect.
+    ///
+    /// `None` is correct and is what every real stage uses: the
+    /// whole-programme chain runs once, on the summed programme, after every
+    /// bus has been mixed. A tap cannot be expressed there — the chain has one
+    /// input and that input is the sum — so a caller that asks for one is
+    /// refused rather than quietly given a filter on the sum. See
+    /// [`super::RenderError::TapInProgrammeChain`]; the field exists so the
+    /// refusal has something to name, and so the correct spelling
+    /// ([`TrackSpec::insert`]) is a declared alternative rather than folklore.
+    #[serde(default)]
+    pub bus: Option<String>,
 }
 
 /// A bus a track is routed into. Phase 1 has one; the type exists so a second
@@ -230,6 +250,26 @@ pub struct TrackSpec {
     /// -1.0 hard left … +1.0 hard right.
     pub pan: f64,
     pub muted: bool,
+    /// Listen to this track alone.
+    ///
+    /// Independent of `muted` rather than exclusive with it, and the
+    /// combination is resolved once by the compiler into
+    /// [`super::plan::Track::audible`]. Declared here and *decided* there is
+    /// the point: two places each answering "is this track audible" is how a
+    /// preview and a render come to disagree about a solo button.
+    #[serde(default)]
+    pub solo: bool,
+    /// This track's own insert chain, as the ffmpeg fragment its crate
+    /// produced — a **pre-master tap**: it runs on this track's signal, inside
+    /// the clip's own sub-render, before the tracks are summed.
+    ///
+    /// It lives here rather than in the request's effect list because the
+    /// effect list is the *programme* chain and runs on the sum. Putting a tap
+    /// there is the silent-substitution defect: a user sets a voice high-pass
+    /// and hears it applied to the game audio as well. Empty means "no chain",
+    /// and an empty chain is not a render cost.
+    #[serde(default)]
+    pub insert: String,
     /// A track that declares a clip index which no cut carries.
     pub clips: Vec<usize>,
 }

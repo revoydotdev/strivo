@@ -176,6 +176,7 @@ fn a_bus_mixing_more_signals_than_the_plan_has_tracks_is_refused() {
         kind: EffectKind::SubMix,
         filter: "[0:a][1:a]amix=inputs=2[out]".into(),
         arity: 2,
+        bus: None,
     });
     assert!(
         preview(&req).is_err(),

@@ -9,6 +9,8 @@
 //! on each of these and are restated at each assertion site.
 
 use std::path::{Path, PathBuf};
+
+pub mod dsp;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -130,6 +132,45 @@ pub fn audio_only(path: &Path, secs: u32) {
         "lavfi",
         "-i",
         &format!("sine=frequency=440:duration={secs}"),
+        "-c:a",
+        "aac",
+        &path.to_string_lossy(),
+    ]);
+}
+
+/// A 440 Hz tone that stops half way and never restarts, over a silent video.
+/// The second half of the audio is digital silence.
+///
+/// For a control whose entire job is removing silence: a continuous tone has
+/// none, so a cleanup assertion over one is a claim about nothing. The video
+/// track is there because media admission refuses an audio-only container
+/// (`media-input/no-video-stream`) — the render is a video render.
+pub fn tone_then_silence(path: &Path, tone_secs: u32, total_secs: u32) {
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        &format!("testsrc=duration={total_secs}:size=160x120:rate=10"),
+        "-f",
+        "lavfi",
+        "-i",
+        &format!("sine=frequency=440:duration={tone_secs}"),
+        "-f",
+        "lavfi",
+        "-i",
+        &format!("anullsrc=r=48000:cl=mono:d={}", total_secs - tone_secs),
+        "-filter_complex",
+        "[1:a][2:a]concat=n=2:v=0:a=1[a]",
+        "-map",
+        "0:v",
+        "-map",
+        "[a]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
         "-c:a",
         "aac",
         &path.to_string_lossy(),

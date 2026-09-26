@@ -25,7 +25,12 @@ pub use strivo_automation::AutomationPoint;
 pub use strivo_automation::Curve;
 pub use strivo_automation::VolumeAutomation;
 
+/// `#[serde(default)]` on the container, so a saved mixer or sidecar that
+/// overrides **one** knob deserialises with the rest at their documented
+/// defaults. Without it a UI that sets only `duck_db` cannot write a knobs
+/// object at all, and the honest "leave the other four alone" is a parse error.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SidechainKnobs {
     /// Target gain (dB) while the trigger is active. -12 dB is a
     /// reasonable podcast default; -6 dB is gentler; -20 dB is
@@ -316,8 +321,14 @@ mod tests {
         // Verify the output composes cleanly with the existing
         // automation filter builder.
         let auto = build_automation(&[iv(1.0, 3.0)], 6.0, &SidechainKnobs::default());
-        let filter = auto.build_audio_filter(0.05);
-        assert!(filter.contains("asendcmd=c='"));
-        assert!(filter.ends_with(",volume=1.0:eval=frame"));
+        let filter = auto.build_audio_filter();
+        assert!(filter.starts_with("volume='"), "{filter}");
+        assert!(filter.ends_with("':eval=frame"), "{filter}");
+        assert!(
+            !filter.contains("asendcmd"),
+            "the handoff must reach the render as a per-frame expression: asendcmd's \
+             command delivery is a cross-thread race, so a ducking envelope built \
+             from it is not reproducible. {filter}"
+        );
     }
 }

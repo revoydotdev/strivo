@@ -1979,6 +1979,109 @@ async fn editor_render_plan(
     }
 }
 
+fn mixer_path(recording_id: &str) -> std::path::PathBuf {
+    strivo_core::config::AppConfig::data_dir()
+        .join("plugins")
+        .join("mixer")
+        .join(format!("{recording_id}.json"))
+}
+
+/// `GET /api/v1/plugins/editor/<recording_id>/mixer` — the saved mixer, and
+/// what it resolves to inside the plan the render will execute.
+///
+/// Both halves, deliberately. The saved document is what the controls edit; the
+/// `resolved` half is read out of the compiled plan, so the audibility the UI
+/// draws is the same `audible` field the executor reads rather than a second
+/// evaluation of mute-versus-solo that could disagree with it. The
+/// `audio_chain` it carries is in the compiler's signal-flow order, so "what
+/// order do these run in" has one answer.
+async fn editor_mixer_load(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
+        return r;
+    }
+    let saved = match std::fs::read_to_string(mixer_path(&recording_id)) {
+        Ok(raw) => match serde_json::from_str::<crate::mixer::MixerState>(&raw) {
+            Ok(mixer) => mixer,
+            Err(e) => {
+                return Problem::bad_request(format!("mixer sidecar does not parse: {e}"))
+                    .into_response()
+            }
+        },
+        // A mixer that was never saved is an empty mixer, which `apply` leaves
+        // the plan alone. Reading it as `None` rather than inventing one keeps
+        // "nobody has opened the mixer" distinguishable from "the mixer is
+        // empty on purpose".
+        Err(_) => crate::mixer::MixerState::default(),
+    };
+    // `saved` is answered before the EDL lookup and not inside it: a mixer can
+    // be saved for a recording that has no revision yet, and reporting
+    // `saved: false` there would tell a UI the write was lost.
+    let mut body = json!({ "ok": true, "mixer": saved, "saved": mixer_is_saved(&recording_id) });
+    let store = match strivo_editor::store::EdlStore::open(&editor_store_path()) {
+        Ok(s) => s,
+        Err(e) => return Problem::internal(format!("open store: {e}")).into_response(),
+    };
+    if let Ok(Some(current)) = store.current(&recording_id) {
+        if let Ok(resolved) = crate::render::resolve(&recording_id, &current.edl) {
+            if let Ok(shown) = crate::render::preview(&resolved) {
+                body["resolved"] = json!({
+                    "tracks": shown.plan.tracks,
+                    "audio_chain": shown.plan.audio_chain,
+                    "loudness": shown.plan.loudness,
+                });
+            }
+        }
+    }
+    Json(body).into_response()
+}
+
+fn mixer_is_saved(recording_id: &str) -> bool {
+    mixer_path(recording_id).exists()
+}
+
+/// `POST /api/v1/plugins/editor/<recording_id>/mixer` — save the mixer.
+///
+/// A sidecar write, exactly like the automation, pitch and insert-FX panels
+/// already do, and read back by the same single reader in
+/// [`crate::render::resolve`]. Nothing is validated here beyond JSON: a mixer
+/// that cannot route is refused by the compiler with a message naming the
+/// field, which is a better answer than a second validation that could disagree
+/// with the compiler's.
+async fn editor_mixer_save(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(recording_id): Path<String>,
+    Json(body): Json<crate::mixer::MixerState>,
+) -> impl IntoResponse {
+    if authed(&headers, &state).is_err() {
+        return Problem::unauthorized().into_response();
+    }
+    if let Err(r) = gate_pro(CapabilityKey::Editor) {
+        return r;
+    }
+    let path = mixer_path(&recording_id);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Problem::internal(format!("mkdir: {e}")).into_response();
+        }
+    }
+    let json = match serde_json::to_string_pretty(&body) {
+        Ok(json) => json,
+        Err(e) => return Problem::bad_request(format!("serialise mixer: {e}")).into_response(),
+    };
+    if let Err(e) = std::fs::write(&path, json) {
+        return Problem::internal(format!("write mixer: {e}")).into_response();
+    }
+    Json(json!({ "ok": true, "recording_id": recording_id })).into_response()
+}
+
 /// `GET /api/v1/plugins/viewguard/trend` — pull every verdict row
 /// from the viewguard DB and run the cross-stream trend analyzer.
 /// Returns a watchlist banded by Critical/Warning/Watch/Clear.
@@ -2315,7 +2418,7 @@ async fn sidechain_run(
             Err(e) => return Problem::internal(format!("serialise: {e}")).into_response(),
         }
     }
-    let preview = automation.build_audio_filter(0.05);
+    let preview = automation.build_audio_filter();
     Json(json!({
         "recording_id": recording_id,
         "point_count": automation.points.len(),
@@ -3541,7 +3644,7 @@ async fn automation_load(
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     let asendcmd = automation.to_asendcmd(0.05);
-    let filter = automation.build_audio_filter(0.05);
+    let filter = automation.build_audio_filter();
     Json(json!({
         "recording_id": recording_id,
         "automation": automation,
@@ -3580,7 +3683,7 @@ async fn automation_save(
         return Problem::internal(format!("write: {e}")).into_response();
     }
     let asendcmd = body.to_asendcmd(0.05);
-    let filter = body.build_audio_filter(0.05);
+    let filter = body.build_audio_filter();
     Json(json!({
         "ok": true,
         "point_count": body.points.len(),
@@ -4638,6 +4741,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/plugins/editor/{id}/render",
             axum::routing::post(editor_render),
+        )
+        .route(
+            "/api/v1/plugins/editor/{id}/mixer",
+            get(editor_mixer_load).post(editor_mixer_save),
         )
         .route(
             "/api/v1/plugins/editor/{id}/render/plan",

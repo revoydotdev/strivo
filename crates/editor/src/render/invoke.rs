@@ -63,16 +63,34 @@ pub fn fade_filter(clip: &Clip) -> String {
 }
 
 /// The audio filter for the track a clip is routed to, or empty when the track
-/// is at unity. A muted track is a hard silence, stated rather than skipped.
+/// is at unity. An inaudible track is a hard silence, stated rather than
+/// skipped.
+///
+/// Reads [`Track::audible`](super::plan::Track::audible) and not `muted`/`solo`
+/// separately: the compiler already resolved the interaction, so a solo button
+/// cannot be honoured here and ignored there. `volume=-inf` rather than a
+/// dropped chain, because a dropped chain is indistinguishable from a track
+/// that was never routed.
 #[must_use]
 pub fn track_filter(plan: &CompiledPlan, clip: usize) -> String {
     let Some(track) = plan.tracks.iter().find(|t| t.clips.contains(&clip)) else {
         return String::new();
     };
-    if track.muted {
-        return "volume=-inf".to_string();
+    if !track.audible {
+        // `volume=0`, not `volume=-inf`. ffmpeg's `volume` filter evaluates
+        // `-inf` dB to a non-finite multiplier, and the AAC encoder then refuses
+        // the stream outright — `Input contains (near) NaN/+-Inf`, exit 234 — so
+        // a muted track could not be rendered at all. A linear zero is the same
+        // silence and encodes to exact zeros. Found by decoding the artifact: an
+        // exit-code or file-size check would have reported a mute as working.
+        return "volume=0".to_string();
     }
     let mut parts = Vec::new();
+    // The tap first: it is this track's own signal being conditioned, so it
+    // runs before the trim that sets the track's place in the mix.
+    if !track.insert.trim().is_empty() {
+        parts.push(track.insert.clone());
+    }
     if track.gain_db.abs() > 1e-6 {
         parts.push(format!("volume={:.2}dB", track.gain_db));
     }
@@ -142,10 +160,12 @@ pub fn is_passthrough(plan: &CompiledPlan, subtitle: Option<&Path>) -> bool {
         && audio_chain(plan).is_empty()
         && plan.loudness.is_none()
         && !plan.clips.iter().any(|c| !fade_filter(c).is_empty())
-        && !plan
-            .tracks
-            .iter()
-            .any(|t| t.muted || t.gain_db.abs() > 1e-6 || t.pan.abs() > 1e-6)
+        && !plan.tracks.iter().any(|t| {
+            !t.audible
+                || t.gain_db.abs() > 1e-6
+                || t.pan.abs() > 1e-6
+                || !t.insert.trim().is_empty()
+        })
 }
 
 /// `ffmpeg` arguments for one planned clip's sub-render.

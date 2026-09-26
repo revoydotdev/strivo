@@ -62,6 +62,7 @@ mod history;
 mod ids;
 mod import;
 mod jobs;
+mod live_clip;
 mod multitrack;
 mod multitrack_align;
 mod multitrack_model;
@@ -119,6 +120,10 @@ pub use import::{
 pub use jobs::{
     immutable_output_path, is_legal, CacheKey, Job, JobInputs, JobState, JobTransition,
     MAX_ATTEMPTS, TRANSITIONS,
+};
+pub use live_clip::{
+    validate_live_clip, LiveCaptureTail, LiveClipRejection, LiveClipRequest, LiveClipSubmission,
+    LiveClipSubmitError, TailPart, MIN_CLIP_US,
 };
 pub use multitrack::import_multitrack;
 pub use multitrack_align::{MeasuredGap, MediaGap, SessionTimeline};

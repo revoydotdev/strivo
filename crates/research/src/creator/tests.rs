@@ -27,6 +27,7 @@ mod history_rollback;
 mod identity;
 mod import;
 mod jobs_lifecycle;
+mod live_clip;
 mod malformed;
 mod migration;
 mod multitrack;

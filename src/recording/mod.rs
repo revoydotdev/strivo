@@ -7,6 +7,7 @@ pub mod container;
 pub mod ffmpeg;
 pub mod gaps;
 pub mod job;
+pub mod live_clip;
 pub mod persist;
 pub mod remux;
 pub mod scan;
@@ -226,6 +227,11 @@ struct ActiveRecording {
     /// orchestrator merges them back into the base path via mkvmerge
     /// (M5.5).
     segments: Vec<PathBuf>,
+    /// CE-P8 tail: which of those segments are safe to read. A part becomes
+    /// `Finalized` here when its recorder exits, which is the only signal
+    /// that exists — a live MKV has no duration and no complete index, so
+    /// nothing on disk can say it is finished. See `recording::live_clip`.
+    tail: live_clip::LiveCapture,
     /// Stall detection: bytes observed on the previous poll tick.
     last_bytes: u64,
     /// Stall detection: wall-clock instant when `bytes_written` last grew.
@@ -563,6 +569,7 @@ pub async fn run_manager(
                             retry_count: 0,
                             cookies_path: cookies_path.clone(),
                             segments: vec![output_path.clone()],
+                            tail: live_clip::LiveCapture::new(output_path.clone()),
                             last_bytes: 0,
                             last_growth_at: std::time::Instant::now(),
                             from_start_watch_url: None,
@@ -894,6 +901,7 @@ pub async fn run_manager(
                             retry_count: 0,
                             cookies_path: cookies_path.clone(),
                             segments: vec![output_path.clone()],
+                            tail: live_clip::LiveCapture::new(output_path.clone()),
                             last_bytes: 0,
                             last_growth_at: std::time::Instant::now(),
                             from_start_watch_url: None,
@@ -995,6 +1003,14 @@ pub async fn run_manager(
                         match proc.try_wait() {
                             Ok(Some(status)) => {
                                 if status.success() {
+                                    // The tail learns a part is readable here and
+                                    // nowhere else: the writer has exited, so the
+                                    // file is whole. A live clip admitted before
+                                    // this line is refused rather than truncated.
+                                    let _ = rec.tail.finalize_part(
+                                        rec.retry_count + 1,
+                                        (rec.job.duration_secs * 1000.0).max(0.0) as u64,
+                                    );
                                     rec.job.state = RecordingState::Finished;
                                     finished.push((*id, RecordingState::Finished, None));
                                 } else if rec.retry_count < 3 {
@@ -1018,6 +1034,7 @@ pub async fn run_manager(
                                     let segment_path = segments::segment_path(&base, rec.retry_count + 1);
                                     rec.segments.push(segment_path.clone());
                                     rec.job.output_path = segment_path;
+                                    let _ = rec.tail.open_part(rec.retry_count + 1);
 
                                     // Re-resolve and restart.
                                     // For YouTube --live-from-start jobs the

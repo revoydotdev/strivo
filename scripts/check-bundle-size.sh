@@ -26,6 +26,8 @@ DOC="${BUNDLE_PERF_DOC:-$SCRIPT_DIR/../docs/PERFORMANCE.md}"
 TOL="${BUNDLE_TOLERANCE_PCT:-5}"
 
 [ -f "$DOC" ] || { echo "check-bundle-size.sh: no such document: $DOC" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 ||
+  { echo "check-bundle-size.sh: required tool not found: python3" >&2; exit 1; }
 
 MEASURED="$(mktemp)"
 trap 'rm -f "$MEASURED"' EXIT INT TERM

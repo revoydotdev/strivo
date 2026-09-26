@@ -106,26 +106,31 @@ are compared against the threshold.
 | --- | --- | ---: | ---: | ---: | --- |
 | PVR 0.8.0 | `spa.js` | 386 058 | 102 295 | 100 705 | none (min = median = max) |
 | PVR 0.8.0 | `spa.css` | 92 405 | 17 242 | 18 836 | none (min = median = max) |
-| Creator 0.8.0 | `spa.js` | 584 259 | not measured | not measured | — |
-| Creator 0.8.0 | `spa.css` | 134 197 | not measured | not measured | — |
+| Creator 0.8.0 | `spa.js` | 584 259 | 151 634 | 149 553 | none (min = median = max) |
+| Creator 0.8.0 | `spa.css` | 134 197 | 24 106 | 26 293 | none (min = median = max) |
 
-**PVR threshold result: under.** Compressed `spa.js` is 102 295 bytes as gzip
-and 100 705 as brotli, both below the 256 000-byte (250 KiB) threshold. Whether
-to split the bundle is a separate decision; it is not made here.
+**Threshold result, per edition — both are under the compressed-size trigger.**
+250 KiB is 256 000 bytes. PVR `spa.js` is 102 295 as gzip and 100 705 as
+brotli. Creator `spa.js` is 151 634 as gzip and 149 553 as brotli. Whether to
+split either bundle is a separate decision; it is not made here.
+
+The threshold is a disjunction — compressed size **or** parse/evaluation time.
+Only the first was evaluated, for both editions. The second is still unmeasured:
+the project does not define a minimum supported client, so a parse/eval figure
+would sit on an undefined baseline and would not mean what the threshold asks.
 
 Two things a reader must not misread:
 
-- `spa.css` is *smaller* over gzip (17 242) than over brotli (18 836). The
-  server picks an encoding from the request's `q` values rather than from a size
-  comparison, so at the layer's default quality brotli loses on a file this
-  small. Quoting the brotli figure alone for the CSS overstates it.
-- The Creator rows are **not wire-measured**. They are the release, minified
-  Creator assembly on disk, and no Creator-featured 0.8.0 release binary existed
-  on the measuring host — the single 0.8.0 release binary there embeds the PVR
-  bundle, which the script establishes by content hash rather than by name. The
-  compressed Creator figures are therefore recorded as `null` and the Creator
-  threshold verdict is **unmeasured, not "under"**. Deriving a compressed Creator
-  number from the file on disk is the F-29 mistake
+- In **both** editions `spa.css` is *smaller* over gzip (17 242 / 24 106) than
+  over brotli (18 836 / 26 293). The server picks an encoding from the request's
+  `q` values rather than from a size comparison, so at the layer's default
+  quality brotli loses on a file this small. Quoting the brotli figure alone for
+  the CSS overstates it.
+- Every figure above came off the wire. The Creator row in particular required a
+  Creator-featured release build, because the two editions share one
+  `release/strivo` output path: the PVR binary was copied aside, the Creator
+  binary built, measured, and the PVR binary restored and hash-verified. Sizing
+  either bundle by compressing the file on disk is the F-29 mistake
   ([PHASE0-EXPERIENCE-AUDIT](audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md)).
 
 <!-- bundle-measurement:begin -->
@@ -142,10 +147,10 @@ Two things a reader must not misread:
       "spa.css": { "raw_bytes": 92405, "gzip": 17242, "brotli": 18836 }
     },
     "Creator": {
-      "wire_measured": false,
-      "note": "no Creator-featured 0.8.0 release binary was available to measure through; raw sizes are the release minified Creator assembly on disk and are NOT wire figures",
-      "spa.js": { "raw_bytes": 584259, "gzip": null, "brotli": null },
-      "spa.css": { "raw_bytes": 134197, "gzip": null, "brotli": null }
+      "wire_measured": true,
+      "note": "measured 2026-09-26 against a Creator-featured strivo 0.8.0 release build over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians",
+      "spa.js": { "raw_bytes": 584259, "gzip": 151634, "brotli": 149553 },
+      "spa.css": { "raw_bytes": 134197, "gzip": 24106, "brotli": 26293 }
     }
   }
 }
@@ -154,12 +159,22 @@ Two things a reader must not misread:
 <!-- bundle-measurement:end -->
 
 Reproduce with a release binary and the `out/assets` directory of the same
-build — the assets directory is what identifies the edition, by content:
+build — the assets directory is what identifies the edition, by content. The two
+editions share one `release/strivo` path, so measure one, copy the binary aside,
+build the other, then measure it and restore the first:
 
 ```sh
 scripts/measure_bundle.sh <release-strivo> <build>/out/assets PVR
 scripts/check-bundle-size.sh <release-strivo> <build>/out/assets PVR
+# cargo build --release -p strivo-bin --features creator --locked, then:
+scripts/measure_bundle.sh <release-strivo> <build>/out/assets Creator
+scripts/check-bundle-size.sh <release-strivo> <build>/out/assets Creator
 ```
+
+A release binary copied out of the target directory no longer lives under a
+`release/` path, so the scripts ask for
+`STRIVO_BENCH_ALLOW_NONRELEASE=1` to measure a preserved copy. That override is
+for a preserved *release* binary only; a debug build is never comparable.
 
 ## Recordings/history query shape
 

@@ -59,9 +59,21 @@ refuse() {
 
 [ -x "$BIN" ] || { echo "measure_bundle.sh: not an executable binary: $BIN" >&2; exit 1; }
 [ -d "$ASSETS_DIR" ] || { echo "measure_bundle.sh: no such assets dir: $ASSETS_DIR" >&2; exit 1; }
+# Stated as a precondition, not assumed: no other script this repo runs in CI
+# shells out to curl, so its absence there would surface as a mystery.
+for tool in curl sha256sum; do
+  command -v "$tool" >/dev/null 2>&1 ||
+    { echo "measure_bundle.sh: required tool not found: $tool" >&2; exit 1; }
+done
 case "$(dirname "$BIN")" in
   *release) ;;
-  *) refuse "'$BIN' is not a release build; a debug build is not comparable." ;;
+  # The override is for a release binary PRESERVED outside the target dir, so a
+  # later build of the other edition cannot clobber it. Same escape hatch
+  # bench_library.sh carries; without a comment it reads as a debug-build hole.
+  *) [ -n "${STRIVO_BENCH_ALLOW_NONRELEASE:-}" ] ||
+       refuse "'$BIN' is not under a release directory; a debug build is not
+  comparable. Pass STRIVO_BENCH_ALLOW_NONRELEASE=1 for a preserved release
+  binary that has been copied elsewhere." ;;
 esac
 
 SANDBOX_ROOT="${TMPDIR:-/tmp}"

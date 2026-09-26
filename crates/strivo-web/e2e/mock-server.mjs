@@ -392,6 +392,117 @@ function broadcast(eventObj) {
   for (const c of sseClients) c.write(frame);
 }
 
+// The pipeline graph the Pipelines page draws (todo 52).
+//
+// A FIXTURE, not a derivation: the mock deliberately does not re-implement
+// the server's graph builder, because a second implementation in the mock
+// would be a second answer to "what does this graph contain" — the exact
+// defect `crates/strivo-web/tests/pipeline_graph.rs` exists to rule out on
+// the real side. What the browser lane proves is that the surface draws the
+// payload it is given, faithfully; what the Rust test proves is that the
+// payload is the executor's `Stage` list.
+//
+// The counts below are the spec the lane asserts against, so they are
+// deliberately unequal: 6 nodes of which 5 are runnable, 4 edges, and one
+// node whose dispatch names a plugin no Creator build registers.
+const GRAPH_RUN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const STAGE_CASEBOOK = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const STAGE_THUMBS = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const T_TRANSCRIBE = "11111111-1111-4111-8111-111111111111";
+const T_CUEPOINTS = "22222222-2222-4222-8222-222222222222";
+const T_BRANDSAFE = "33333333-3333-4333-8333-333333333333";
+const T_PUBLISH = "44444444-4444-4444-8444-444444444444";
+
+function graphNode(o) {
+  return {
+    attempts: 0, max_attempts: 3, requires: [], cost_cents_estimate: 0,
+    artifacts: 0, fallback_provider: null, capabilities: [], missing: [],
+    runnable: true, dispatch: null, ...o,
+  };
+}
+
+const PIPELINE_GRAPH = {
+  totals: { graphs: 2, nodes: 6, edges: 5, runnable: 5, not_runnable: 1 },
+  graphs: [
+    {
+      key: `run:${GRAPH_RUN}`,
+      kind: "run",
+      run_id: GRAPH_RUN,
+      name: "Actual run",
+      state: "Running",
+      trigger: "recording-finished",
+      error: null,
+      runnable: true,
+      nodes: [
+        graphNode({
+          stage_id: STAGE_THUMBS, name: "Generate thumbnail candidates",
+          kind: "custom(thumbnails.generate)", state: "Done", attempts: 1, artifacts: 1,
+          requires: ["file:artifact:rec-1:thumbnails", "cpu:2", "disk:2"],
+          dispatch: { plugin: "artifacts", verb: "thumbnails" },
+          capabilities: ["thumbnail_ranking"],
+        }),
+        graphNode({
+          stage_id: STAGE_CASEBOOK, name: "Assemble Casebook",
+          kind: "custom(casebook.compose)", state: "Done", artifacts: 1,
+          requires: ["file:artifact:rec-1:casebook", "cpu:2", "disk:2"],
+          dispatch: { plugin: "artifacts", verb: "casebook" },
+          capabilities: ["reporting"],
+        }),
+      ],
+      edges: [{ from: STAGE_THUMBS, to: STAGE_CASEBOOK }],
+      totals: { nodes: 2, edges: 1, runnable: 2, not_runnable: 0 },
+      mapping: { stages: 2, nodes: 2, edges: 1, inputs_links: 1, mismatches: [] },
+    },
+    {
+      key: "template:creator_publish",
+      kind: "template",
+      run_id: null,
+      name: "Ultimate creator publish",
+      state: "Pending",
+      trigger: "manual",
+      error: null,
+      runnable: false,
+      nodes: [
+        graphNode({
+          stage_id: T_TRANSCRIBE, name: "Transcribe, diarize & analyze",
+          kind: "custom(crunchr.process)", state: "Pending",
+          requires: ["gpu", "cpu:2", "disk:2"],
+          dispatch: { plugin: "crunchr", verb: "transcribe" },
+          capabilities: ["diarisation", "topic_segmentation", "transcription", "word_timestamps"],
+        }),
+        graphNode({
+          stage_id: T_CUEPOINTS, name: "Detect visual cuepoints",
+          kind: "custom(cuepoints.extract)", state: "Pending",
+          dispatch: { plugin: "artifacts", verb: "cuepoints" },
+          capabilities: ["scene_detection"],
+        }),
+        graphNode({
+          stage_id: T_BRANDSAFE, name: "Scan brand safety",
+          kind: "analyze(local-rules)", state: "Pending",
+          dispatch: { plugin: "artifacts", verb: "brandsafe" },
+          capabilities: ["brand_safety"],
+        }),
+        graphNode({
+          // The honest not-runnable case: `reuse` is not a registered
+          // plugin, so the server marks this stage unrunnable and names it.
+          stage_id: T_PUBLISH, name: "Publish to YouTube",
+          kind: "custom(reuse.push)", state: "Pending",
+          dispatch: { plugin: "reuse", verb: "push" },
+          runnable: false, missing: ["dispatch plugin reuse"],
+        }),
+      ],
+      edges: [
+        { from: T_TRANSCRIBE, to: T_CUEPOINTS },
+        { from: T_TRANSCRIBE, to: T_BRANDSAFE },
+        { from: T_CUEPOINTS, to: T_PUBLISH },
+        { from: T_BRANDSAFE, to: T_PUBLISH },
+      ],
+      totals: { nodes: 4, edges: 4, runnable: 3, not_runnable: 1 },
+      mapping: { stages: 4, nodes: 4, edges: 4, inputs_links: 4, mismatches: [] },
+    },
+  ],
+};
+
 const SCHEDULE = [
   {
     channel: "Alpha",
@@ -738,6 +849,7 @@ const server = createServer(async (req, res) => {
             }],
           }],
         }],
+        graph: PIPELINE_GRAPH,
       });
 
     // ── Plugin data surface (read-only) ──────────────────────────────

@@ -587,7 +587,36 @@ async fn pipeline_runs(headers: HeaderMap, State(state): State<AppState>) -> imp
             return Problem::internal(format!("read pipeline registry: {error}")).into_response()
         }
     };
-    Json(json!({ "runs": runs })).into_response()
+    // The graph is a key on the same response rather than a second route: the
+    // runs and the graph are one answer about one set of stages, and a
+    // separate endpoint would be a second place for them to disagree.
+    Json(json!({
+        "runs": runs,
+        "graph": crate::routes::pipeline_graph::graph_payload(
+            &runs,
+            &pipeline_templates(Uuid::nil()),
+            &registered_plugins(),
+        ),
+    }))
+    .into_response()
+}
+
+/// The shipped templates as real `Pipeline`s, so a graph exists on a fresh
+/// install instead of only after the first run. The recording id is the nil
+/// uuid: a template is not rooted in a recording, and the graph draws
+/// neither the subject nor the dispatch selection.
+#[cfg(feature = "creator")]
+fn pipeline_templates(recording_id: Uuid) -> Vec<(&'static str, strivo_core::pipeline::Pipeline)> {
+    vec![
+        (
+            "creator_intelligence",
+            strivo_plugins::pipeline_templates::creator_intelligence(recording_id, "manual"),
+        ),
+        (
+            "creator_publish",
+            strivo_plugins::pipeline_templates::creator_publish(recording_id, "manual"),
+        ),
+    ]
 }
 
 #[cfg(feature = "creator")]

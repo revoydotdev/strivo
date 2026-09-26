@@ -1,11 +1,9 @@
 // ── Pipelines (W5 — read PluginRpc dispatch state from daemon) ────────
-// Plugins that have a dedicated SPA sub-route. Clicking a node routes
-// there; everything else goes to the plugin hub so users land on the
-// catalog entry.
-const PIPELINE_NODE_ROUTES = new Set([
-  "crunchr", "archiver", "viewguard", "insights",
-  "schedule-optimizer",
-]);
+// The run list, the run controls and the graph mount. The graph itself lives
+// in 044–046-creator.js: its nodes are the executor's own `Stage`s and its
+// edges are those stages' `inputs`, delivered on the `graph` key of this same
+// response. The capability-tag blueprints `/pipelines/dag` still serves are
+// documentation and are no longer rendered here.
 
 // Bounded client-side run store, keyed by run id and newest-first. The
 // `PipelineUpdated` SSE frame carries the whole `Pipeline` — the identical
@@ -37,20 +35,21 @@ async function renderPipelines(livePipeline) {
   // below rather than being silently dropped.
   if (livePipeline && livePipeline.id && storeRun(livePipeline)) {
     paintRunList();
+    // The frame carries the whole `Pipeline`, so the graph's node states
+    // move with it. The executor verdict is not in the frame and is not
+    // invented here — `graphPatchRunState` marks the section stale instead.
+    graphPatchRunState(livePipeline);
     return;
   }
-  let payload = { pipelines: [] };
   let recs = { recordings: [] };
   let runPayload = { runs: [] };
   try {
-    [payload, recs, runPayload] = await Promise.all([
-      API.pipelinesDag(),
+    [recs, runPayload] = await Promise.all([
       API.recordings().catch(() => ({ recordings: [] })),
       API.pipelineRuns().catch(() => ({ runs: [] })),
     ]);
   } catch (_) {}
   root.removeAttribute("aria-busy");
-  const pipelines = payload.pipelines || [];
   // Newest-first, capped: the oldest runs fall off the store, and the cap is
   // announced below rather than truncating silently.
   runStore = (runPayload.runs || []).slice().reverse().slice(0, RUN_STORE_MAX);
@@ -59,85 +58,6 @@ async function renderPipelines(livePipeline) {
   const finishedRecs = (recs.recordings || [])
     .filter((r) => stateClassName(r.state) === "finished" && r.file_exists !== false)
     .sort((a, b) => new Date(b.started_at) - new Date(a.started_at));
-
-  const flow = (pipe) => {
-    // Layout the nodes left→right by the topological order the server
-    // shipped. Edges are encoded as " → " arrows between consecutive
-    // nodes that actually connect, with a tag chip.
-    const order = pipe.order && pipe.order.length ? pipe.order : pipe.nodes.map((n) => n.id);
-    const nodeById = new Map(pipe.nodes.map((n) => [n.id, n]));
-    const edges = pipe.edges || [];
-    const edgeBetween = (a, b) => edges.find((e) => e.from === a && e.to === b);
-    const cells = [];
-    for (let i = 0; i < order.length; i++) {
-      const node = nodeById.get(order[i]);
-      if (!node) continue;
-      const runnable = node.runnable === true;
-      const statusClass = runnable ? "is-avail" : "is-roadmap";
-      // A blueprint node is labelled by what it actually is, and the
-      // tooltip names the capabilities with no executor behind them.
-      const missing = node.missing || [];
-      const verdict = runnable
-        ? "runnable"
-        : `blueprint — no executor for ${missing.join(", ")}`;
-      const produces = (node.produces || [])
-        .map((c) => `<span class="pl-cap pl-cap-produces">${htmlEscape(c.replace(/_/g, " "))}</span>`)
-        .join("");
-      const consumes = (node.consumes || [])
-        .map((c) => `<span class="pl-cap pl-cap-consumes">${htmlEscape(c.replace(/_/g, " "))}</span>`)
-        .join("");
-      // Every node is a clickable anchor — routes to the plugin's own
-      // sub-page when one exists, else to the plugin-hub catalog. The
-      // hub upsell card (iter 26) handles the Pro-gate UX without us
-      // having to know entitlement here.
-      const href = PIPELINE_NODE_ROUTES.has(node.id)
-        ? `#/plugins/${node.id}`
-        : `#/plugins`;
-      cells.push(`<a class="pl-node ${statusClass}" href="${htmlEscape(href)}"
-          title="${htmlEscape(node.blurb)} · ${htmlEscape(verdict)}"
-          data-plugin="${htmlEscape(node.id)}">
-          <div class="pl-node-head">
-            <span class="pl-node-label">${htmlEscape(node.label)}</span>
-            <span class="pl-node-status">${htmlEscape(runnable ? "runnable" : "blueprint")}</span>
-          </div>
-          <div class="pl-node-caps">${consumes}${produces}</div>
-        </a>`);
-      const next = order[i + 1];
-      if (next) {
-        const eRec = edgeBetween(node.id, next);
-        const viaLabel = eRec ? eRec.via.replace(/_/g, " ") : "";
-        cells.push(`<div class="pl-arrow${eRec ? "" : " pl-arrow-loose"}" title="${htmlEscape(viaLabel)}">
-          <span class="pl-arrow-line"></span>
-          ${eRec ? `<span class="pl-arrow-via">${htmlEscape(viaLabel)}</span>` : ""}
-          <span class="pl-arrow-tip">▸</span>
-        </div>`);
-      }
-    }
-    return cells.join("");
-  };
-
-  const cards = pipelines
-    .map((p, idx) => {
-      const totalNodes = (p.nodes || []).length;
-      const runnableNodes = (p.nodes || []).filter((n) => n.runnable === true).length;
-      const pct = totalNodes === 0 ? 0 : Math.round((runnableNodes / totalNodes) * 100);
-      return `
-    <section class="cfg-card pl-pipe-card">
-      <header class="pl-pipe-head">
-        <h2 class="cfg-title">${htmlEscape(p.name)} <span class="pg-cap-hint">${htmlEscape(p.description)}</span></h2>
-        <div class="pl-pipe-actions">
-          <span class="pl-pipe-readiness ${p.runnable ? "complete" : "partial"}"
-                title="${runnableNodes} of ${totalNodes} nodes have an executor for every capability they produce">
-            ${runnableNodes}/${totalNodes} runnable
-          </span>
-          <span class="pg-cap-hint">Blueprint</span>
-        </div>
-      </header>
-      <div class="pl-pipe-bar"><span style="width:${pct}%"></span></div>
-      <div class="pl-flow">${flow(p)}</div>
-    </section>`;
-    })
-    .join("");
 
   root.innerHTML = chrome(`
     <h1 class="page-title">Pipelines</h1>
@@ -161,10 +81,13 @@ async function renderPipelines(livePipeline) {
       <div class="pg-list" id="pl-run-list">${runListHtml()}</div>
       ${runStore.length > RUNS_VISIBLE ? `<button class="sm" id="pl-runs-show-all">Show all ${runStore.length} runs</button>` : ""}
     </section>
-    <h2 class="cfg-title">Workflow blueprints <span class="pg-cap-hint">trajectory and capability topology</span></h2>
-    ${cards || '<div class="empty">No pipelines defined.</div>'}
+    <h2 class="cfg-title">Pipeline graph <span class="pg-cap-hint">the executor's own stages and their inputs</span></h2>
+    <div id="pg-graphs"></div>
   `);
   setupChromeHandlers();
+  // The graph mounts after the page is on screen, and the vendored library
+  // it draws with loads after that. Neither blocks first paint.
+  await renderPipelineGraphs(runPayload);
 
   document.getElementById("pl-run-ultimate")?.addEventListener("click", () => {
     openRecordingPickerForPipeline({ name: "Ultimate creator publish", id: "creator_publish" }, finishedRecs);
@@ -201,7 +124,7 @@ function runStatusText() {
   return `${run.name} — ${state}, ${done} of ${stages.length} stages done`;
 }
 
-// Repaint just the run list from the store. The DAG cards and the
+// Repaint just the run list from the store. The graph and the
 // recordings the "New run" picker needs are untouched, so a live transition
 // costs no network and no full-page churn.
 function paintRunList() {

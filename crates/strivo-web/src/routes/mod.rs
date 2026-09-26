@@ -57,6 +57,12 @@ pub mod multistream;
 // within the edition.
 #[cfg(feature = "creator")]
 pub mod plugins;
+// The pipeline graph, derived from the executor's own `Pipeline`/`Stage`
+// model. Creator-only for the same reason as `plugins`: the stages it draws
+// are dispatched by Creator plugins, and a PVR install has none registered,
+// so the graph would render an empty page in the PVR surface.
+#[cfg(feature = "creator")]
+pub mod pipeline_graph;
 // The project workspace: one project, one selected revision, and the same
 // answer for every view (player, transcript, timeline, inspector, task status).
 // Creator-only because the table it reads is Creator-only — a PVR install has

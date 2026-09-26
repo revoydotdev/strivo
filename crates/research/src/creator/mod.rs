@@ -69,6 +69,7 @@ mod multitrack_model;
 mod multitrack_session;
 mod observation_error;
 mod observations;
+mod publication;
 mod readiness;
 mod relink;
 mod render_plan;
@@ -82,6 +83,7 @@ mod store_delivery;
 mod store_history;
 mod store_jobs;
 mod store_observations;
+mod store_publication;
 mod store_rights;
 mod store_sources;
 mod store_time;
@@ -140,6 +142,14 @@ pub use observations::{
     CaptureWindow, MetricAvailability, MetricName, SamplePosition, UnavailableReason, MAX_BATCH,
     MAX_LABEL_BYTES, MAX_METRIC_BYTES,
 };
+// Named apart from `jobs::{is_legal, TRANSITIONS}`: two state machines, two
+// tables, two answers — and a bare `is_legal` at the crate root would be an
+// ambiguity rather than a convenience. Same spelling rule as
+// `rights::is_stale` below.
+pub use publication::{
+    is_legal as publication_is_legal, PackageContent, PackageState, PublicationEvent,
+    PublicationState, PublishError, TRANSITIONS as PUBLICATION_TRANSITIONS,
+};
 pub use readiness::{
     Blocker, FrameTiming, IngestStep, ProbeReport, Readiness, ReadinessError, StepState, Tool,
     Toolchain, VideoStream,
@@ -158,6 +168,7 @@ pub use schema::{latest_version, rollback, Migration, MIGRATIONS, TABLES, VERSIO
 pub use store::Store;
 pub use store_jobs::{MoveJob, NewJob};
 pub use store_observations::CountedTable;
+pub use store_publication::{Advance, NewPackage, NewPosting, Package, Posting};
 pub use store_rights::PublicationReport;
 pub use store_time::ClockSegmentRow;
 pub use stream_event::{EventKind, RawStreamEvent, StreamEvent};

@@ -84,3 +84,36 @@ pub fn transcript(project_id: ProjectId, source_id: SourceAssetId, n: u32) -> Tr
         created_at: format!("2026-09-07T00:00:0{n}Z"),
     }
 }
+
+/// A destination-shaped derivative of `revision`. The parent row of the
+/// render-plan chain, and what a release package names as *which shape* was
+/// approved.
+pub fn variant(project_id: ProjectId, revision: CompositionRevisionId) -> Variant {
+    Variant {
+        id: VariantId::generate(),
+        project_id,
+        composition_revision_id: revision,
+        name: "landscape".into(),
+        format_overrides_json: "{}".into(),
+        created_at: at("2026-09-07T00:00:01Z"),
+    }
+}
+
+/// A finished output, identified by its content hash rather than by where it
+/// sits. A release package refers to one of these by identity.
+pub fn artifact(project_id: ProjectId, variant_id: VariantId) -> Artifact {
+    Artifact {
+        id: ArtifactId::generate(),
+        project_id,
+        variant_id: Some(variant_id),
+        render_plan_id: None,
+        kind: "render".into(),
+        content_hash: "sha256:render-fixture".into(),
+        locator: Some(PathBuf::from("/srv/strivo/render/landscape.mp4")),
+        bytes: Some(48_213_771),
+        width: Some(1920),
+        height: Some(1080),
+        duration: Some(dur(1_842_000)),
+        created_at: at("2026-09-07T00:00:02Z"),
+    }
+}

@@ -42,6 +42,7 @@ pub const TABLES: &[&str] = &[
     "creator_artifacts",
     "creator_release_packages",
     "creator_publications",
+    "creator_publication_events",
     "creator_metric_observations",
     "creator_clock_segments",
     "creator_jobs",
@@ -99,6 +100,10 @@ const DROP_EDIT_HISTORY_V7: &str = include_str!("schema_v7.down.sql");
 const DURABLE_CHAT_V8: &str = include_str!("schema_v8.sql");
 
 const DROP_DURABLE_CHAT_V8: &str = include_str!("schema_v8.down.sql");
+
+const RELEASE_PACKAGE_V9: &str = include_str!("schema_v9.sql");
+
+const DROP_RELEASE_PACKAGE_V9: &str = include_str!("schema_v9.down.sql");
 
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
@@ -161,6 +166,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_durable_chat",
         up: DURABLE_CHAT_V8,
         down: DROP_DURABLE_CHAT_V8,
+    },
+    Migration {
+        version: 9,
+        name: "creator_release_package_publication",
+        up: RELEASE_PACKAGE_V9,
+        down: DROP_RELEASE_PACKAGE_V9,
     },
 ];
 

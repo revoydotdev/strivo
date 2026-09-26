@@ -34,6 +34,7 @@ mod multitrack;
 mod observations;
 mod observations_malformed;
 mod observations_rollback;
+mod publication;
 mod readiness;
 mod rights;
 mod rights_malformed;

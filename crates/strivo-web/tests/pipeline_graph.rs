@@ -73,7 +73,7 @@ fn every_node_maps_to_a_real_stage_and_every_stage_has_exactly_one_node() {
     // that has nothing to do with the mapping.
     let templates = templates();
     let payload = graph_payload(&[], &templates, &registry());
-    let publish = graph_for(&payload, "Ultimate creator publish");
+    let publish = graph_for(&payload, "Ultimate creator preparation");
     let pipeline = &templates[1].1;
 
     // The stage list, read from the model rather than from the payload.
@@ -126,7 +126,7 @@ fn a_stage_with_no_node_is_detected() {
 fn every_edge_maps_to_a_real_inputs_link_and_every_inputs_link_produced_one() {
     let templates = templates();
     let payload = graph_payload(&[], &templates, &registry());
-    let publish = graph_for(&payload, "Ultimate creator publish");
+    let publish = graph_for(&payload, "Ultimate creator preparation");
     let pipeline = &templates[1].1;
 
     let edges = publish["edges"].as_array().expect("edges array");
@@ -197,7 +197,7 @@ fn the_mapping_is_derived_so_a_stage_added_later_still_appears() {
     let before = pipeline.stages.len();
     let added = pipeline.add_stage(Stage::new("Late arrival", StageKind::Concat));
     let payload = graph_payload(&[], &[("t", pipeline.clone())], &registry());
-    let graph = graph_for(&payload, "Ultimate creator publish");
+    let graph = graph_for(&payload, "Ultimate creator preparation");
     let node_ids = ids(graph);
 
     // No table in this crate mentions "Late arrival". If a hand-kept mapping
@@ -241,7 +241,7 @@ fn a_stage_with_no_dispatch_is_not_runnable() {
 fn a_registered_executor_is_runnable_and_reports_the_capabilities_it_declares() {
     let templates = templates();
     let payload = graph_payload(&[], &templates, &registry());
-    let nodes = graph_for(&payload, "Ultimate creator publish")["nodes"]
+    let nodes = graph_for(&payload, "Ultimate creator preparation")["nodes"]
         .as_array()
         .cloned()
         .expect("nodes");
@@ -347,7 +347,7 @@ fn a_run_carries_its_own_state_apart_from_the_templates() {
     assert_eq!(graph["state"], serde_json::json!("Running"));
     assert_eq!(graph["nodes"][0]["state"], serde_json::json!("Running"));
     // The template of the same shape is a different graph, not a merge.
-    let publish = graph_for(&payload, "Ultimate creator publish");
+    let publish = graph_for(&payload, "Ultimate creator preparation");
     assert_eq!(publish["kind"], serde_json::json!("template"));
     assert_eq!(publish["nodes"][0]["state"], serde_json::json!("Pending"));
 }

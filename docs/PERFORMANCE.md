@@ -256,15 +256,28 @@ vendoring is byte-free there. The figures above are also 0.3–0.8% above the
 pre-vendor measurement, which is the drift of unrelated SPA edits landing in the
 same window; `scripts/check-bundle-size.sh` treats 5% as the staleness bound.
 
-**Threshold result, per edition — both are under the compressed-size trigger.**
-250 KiB is 256 000 bytes. PVR `spa.js` is 103 139 as gzip and 101 362 as
-brotli. Creator `spa.js` is 152 828 as gzip and 150 596 as brotli. Whether to
-split either bundle is a separate decision; it is not made here.
+**Threshold result, per edition — both are under the compressed-size trigger,
+and the decision is NO SPLIT.** 250 KiB is 256 000 bytes. PVR `spa.js` is
+393 030 raw / 104 552 gzip / 102 761 brotli, i.e. **0.4084x** the threshold on
+gzip. Creator `spa.js` is 650 097 raw / 169 945 gzip / 168 159 brotli, i.e.
+**0.6638x** the threshold on gzip — 86 055 bytes of headroom. Neither condition
+holds in either edition, so neither bundle is split.
 
-The threshold is a disjunction — compressed size **or** parse/evaluation time.
-Only the first was evaluated, for both editions. The second is still unmeasured:
-the project does not define a minimum supported client, so a parse/eval figure
-would sit on an undefined baseline and would not mean what the threshold asks.
+Both conditions were evaluated this time, which is what makes "NO SPLIT" a
+decision rather than a deferral. Todo 53 measured the parse/evaluation term
+against a named client (headless Chromium, cold cache, 9 runs per edition,
+medians and extremes reported) because the project defines no minimum-client
+matrix: PVR compiled and executed in an 11.3 ms median against the 150 ms bar.
+The Creator bundle has three static imports, so `new Function` cannot take it;
+the honest figure there is an **upper bound** — the resource's transfer plus
+everything to `DOMContentLoaded`, 70.4 ms median and 74.5 ms worst of nine — so
+the parse/eval term inside it is necessarily under the bar too. A split would
+not move the Creator figure materially in any case: the transfer is 17.5 ms of
+that window, so chunking adds a round trip to hit work already inside it. The
+mechanism is available (`build.rs` filters by filename) but a real per-route
+split needs a second output file and a second `<script type="module">` in
+`assets/spa.html`, which is a change to the shell's shape. See
+`.omo/evidence/task-53-strivo-review-and-pro-edition.json`.
 
 Two things a reader must not misread:
 
@@ -289,14 +302,14 @@ Two things a reader must not misread:
   "editions": {
     "PVR": {
       "wire_measured": true,
-      "note": "re-measured 2026-09-26 after the three browser libraries were vendored, against the strivo 0.8.0 release PVR bundle over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians. build.rs removes assets/vendor/ from a PVR build, so the vendoring is byte-free here",
-      "spa.js": { "raw_bytes": 388381, "gzip": 103139, "brotli": 101362 },
+      "note": "re-measured 2026-09-26 against the strivo 0.8.0 release PVR bundle over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians. build.rs removes assets/vendor/ from a PVR build, so the vendoring is byte-free here. Refreshed by todo 59 from todo 53's measurement after todos 39/40/44/47/50/53 landed",
+      "spa.js": { "raw_bytes": 393030, "gzip": 104552, "brotli": 102761 },
       "spa.css": { "raw_bytes": 92784, "gzip": 17290, "brotli": 18887 }
     },
     "Creator": {
       "wire_measured": true,
-      "note": "re-measured 2026-09-26 after the three browser libraries were vendored, against a Creator-featured strivo 0.8.0 release build over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians. The vendor tree is embedded in a Creator build but nothing imports it yet, so it costs binary size and not parse time",
-      "spa.js": { "raw_bytes": 587472, "gzip": 152828, "brotli": 150596 },
+      "note": "re-measured 2026-09-26 against a Creator-featured strivo 0.8.0 release build over HTTP; 3 samples per point, every Content-Encoding asserted; figures are sample medians. The vendor tree is embedded in a Creator build but nothing imports it yet, so it costs binary size and not parse time. Refreshed by todo 59 from todo 53's measurement: the earlier 152 828 gzip was +11.20% stale, outside the file's own 5% tolerance, which is what made scripts/check-bundle-size.sh fail",
+      "spa.js": { "raw_bytes": 650097, "gzip": 169945, "brotli": 168159 },
       "spa.css": { "raw_bytes": 134576, "gzip": 24159, "brotli": 26359 }
     }
   }

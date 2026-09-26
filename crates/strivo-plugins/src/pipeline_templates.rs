@@ -39,11 +39,27 @@ pub fn creator_intelligence(recording_id: Uuid, trigger: impl Into<String>) -> P
     pipeline
 }
 
-/// End-to-end publish preparation. Transcript intelligence and visual scene
-/// mining form independent roots, fan out, and converge into publish-ready
-/// media, reusable drafts, and a final editorial brief.
+/// End-to-end **preparation** for publication. Transcript intelligence and
+/// visual scene mining form independent roots, fan out, and converge into
+/// publish-ready media, reusable drafts, and a final editorial brief.
+///
+/// **The display name says preparation, and that is the correction
+/// `docs/CREATOR-EDITION-REPORT-2026-09-07.md:102` asks for.** This pipeline
+/// ends at a rendered artifact and a draft. It does not carry a user's final
+/// edit revision, render for a destination, upload, reconcile a provider's
+/// processing state, schedule, capture a remote id, or ingest a metric — so
+/// calling the result "published" told a creator their video was on YouTube
+/// when it was on their disk. The contracts that make the rest real now exist
+/// in `strivo_research::creator::publication` (the release package and the
+/// fourteen-state publication lifecycle); this template produces the *inputs* to
+/// a package and nothing more.
+///
+/// **The `creator_publish` name stays, and it is a machine id, not a claim.**
+/// It is the template key the API, the saved `RecipeChain` files on disk and the
+/// browser all address it by, so renaming it would break every stored
+/// reference to break a label. What a person reads is the name below.
 pub fn creator_publish(recording_id: Uuid, trigger: impl Into<String>) -> Pipeline {
-    let mut pipeline = Pipeline::new("Ultimate creator publish")
+    let mut pipeline = Pipeline::new("Ultimate creator preparation")
         .for_recording(recording_id)
         .with_trigger(trigger);
     let intelligence = pipeline.add_stage(
@@ -189,6 +205,14 @@ mod tests {
     fn publish_template_fans_out_then_converges() {
         let recording_id = Uuid::new_v4();
         let pipeline = creator_publish(recording_id, "manual");
+        // The name a person reads says preparation, because this pipeline ends
+        // at a local artifact. `docs/CREATOR-EDITION-REPORT-2026-09-07.md:102`.
+        assert_eq!(pipeline.name, "Ultimate creator preparation");
+        assert!(
+            !pipeline.name.contains("publish"),
+            "the display name must not claim the video was published: {}",
+            pipeline.name,
+        );
         assert_eq!(pipeline.stages.len(), 10);
         assert!(pipeline.assert_acyclic().is_ok());
         let root = pipeline.stages[0].id;

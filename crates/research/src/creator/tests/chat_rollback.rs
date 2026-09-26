@@ -20,7 +20,7 @@
 
 use rusqlite::Connection;
 
-use super::super::schema::{self, Migration, MIGRATIONS, VERSION_KEY};
+use super::super::schema::{self, Migration, MIGRATIONS, TABLES, VERSION_KEY};
 use super::super::{
     ChatCollectionId, CollectionEnd, CoverageGap, GapReason, RawChatMessage, Store,
 };
@@ -99,7 +99,10 @@ fn rolling_back_to_seven_removes_only_the_chat_record() {
 
     let (session, tables_at_eight) = {
         let store = Store::open(&db).expect("open");
-        assert_eq!(store.schema_version().expect("version"), 8);
+        assert_eq!(
+            store.schema_version().expect("version"),
+            schema::latest_version()
+        );
         let (project, session) = super::chat::with_session(&store, "stream");
         let collection = store
             .open_chat_collection(session, project, "twitch", "streamer", 1_789_000_000_000)
@@ -190,16 +193,19 @@ fn rolling_back_to_seven_removes_only_the_chat_record() {
     // back: an assertion here against the untouched original would pass for the
     // wrong reason.
     let store = Store::open(&copy).expect("reopen forward");
-    assert_eq!(store.schema_version().expect("version"), 8);
     assert_eq!(
         store.schema_version().expect("version"),
-        8,
-        "and it is idempotent"
+        schema::latest_version()
     );
     assert_eq!(
-        store.creator_tables().expect("tables").len(),
-        left.len() + 4
+        store.schema_version().expect("version"),
+        schema::latest_version(),
+        "and it is idempotent"
     );
+    // `TABLES.len()`, not `left.len() + 4`: the four chat tables came back and so
+    // did every table a later version added, and a count derived from the
+    // rollback target goes stale at the next migration instead of failing.
+    assert_eq!(store.creator_tables().expect("tables").len(), TABLES.len());
     assert!(
         store.chat_messages(session).expect("read").is_empty(),
         "the archived messages did not come back"
@@ -240,7 +246,10 @@ fn a_database_from_before_this_version_migrates_forward_and_back_without_data_lo
     assert_eq!(before, 7);
 
     let store = Store::open(&db).expect("forward migrate");
-    assert_eq!(store.schema_version().expect("version"), 8);
+    assert_eq!(
+        store.schema_version().expect("version"),
+        schema::latest_version()
+    );
     let tables = store.creator_tables().expect("tables");
     assert!(tables.contains(&"creator_chat_gaps".to_string()));
     assert!(

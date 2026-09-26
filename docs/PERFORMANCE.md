@@ -161,6 +161,198 @@ scripts/measure_bundle.sh <release-strivo> <build>/out/assets PVR
 scripts/check-bundle-size.sh <release-strivo> <build>/out/assets PVR
 ```
 
+## Recordings/history query shape
+
+Measured 2026-09-25 with the harness from [docs/perf](perf/README.md) against
+the `strivo 0.8.0` release PVR binary (sha256 `38cacd0f…`), 60 requests per
+workload, `limit=500` (the API's own maximum), concurrency 1. Latency is
+`Server-Timing: app;dur`, the signal the budget table above is written against.
+**The host was not idle** — `loadavg_1m` was 7.1–7.8 for the two runs below on
+24 CPUs, and 13.9–15.1 for the repeat pair; see the caveat below before
+treating any delta as a regression.
+
+### p95 by endpoint and offset, 10 000-recording library
+
+Two consecutive runs, both with 60 requests per workload. `rows` is what the
+page actually held.
+
+| Endpoint | Offset | rows | run A p50 | run A p95 | run B p50 | run B p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `/api/v1/recordings` | 0 | 500 | 4.51 | 5.98 | 4.27 | 5.86 |
+| `/api/v1/recordings` | 1 000 | 500 | 4.08 | 5.51 | 4.73 | 6.44 |
+| `/api/v1/recordings` | 5 000 | 500 | 4.27 | 5.73 | 4.85 | 6.34 |
+| `/api/v1/recordings` | 10 000 | **0** | 0.68 | 1.11 | 0.73 | 1.15 |
+| `/api/v1/history` | 0 | 500 | 2.04 | 3.25 | 2.14 | 3.30 |
+| `/api/v1/history` | 1 000 | 500 | 2.16 | 3.37 | 2.16 | 3.55 |
+| `/api/v1/history` | 5 000 | 500 | 2.18 | 3.40 | 2.21 | 3.42 |
+| `/api/v1/history` | 10 000 | **0** | 0.44 | 0.77 | 0.51 | 0.86 |
+
+**The two offset-10 000 rows are the only numbers in this table that do not
+measure a page.** With exactly 10 000 rows, `cursor=10000` is past the end, so
+the server returns `200` with an empty array in 0.8–1.2 ms and the "fastest"
+figures in the table measure nothing but the empty-page path. `F-27` is
+explicitly a finding that refused to conclude without live timing at high
+offsets; answering it with a number that never reads a row would repeat the
+defect, not settle it, so the real high-offset page was measured separately on a
+larger library.
+
+### p95 by endpoint and offset, 11 000-recording library
+
+Same binary, same knobs, one extra thousand rows so `cursor=10000` returns a
+full 500-row page. `loadavg_1m` 7.13; a second 11 000-row run at
+`loadavg_1m` 15.08 gave the same picture (recordings p95 6.57–6.88, history p95
+3.64–4.22).
+
+| Endpoint | Offset | rows | p50 | p95 | vs 500 ms budget |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `/api/v1/recordings` | 0 | 500 | 4.03 | 5.44 | 92× under |
+| `/api/v1/recordings` | 1 000 | 500 | 3.90 | 5.92 | 84× under |
+| `/api/v1/recordings` | 5 000 | 500 | 4.23 | 5.71 | 88× under |
+| `/api/v1/recordings` | 10 000 | 500 | 4.81 | 6.90 | 72× under |
+| `/api/v1/history` | 0 | 500 | 2.17 | 3.30 | 152× under |
+| `/api/v1/history` | 1 000 | 500 | 2.06 | 3.27 | 153× under |
+| `/api/v1/history` | 5 000 | 500 | 2.09 | 3.02 | 166× under |
+| `/api/v1/history` | 10 000 | 500 | 2.28 | 3.65 | 137× under |
+
+### Decision: keep the numeric-offset shape, and do not add a file-existence catalog
+
+**No code changed.** `cursor` keeps its name and its meaning, so there is no API
+version note to add. Both alternatives the plan asked to weigh are rejected on
+the numbers above:
+
+- **Not a keyset cursor.** The number this rests on is
+  `/api/v1/recordings` p95 **6.90 ms at offset 10 000 against 5.44 ms at
+  offset 0** — a 27% rise for a 10 000-row deeper seek, on a query whose whole
+  budget is 500 ms. A keyset cursor buys a logarithmic seek instead of a linear
+  one, and the linear part is not what costs anything here: `EXPLAIN QUERY PLAN`
+  on the seeded database reports `SEARCH jobs USING INDEX idx_jobs_kind_updated
+  (kind=?)` with no temp B-tree for the `ORDER BY`, so the offset is an
+  index-entry skip and the per-page cost is the fixed 500-row work, not the
+  skip. Measured straight through `sqlite3` on the same 11 000-row file, one page
+  costs 0.45 ms at offset 0, 0.46 ms at 1 000, 0.50 ms at 5 000 and 0.49 ms at
+  10 000 — flat. A keyset cursor would add a second cursor format, a
+  migration for every client, and a class of "skipped or duplicated row" bug in
+  exchange for a saving this budget cannot see.
+- **Not a maintained file-existence catalog.** The condition
+  [below](#next-profiling-thresholds) sets for that work is a 500-row page
+  exceeding the uncached-read budget. The measured worst case is 6.90 ms, 72×
+  under it. The per-row `Path::exists()` is real and already `spawn_blocking`-off
+  the reactor, and the whole gap between the two endpoints — 4.24 ms p50 for
+  `/api/v1/recordings` against 2.15 ms p50 for `/api/v1/history`, which does not
+  stat — is about 2.1 ms for 500 rows, roughly 4 µs per row. Reaching 500 ms
+  that way needs a ~240× worse per-row cost, not a bigger library: the page is
+  already capped at 500 rows server-side, so library size does not make the stat
+  loop longer.
+
+This settles [`F-27`](audits/PHASE0-EXPERIENCE-AUDIT-2026-07-30.md) as
+*measured, and no change warranted*: the finding asked for live timing at high
+offsets before anyone invests in a keyset cursor, and the timing says the offset
+is not what costs anything.
+
+### `F-28`, the monitor's finished-recording count
+
+`F-28`, in the same audit, covers a different query —
+`count_finished_recordings` (`src/recording/persist.rs:644`), not the paginated
+page — and it refused to conclude without `EXPLAIN QUERY PLAN` plus timing, so
+it was measured the same way, straight against the seeded 11 000-row database
+(8 800 rows in `finished` state, 500 distinct channels, 22 finished rows per
+channel).
+
+```
+EXPLAIN QUERY PLAN SELECT COUNT(*) FROM jobs
+  WHERE kind='Recording' AND state='finished'
+    AND json_extract(payload,'$.channel_id') = ?1
+  -> SEARCH jobs USING INDEX idx_jobs_state (state=?)
+```
+
+One call: **7.1–8.5 ms**, and the number is flat across channels — a channel
+with 22 finished rows and a channel with **zero** finished rows both cost about
+the same, because `idx_jobs_state` prunes to every finished row in the library
+and `json_extract` then runs on all 8 800 of them. So the audit's estimate is
+right about the mechanism and understated the shape: the cost is proportional
+to the library's finished-row count **per channel queried**, not to that
+channel's own rows. A sweep of all 400 channels holding finished rows took
+2.9 s.
+
+**Not changed here, and deliberately.** The budget table above covers HTTP
+application time, not a monitor tick, and 8.5 ms of indexed SQLite work per
+channel does not breach any budget this document states; the per-call cost is
+also flat in channel count, so the thing to watch is
+`finished rows × channels with a cutoff profile`. Revisit with an expression
+index on `json_extract(payload,'$.channel_id')` when a single
+`count_finished_recordings` call passes ~50 ms. At the measured 8.5 ms per
+8 800 finished rows that is an extrapolated ~52 000 finished rows, **not a
+measured figure** — no library that size was benchmarked.
+
+### What the endpoints do with an unusable cursor
+
+Probed directly, because a benchmark that records a rejection as a fast
+response is measuring the wrong thing:
+
+| Request | Result |
+| --- | --- |
+| `cursor=20000` on 11 000 rows | `200`, 0 rows, `next_cursor: null`, 0.5–0.9 ms |
+| `cursor=11000` (exactly the total) | `200`, 0 rows, `next_cursor: null` |
+| `cursor=-1` | `400` `cursor: invalid digit found in string` |
+| `cursor=abc` | `400` `cursor: invalid digit found in string` |
+| `cursor=` (empty) | `400` `cursor: cannot parse integer from empty string` |
+| `limit=0` | `200`, clamped to 1 row, `next_cursor: 1` |
+| `limit=99999` | `200`, clamped to 500 rows |
+
+A client that walks past the end gets a `200` and an empty page rather than a
+cursor error, and `limit` is clamped in both directions, so no request can ask
+for an unbounded page. Both are properties worth knowing before a second cursor
+format is added; neither is a performance defect.
+
+### Caveat a reader must not skip
+
+Two consecutive 10 000-row runs of this harness agreed to **16.9%** on
+recordings p95 and **11.7%** on history p95 — *above* the 10% criterion in
+[docs/perf](perf/README.md), on a host that was not idle. Treat single-run
+deltas of that size as noise, and re-measure before calling one a regression.
+
+### Reproduce
+
+```sh
+# The mandated shape: 10 000 recordings, offsets 0/1000/5000/10000.
+BENCH_PORT=8412 BENCH_OFFSETS=0,1000,5000,10000 \
+  scripts/bench_library.sh <release-strivo> 10000 /tmp/run-a.json
+# The 11 000-row run, so offset 10 000 is a real 500-row page.
+BENCH_PORT=8412 BENCH_OFFSETS=0,1000,5000,10000 \
+  scripts/bench_library.sh <release-strivo> 11000 /tmp/run-b.json
+```
+
+Pick a port no other lane is using. `scripts/bench_library.sh` takes the
+offsets as a knob already; no second harness is needed for this question, and
+`limit` defaults to the API maximum of 500 inside the probe.
+
+### Failure scenario: the benchmark does see a real regression
+
+To confirm the harness would notice a query-path regression rather than
+reporting a flat, meaningless number, `recordings` and `history` were
+temporarily reverted to the pre-`1b1ac4d` shape — a fresh
+`PersistDb::open(&state.jobs_db_path)` on every request, re-running the
+PRAGMA + `CREATE TABLE IF NOT EXISTS` batch per call — the binary was rebuilt,
+benchmarked, and the sources restored byte-identically (`md5sum` re-checked).
+
+Two independent baseline/regressed pairs on the 11 000-row library:
+
+| Pair | loadavg_1m (base → reg.) | recordings p95 | history p95 | recordings p50 | history p50 |
+| --- | --- | --- | --- | --- | --- |
+| B → C | 7.13 → 13.12 | 5.99 → 7.01 ms (+17.0%) | 3.31 → 4.37 ms (+32.1%) | 4.24 → 5.39 ms | 2.15 → 2.85 ms |
+| D → E | 15.08 → 13.92 | 6.78 → 7.28 ms (+7.5%) | 3.91 → 4.48 ms (+14.7%) | 5.06 → 5.48 ms | 2.54 → 2.95 ms |
+
+p95 figures are the mean over the four offsets. The honest reading: the
+**direction** is unambiguous — all 16 per-workload p50 deltas are positive
+across both pairs, and in the D/E pair the regressed binary was measured on the
+*less* loaded host (13.92 against 15.08) and was still slower on both endpoints,
+which is the signature of a per-request cost rather than of scheduler
+contention. The mean per-request p50 penalty is **+0.42 ms** on recordings and
+**+0.42 ms** on history in D/E, **+1.14 ms** and **+0.70 ms** in B/C — the
+handle open plus its PRAGMA and schema batch. The *magnitude* is not separable
+from this host's run-to-run spread on any single run, which is why two pairs
+were taken and the sign consistency, not one percentage, is the evidence.
+
 ## Next profiling thresholds
 
 Profile before adding complexity. Split the SPA into route chunks when compressed

@@ -40,7 +40,7 @@ venv/
 *.key
 
 # Internal docs (kept local only)
-CLAUDE.md
+AGENTS.md
 TODOS.md
 REVIEW.md
 YAZI-AUDIT.md

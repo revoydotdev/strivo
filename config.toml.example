@@ -260,7 +260,7 @@
 # This block is not a core-typed config section: it round-trips through the
 # generic `extensions` table (any [plugin-name] table not otherwise known to
 # core is preserved as-is) and is only meaningful when the Crunchr plugin is
-# compiled in (Creator Edition, see CLAUDE.md "Editions"). Absent from the
+# compiled in (Creator Edition, see AGENTS.md "Editions"). Absent from the
 # PVR edition entirely. AI transcription with optional LLM analysis.
 # Disabled by default — flip `enabled = true` to turn it on.
 #

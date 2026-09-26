@@ -89,6 +89,106 @@ limits.
   six hours of wall clock** — the run completes in seconds, so real-time
   behaviour (a wedged child, a slow volume, an hour-five descriptor leak) is not
   proven by a green run. See `.omo/evidence/task-39-strivo-review-and-pro-edition.json`.
+- Long-media navigation reads a proxy, never the recording. `src/media/` holds
+  the pieces: `proxy.rs` transcodes a source once into a 1280x720
+  densely-keyed proxy, `pyramid.rs` builds the waveform pyramid and the
+  filmstrip from *that proxy's* audio and frames, and `preview.rs` is the
+  bounded interaction surface. The proxy is addressed by the **content
+  fingerprint** of the source — `sha256` over the whole file, the rule todo 33
+  defines — so a rename keeps the proxy and an edit of any byte loses it. A
+  change to the source produces a different cache key, a different artifact, and
+  `rebuilt: true` on the resolve, and the tests assert the rebuilt proxy's
+  *bytes* differ from the stale one's rather than only that the key moved.
+  `preview.rs` is bounded at **`PREVIEW_CACHE_ENTRIES` = 64** decoded frames,
+  least-recently-used, and an evicted entry's file is deleted rather than
+  orphaned; the test fills the cache to exactly the bound and then one past it.
+- The proxy/original time mapping is **measured, not assumed**.
+  `proxy::ProxyIndex` holds both files' keyframe presentation times, read from
+  container *packets* (`-show_entries packet=pts_time,flags`) rather than
+  frames, because `-show_entries frame=` makes ffprobe decode the whole file —
+  the cost this control exists to avoid. `proxy_time_for` interpolates
+  piecewise between the bracketing keyframes, so a proxy whose timebase drifted
+  would be mapped by its own measured keyframes instead of by an identity the
+  container does not support. On `fixtures/media/landmarks.mkv` — where second
+  *k* is one flat luma value and the seconds are distinguishable from each
+  other by that value alone — a seek to each of the eight seconds through the
+  proxy decodes a frame whose mean luma matches the luma the **source** shows at
+  that second, within **2/255**. The oracle is a direct ffmpeg call in the test,
+  sharing no code with the product, because a helper both sides call would
+  validate the mapping with the thing being tested.
+- "No interaction path spawns an original-resolution decode" is observed, not
+  asserted. `media::spawn` records **every** child process these paths start —
+  tool, purpose, input path, whether the input is a generated proxy, and the
+  picture size it was told to decode — into a ring bounded at 256 entries.
+  Recording is always on, so a test cannot pass by recording nothing, and the
+  tests assert the record is non-empty and that the frame, waveform and
+  filmstrip interactions each appear in it before asserting the absence. The
+  routes that make this reachable in the product are
+  `GET /api/v1/recordings/{id}/preview` and `.../waveform`: they take a
+  **recording id, not a caller-supplied path**, so they need no media-admission
+  gate and stay in the PVR edition. A test additionally drives a deliberately
+  regressed interaction — a frame decode pointed at the user's file — through
+  the same predicate and requires it to be caught, and the whole suite was run
+  once with `preview.rs` mutated to do exactly that, which turned the assertion
+  red naming all eight offending spawns.
+- Concurrency: the interaction paths acquire the **same two slots** and the same
+  **30 s** backstop `docs/PERFORMANCE.md` states for interactive media work
+  (`media::spawn::MEDIA_SLOTS`, `ACQUIRE_TIMEOUT`), rather than a third pair of
+  numbers. The acquisition is bounded **at the site** with
+  `acquire_slot_within`, and the refusal names the bound — the fix for the
+  unbounded acquisition todo 37 recorded about the web layer's own pools. A test
+  holds both permits and requires a third request to be refused rather than
+  queued without limit.
+- `scripts/bench_media_pool.sh` grew a `proxy` workload (report R02's 500 ms
+  p95 target), reusing todo 9's instrument rather than a new benchmark: a
+  release binary in a throwaway XDG sandbox, the seeded jobs.db, the
+  `Server-Timing: app;dur` signal the budget table is written against, the real
+  children sampled out of `/proc`, and machine-readable JSON. The cold proxy
+  build is measured and reported **separately** and is never folded into the
+  seek percentile, because a transcode is not a seek. Four clauses guard the
+  verdict against a vacuous pass: every seek must have answered 200 with a
+  timing header, an ffmpeg must actually have been observed, the cold build must
+  have answered, and the p95 must be compared to the budget. The harness's
+  `host` block now records `cpu_model` and `total_mem_bytes` — the baseline
+  todo 9 captured had a CPU *count* and no model, so a latency figure from it
+  could not be attributed to a machine. See
+  `.omo/evidence/task-50-strivo-review-and-pro-edition.json`.
+
+  **Measured** (`scripts/bench_media_pool.sh`, `proxy` workload, verdict
+  `pass`, no problems; `.omo/evidence/task-50-strivo-review-and-pro-edition.json`).
+  Host, named because no document in `docs/` declares a baseline machine and a
+  latency figure whose host cannot be recovered is not comparable with
+  anything: **12th Gen Intel(R) Core(TM) i9-12900K, 24 threads, 62.5 GiB RAM,
+  kernel 7.2.6-zen2-1-zen, `loadavg_1m` 18.03 — not an idle host** (other lanes
+  were running). Fixture: a six-hour source, 160x90 at 1 fps, 21 600 s of
+  stream time, the resolution and the "stream time not wall clock" convention
+  `scripts/soak_capture_pressure.sh` already uses. Proxy 1280x720, 60
+  sequential seeks spread deterministically across the whole timeline:
+
+  | Measurement | Value |
+  | --- | ---: |
+  | Seeks answered 200 with a `Server-Timing` header | 60 / 60 |
+  | Application time p50 | 226.6 ms |
+  | **Application time p95 (the R02 budget)** | **265.55 ms** (budget 500 ms) |
+  | Application time max | 1 052.45 ms |
+  | Client wall p95, recorded beside it | 266.17 ms |
+  | Peak concurrent media children | 1 (declared bound 2) |
+  | Cold proxy build, reported separately | 279 054 ms |
+
+  Three things a reader must not misread. **The host was not idle**, so 226 ms
+  is a loaded figure and an idle host would be expected to do better; the
+  harness records `host.idle` so a future capture cannot be mistaken for a
+  clean one. **The cold build is 279 seconds** and is not in the percentile: a
+  transcode is not a seek, and folding it in would make a p95 that describes
+  nothing. **The 1080p-proxy case the report asks for is not measured**: the
+  *proxy* is 1280x720, which is the size
+  `docs/CREATOR-EDITION-REPORT-2026-09-07.md:408` names, but the *source* is
+  160x90 at 1 fps, at which a one-second keyframe interval makes every frame an
+  I-frame — the six-hour proxy is ~700 MB all-intra and the seek cost is
+  dominated by opening it. A 30 fps recording would have a 30-frame GOP and a
+  much smaller proxy, so this figure is pessimistic on that axis and
+  optimistic on resolution. Cold-cache and network-source behaviour, which
+  `:408` also asks to be reported separately, is not measured at all.
 - SQLite job persistence uses WAL, normal synchronization, a busy timeout, and
   an index matching the paginated history query.
 - Poll timers skip missed ticks, and nonessential browser polling pauses while

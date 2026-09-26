@@ -351,6 +351,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::import_export::router())
         .merge(routes::recordings::router())
         .merge(routes::login::router())
+        .merge(routes::preview::router())
         .merge(routes::multistream::router())
         .merge(routes::assets::router())
         // Twitch IRC chat's two server-side routes (list rooms, relay a

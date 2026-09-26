@@ -1,3 +1,18 @@
+//! Proxies, waveform pyramids, filmstrips and bounded preview caching
+//! (plan todo 50, report item R02).
+//!
+//! The three submodules answer three questions in order: [`proxy`] turns a
+//! source into something cheap to navigate and measures how its timeline lines
+//! up with the source's; [`pyramid`] and [`preview`] read *that* rather than
+//! the source, so a six-hour recording is never decoded whole during an
+//! interaction; [`spawn`] records every child process these paths start, which
+//! is what makes the "no original-resolution decode" claim observable instead
+//! of asserted.
+pub mod preview;
+pub mod proxy;
+pub mod pyramid;
+pub mod spawn;
+
 use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;

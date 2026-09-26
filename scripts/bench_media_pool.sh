@@ -24,9 +24,23 @@
 #   killed  N thumbs, ffmpeg killed mid-flight -> no leaked permit
 #   wedge   one /thumb whose source is a FIFO that never delivers data:
 #           ffmpeg blocks, so only the 30 s deadline can end it
+#   proxy   seek-to-preview on a MEDIA_LONG_HOURS-hour source, reported as
+#           p50/p95 of the server's own application time (Server-Timing, the
+#           signal docs/PERFORMANCE.md's budget table is written against and
+#           that todo 9's bench_probe.mjs records) with client wall time
+#           beside it, never instead of it. This is report R02's 500 ms p95
+#           target. The cold proxy build is measured and reported SEPARATELY
+#           and never folded into the seek percentile: a transcode is not a
+#           seek.
 #
 # Usage: scripts/bench_media_pool.sh <release-strivo-binary> [rows] [out.json]
 # Env:   BENCH_PORT (default 8413)  MEDIA_THUMBS/ MEDIA_PROBES  MEDIA_CONCURRENCY
+#        MEDIA_LONG_HOURS (default 6)  length of the proxy-seek source, in
+#                        hours of STREAM time. Six hours is what report R02
+#                        names; it is not six hours of wall clock.
+#        MEDIA_SEEKS (default 60)     warm seeks measured
+#        MEDIA_SEEK_BUDGET_MS (500)   the declared p95 budget
+#        --skip-proxy                omit the proxy workload (it encodes)
 #        --expect-wedge  invert the wedge workload's verdict (for the
 #                        deliberately-regressed binary)
 # Exit:  0 every workload matched its declared bound | 1 a bound was broken
@@ -48,10 +62,16 @@ OUT="${3:-artifacts/bench-media-pool-$(date -u +%Y%m%dT%H%M%SZ).json}"
 # runaway write can never reach the real disk.
 CEILING_MB="${MEDIA_CEILING_MB:-2048}"
 
+LONG_HOURS="${MEDIA_LONG_HOURS:-6}"
+SEEKS="${MEDIA_SEEKS:-60}"
+SEEK_BUDGET_MS="${MEDIA_SEEK_BUDGET_MS:-500}"
+LONG_SECS=$((LONG_HOURS * 3600))
+skip_proxy=0
 expect_wedge=0
 for a in "$@"; do
   case "$a" in
     --expect-wedge) expect_wedge=1 ;;
+    --skip-proxy) skip_proxy=1 ;;
   esac
 done
 
@@ -138,6 +158,30 @@ print(job_id)
 PY
 )"
 
+# The proxy-seek source. Same convention scripts/soak_capture_pressure.sh uses
+# for its six hours: real stream time, encoded quickly, so the run costs
+# seconds rather than hours. The resolution is the corpus resolution, NOT
+# 1080p, and that is a stated limit of the figure rather than a detail: the
+# number measured is what a seek costs when the proxy decode is cheap, so it
+# is a floor for a 1080p proxy rather than a measurement of one. Cold-cache
+# and network-source behaviour is not measured here either.
+LONG_DIR="$WORKDIR/long"
+mkdir -p "$LONG_DIR"
+LONG_FILE="$LONG_DIR/long-${LONG_HOURS}h.mkv"
+LONG_ID=""
+if [ "$skip_proxy" -eq 0 ]; then
+  echo "bench_media_pool.sh: encoding a ${LONG_HOURS}h source ($LONG_SECS s of stream time)" >&2
+  ffmpeg -nostdin -y -loglevel error \
+    -f lavfi -i "testsrc2=size=160x90:rate=1:duration=$LONG_SECS" \
+    -f lavfi -i "sine=frequency=110:duration=$LONG_SECS" \
+    -map 0:v -map 1:a \
+    -c:v libx264 -preset ultrafast -crf 32 -g 30 \
+    -c:a aac -b:a 32k \
+    "$LONG_FILE"
+  du -sm "$WORKDIR" | awk -v c="$CEILING_MB" '{ if ($1 > c) { printf "bench_media_pool.sh: sandbox %d MiB exceeds the declared %d MiB ceiling\n", $1, c > "/dev/stderr"; exit 3 } }'
+  LONG_ID="$(python3 "$SCRIPT_DIR/seed_long_row.py" "$DATA_DIR/jobs.db" "$LONG_FILE" "$LONG_SECS")"
+fi
+
 "$BIN" daemon &
 DAEMON_PID=$!
 for _ in $(seq 1 150); do
@@ -157,12 +201,15 @@ curl -fsS -o /dev/null -H "x-api-key: $API_KEY" "$BASE/api/v1/recordings?limit=1
 echo "bench_media_pool.sh: serving $BASE (serve pid $SERVE_PID, daemon pid $DAEMON_PID)" >&2
 
 SPEC_FILE="$WORKDIR/media-spec.json"
-python3 - "$BASE" "$API_KEY" "$SERVE_PID" "$THUMBS" "$PROBES" "$CONCURRENCY" "$ROWS" > "$SPEC_FILE" <<'PY'
+python3 - "$BASE" "$API_KEY" "$SERVE_PID" "$THUMBS" "$PROBES" "$CONCURRENCY" "$ROWS" \
+    "$LONG_ID" "$LONG_SECS" "$SEEKS" "$SEEK_BUDGET_MS" > "$SPEC_FILE" <<'PY'
 import json, sys
-base, key, pid, thumbs, probes, conc, rows = sys.argv[1:8]
+base, key, pid, thumbs, probes, conc, rows, long_id, long_secs, seeks, budget = sys.argv[1:12]
 print(json.dumps({"base": base, "key": key, "pids": [int(pid)], "rows": int(rows),
                   "thumbs": int(thumbs), "probes": int(probes),
-                  "concurrency": int(conc), "interval_ms": 20}))
+                  "concurrency": int(conc), "interval_ms": 20,
+                  "long_id": long_id, "long_secs": int(long_secs),
+                  "seeks": int(seeks), "seek_budget_ms": int(budget)}))
 PY
 
 rc=0
@@ -177,6 +224,24 @@ spec = json.load(open(spec_path))
 BASE, KEY, PIDS = spec["base"], spec["key"], spec["pids"]
 CONC, INTERVAL = spec["concurrency"], spec["interval_ms"] / 1000.0
 MEDIA = ("ffmpeg", "ffprobe")
+
+def cpu_model():
+    """The CPU model string, or None. Absent on a host whose /proc/cpuinfo has
+    no `model name` line, which is reported rather than replaced with a guess."""
+    try:
+        with open("/proc/cpuinfo") as fh:
+            for line in fh:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+def total_mem():
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
 
 def children():
     """{name: count} and {pid: (name, state)} for the web process's direct
@@ -366,6 +431,95 @@ wedge["deadline_enforced"] = bool(
 wedge["wedge_detected"] = not wedge["deadline_enforced"]
 workloads.append(wedge)
 
+
+# ---- proxy seeks on the long source ---------------------------------------
+# Sequential, because a scrub is one viewer at a time; concurrency above 1
+# would measure the two-slot pool rather than a seek.
+def app_ms(res):
+    """The server's own application duration in MILLISECONDS, from the header
+    the budget table is written against.
+
+    `crates/strivo-web/src/server.rs:493` writes
+    `app;dur={elapsed.as_secs_f64() * 1000.0:.2}`, so the value is already in
+    milliseconds. Multiplying by 1000 here — which the first version of this
+    function did — reported a 278 ms seek as 278 520 ms and turned the run red
+    against a budget it was passing by 1.8x. `None` when the header is absent,
+    which is a failure rather than a zero: a percentile over zeros is the
+    vacuous pass this harness exists to avoid."""
+    raw = res.headers.get("Server-Timing") or ""
+    for part in raw.split(","):
+        for field in part.split(";"):
+            field = field.strip()
+            if field.startswith("dur="):
+                try:
+                    return round(float(field[4:]), 2)
+                except ValueError:
+                    return None
+    return None
+
+def timed_get(path, timeout=120):
+    req = urllib.request.Request(BASE + path, headers={"x-api-Key": KEY})
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            body = res.read()
+            return {"status": res.status, "bytes": len(body),
+                    "wall_ms": round((time.monotonic() - started) * 1000, 2),
+                    "app_ms": app_ms(res)}
+    except urllib.error.HTTPError as e:
+        e.read()
+        return {"status": e.code, "bytes": 0,
+                "wall_ms": round((time.monotonic() - started) * 1000, 2), "app_ms": None}
+    except Exception as e:
+        return {"status": 0, "error": type(e).__name__,
+                "wall_ms": round((time.monotonic() - started) * 1000, 2), "app_ms": None}
+
+def pct(values, q):
+    """Nearest-rank percentile. `values` must be sorted and non-empty; an
+    empty sample is reported as None by the caller, never as 0."""
+    if not values:
+        return None
+    k = max(1, -(-len(values) * q // 100))
+    return values[min(k, len(values)) - 1]
+
+proxy = None
+if spec.get("long_id"):
+    long_secs = spec["long_secs"]
+    cold = timed_get(f"/api/v1/recordings/{spec['long_id']}/preview?t=0&w=640", timeout=900)
+    s = Sampler(); s.start()
+    # Deterministic spread across the whole timeline, not random: a repeatable
+    # seek set is what makes two runs comparable at all.
+    seeks = spec["seeks"]
+    times = [round(long_secs * (i + 1) / (seeks + 1), 3) for i in range(seeks)]
+    samples = []
+    for t in times:
+        r = timed_get(f"/api/v1/recordings/{spec['long_id']}/preview?t={t}&w=640")
+        r["t"] = t
+        samples.append(r)
+    s.stop = True
+    s.join(timeout=5)
+    ok = [r for r in samples if r["status"] == 200 and r["app_ms"] is not None]
+    apps = sorted(r["app_ms"] for r in ok)
+    walls = sorted(r["wall_ms"] for r in ok)
+    proxy = {
+        "label": "proxy",
+        "source_hours": long_secs / 3600,
+        "source_secs": long_secs,
+        "declared_budget_ms": spec["seek_budget_ms"],
+        "cold_build": cold,
+        "requests": len(samples),
+        "answered_200_with_timing": len(ok),
+        "statuses": {str(k): sum(1 for r in samples if str(r["status"]) == str(k))
+                     for k in sorted({r["status"] for r in samples})},
+        "app_ms": {"p50": pct(apps, 50), "p95": pct(apps, 95), "p99": pct(apps, 99),
+                   "max": apps[-1] if apps else None, "n": len(apps)},
+        "client_wall_ms": {"p50": pct(walls, 50), "p95": pct(walls, 95),
+                           "max": walls[-1] if walls else None, "n": len(walls)},
+        "times_s": times,
+        **s.summary(),
+    }
+    workloads.append(proxy)
+
 # Verdict. The declared bound is 2 media children at once across the shared
 # pool, and 1 for thumbnails alone. `media_children_seen` is asserted first so
 # a run where nothing ran can never be reported as a pass.
@@ -390,6 +544,35 @@ else:
     if not wedge["deadline_enforced"]:
         problems.append("wedge: ffmpeg outlived the 30 s deadline or survived the request")
 
+# The proxy seek budget. Every clause is a guard against a vacuous pass: a run
+# where no seek was answered, where the timing header was missing, or where
+# the budget was never compared, is a failure rather than a zero.
+if spec.get("long_id"):
+    if proxy is None:
+        problems.append("proxy: the workload did not run")
+    else:
+        want = spec["seeks"]
+        if proxy["answered_200_with_timing"] < want:
+            problems.append(
+                f"proxy: only {proxy['answered_200_with_timing']}/{want} seeks answered 200 with a "
+                f"Server-Timing header (statuses {proxy['statuses']})")
+        if not proxy["media_children_seen"]:
+            problems.append("proxy: no ffmpeg/ffprobe child was ever observed, so no seek decoded")
+        if proxy["cold_build"]["status"] != 200:
+            problems.append(f"proxy: the cold proxy build returned {proxy['cold_build']['status']}")
+        p95 = proxy["app_ms"]["p95"]
+        if p95 is None:
+            problems.append("proxy: no application-time samples, so p95 is undefined")
+        elif p95 >= spec["seek_budget_ms"]:
+            problems.append(
+                f"proxy: p95 application time {p95} ms is at or above the declared "
+                f"{spec['seek_budget_ms']} ms budget")
+        # The cache must be doing something: a run where every seek is a cold
+        # decode says the bounded cache is not wired, whatever the percentile.
+        if proxy["peak_media_children"] > POOL:
+            problems.append(
+                f"proxy: peak {proxy['peak_media_children']} media children exceeds the declared {POOL}")
+
 sandbox_mb = 0
 for root, _dirs, files in os.walk(workdir):
     for f in files:
@@ -401,10 +584,24 @@ sandbox_mb //= 1024 * 1024
 result = {
     "schema": "strivo-perf-media-pool/1",
     "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    "host": {"loadavg_1m": round(os.getloadavg()[0], 2), "cpus": os.cpu_count()},
+    # The machine is named, not implied. No document in docs/ declares a
+    # baseline host, and report R02's 500 ms target says "measure on a declared
+    # baseline machine"; a latency figure whose host cannot be recovered from
+    # the artefact is not comparable with anything. `cpu_model` is the field
+    # that was missing: the baseline captured by todo 9 recorded only a count.
+    "host": {
+        "cpu_model": cpu_model(),
+        "cpus": os.cpu_count(),
+        "total_mem_bytes": total_mem(),
+        "kernel": os.uname().release,
+        "loadavg_1m": round(os.getloadavg()[0], 2),
+        "idle": os.getloadavg()[0] < 1.0,
+    },
     "settings": {"rows": spec["rows"], "thumbs": spec["thumbs"], "probes": spec["probes"],
                  "concurrency": CONC, "declared_pool": POOL, "declared_thumbnail_slots": THUMB_SLOTS,
                  "declared_probe_thumbnail_deadline_ms": deadline_ms,
+                 "declared_seek_p95_budget_ms": spec["seek_budget_ms"],
+                 "long_source_hours": spec["long_secs"] / 3600,
                  "expect_wedge": expect_wedge, "sandbox_mb": sandbox_mb},
     "workloads": workloads,
     "after_kill_probe": after_kill,
@@ -423,6 +620,13 @@ print(f"wedge: deadline_enforced={wedge['deadline_enforced']} "
       f"all_after={wedge['media_children_after_response']} "
       f"max_response_ms={wedge['max_response_ms']}",
       file=sys.stderr)
+if proxy:
+    print(f" proxy: cold_build_ms={proxy['cold_build'].get('wall_ms')} "
+          f"app_p50={proxy['app_ms']['p50']} app_p95={proxy['app_ms']['p95']} "
+          f"app_max={proxy['app_ms']['max']} wall_p95={proxy['client_wall_ms']['p95']} "
+          f"n={proxy['app_ms']['n']}/{proxy['requests']} budget={proxy['declared_budget_ms']}ms "
+          f"peak_media={proxy['peak_media_children']}",
+          file=sys.stderr)
 print(f"after_kill: {after_kill}", file=sys.stderr)
 print(f"sandbox: {sandbox_mb} MiB", file=sys.stderr)
 print(f"bench_media_pool: {result['verdict']} -> {out_path}", file=sys.stderr)

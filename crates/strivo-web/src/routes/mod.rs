@@ -25,6 +25,13 @@ pub mod import_export;
 #[cfg(feature = "creator")]
 pub mod licence;
 pub mod login;
+// Proxy-backed preview reads for the recording library: one frame and one
+// waveform, both decoded from a content-addressed proxy rather than from the
+// recording itself. PVR, not Creator-only: navigating a long recording is core
+// library functionality, and the routes take a recording id rather than a
+// caller-supplied path, so they need no media-admission gate. See the module
+// doc for why that distinction decides the edition.
+pub mod preview;
 // The media-input admission gate: every ffmpeg-bound media request passes it
 // before a child process exists. Creator-only because the only callers are the
 // Creator editor and clipper routes — in a PVR build no route hands a

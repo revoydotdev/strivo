@@ -11,10 +11,14 @@
 //! complete capture print as `0.9999999999`, and the rounding is the only
 //! part of this anybody reads. `1_000` is 100% and means exactly that.
 //!
-//! [`GapReason`] separates the two causes a bare fraction would merge: a
+//! [`GapReason`] separates the causes a bare fraction would merge: a
 //! [`GapReason::ReconnectGap`] is an interval no capture covered, and a
 //! [`GapReason::DroppedSample`] is one the capture covered and the polls
-//! stopped in. Those need different fixes, so they are not one gap.
+//! stopped in. Those need different fixes, so they are not one gap. The
+//! chat acquisition series (todo 35) reports its figure through this same
+//! type rather than a parallel one — see [`super::chat`] — so the refusal
+//! below governs both series and a second, weaker `ChatCoverage` cannot be
+//! invented beside it.
 //!
 //! `widest_uncertainty_micros` is carried because coverage answers a
 //! different question from knowledge: two 30-second polls tile a 60-second
@@ -32,6 +36,13 @@ use super::store::Store;
 type Result<T> = std::result::Result<T, ObservationError>;
 
 /// Why an interval of the expected window carries no observation.
+///
+/// The three chat variants are **not** inferred from message density the way
+/// the viewer ones are. A quiet room is not a gap: nobody saying anything is a
+/// complete record of a room nobody spoke in, and a density-derived figure
+/// would report every lull as a hole. So a chat gap is a *recorded* fact about
+/// acquisition — see [`super::chat`] — and these three name only the states a
+/// collector can actually be in when it is not receiving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GapReason {
     /// Nothing was collected at all, so the whole window is uncovered.
@@ -40,6 +51,13 @@ pub enum GapReason {
     ReconnectGap,
     /// The capture covered it and no poll reported in it.
     DroppedSample,
+    /// Chat: no collector was ever open for this room across the interval.
+    NotConnected,
+    /// Chat: the socket dropped and the collector was not reading across it.
+    Disconnected,
+    /// Chat: the daemon was down. Knowable only because a collection row was
+    /// still open when the next process started.
+    DaemonDown,
 }
 
 impl GapReason {
@@ -49,16 +67,59 @@ impl GapReason {
             Self::NoSamples => "no_samples",
             Self::ReconnectGap => "reconnect_gap",
             Self::DroppedSample => "dropped_sample",
+            Self::NotConnected => "not_connected",
+            Self::Disconnected => "disconnected",
+            Self::DaemonDown => "daemon_down",
+        }
+    }
+
+    /// The stored spelling, so a row cannot carry a reason this build does not
+    /// name. Refusing beats defaulting: a default would file an acquisition
+    /// hole under a viewer-sample reason, which is a different claim.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "no_samples" => Some(Self::NoSamples),
+            "reconnect_gap" => Some(Self::ReconnectGap),
+            "dropped_sample" => Some(Self::DroppedSample),
+            "not_connected" => Some(Self::NotConnected),
+            "disconnected" => Some(Self::Disconnected),
+            "daemon_down" => Some(Self::DaemonDown),
+            _ => None,
         }
     }
 }
 
 /// One interval of the expected window with nothing observed in it.
+///
+/// **One gap type for both series.** The chat acquisition record (todo 35)
+/// stores and reports its gaps through this struct rather than a parallel
+/// `ChatGap` with the same three fields, so `Coverage` has a single `gaps`
+/// element type and a second, weaker gap report cannot be invented beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoverageGap {
     pub start_wall_ms: i64,
     pub end_wall_ms: i64,
     pub reason: GapReason,
+}
+
+impl CoverageGap {
+    /// A gap, refusing an interval that is not one. A zero-length or inverted
+    /// gap is a point, and a point cannot be drawn on a timeline, so accepting
+    /// one would put a rounding artefact in the record that a figure below full
+    /// is then obliged to explain.
+    pub fn new(start_wall_ms: i64, end_wall_ms: i64, reason: GapReason) -> Result<Self> {
+        if end_wall_ms <= start_wall_ms {
+            return Err(ObservationError::InvertedWindow {
+                start_wall_ms,
+                end_wall_ms,
+            });
+        }
+        Ok(Self {
+            start_wall_ms,
+            end_wall_ms,
+            reason,
+        })
+    }
 }
 
 /// How much of the expected window was observed, and what the rest was.
@@ -78,7 +139,9 @@ pub struct CoverageGap {
 pub struct Coverage {
     /// The denominator, in whole milliseconds.
     pub expected_wall_ms: i64,
-    /// The union of every sample window that landed inside it.
+    /// The union of every covered interval inside it: the sample windows that
+    /// landed, or for the chat series the collector intervals that were open.
+    /// Derived from the record either way, never stored.
     pub observed_wall_ms: i64,
     /// `observed / expected` in whole per mille, never above 1 000.
     pub per_mille: u32,

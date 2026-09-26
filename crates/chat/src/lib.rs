@@ -13,11 +13,21 @@
 //!    mentions self, regex-ish substring) used by the SPA's filter chip
 //!    bar. Plus [`RoomBuffer`], a fixed-capacity ring used per-tab.
 //!
+//! A fourth piece, [`acquire`], is what the **daemon** reads instead of a
+//! browser: the same wire protocol, classified into a keepalive, a message and
+//! a moderator's removal. It exists because the SPA's parser answers "is this a
+//! message", which is the right question for a chat panel and the wrong one
+//! for an archive — a removal falls out of it as nothing at all.
+//!
 //! No IO, no DOM. Twenty-plus unit tests cover the IRC parser (PRIVMSG
 //! happy path, tags, action, malformed lines), the tokenizer (mentions,
 //! emote substitution, link sniffing, runs), the filter pipeline (each
 //! filter kind individually + composite AND/OR semantics), and the room
 //! ring buffer (capacity, overwrite, mentions counter, mark_read).
+
+mod acquire;
+
+pub use acquire::{classify, Removal, WireLine};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

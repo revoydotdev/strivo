@@ -17,6 +17,9 @@
 //! [`observations_malformed`], and what reversing their migration costs in
 //! [`observations_rollback`].
 
+mod chat;
+mod chat_restart;
+mod chat_rollback;
 mod fixtures;
 mod history;
 mod history_draft;

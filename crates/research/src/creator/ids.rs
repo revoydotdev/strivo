@@ -81,6 +81,10 @@ typed_ids!(
     SourceAssetId,
     /// One capture run: recording parts, wall-clock bounds, finalization.
     CaptureSessionId,
+    /// One stretch of time the daemon was collecting a chat room. Its open
+    /// end is the record of a process that died holding it, which is what
+    /// makes a restart name the interval nobody was watching.
+    ChatCollectionId,
     /// One immutable revision of a source's transcript.
     TranscriptRevisionId,
     /// One immutable revision of an edit. Revisions chain through their

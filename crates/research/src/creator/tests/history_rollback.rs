@@ -141,13 +141,17 @@ fn the_rehearsal_keeps_the_revisions_the_history_pointed_at() {
         )
         .expect("queryable");
     assert_eq!(after, 0, "the history table survived the down");
-    // And the store reopens on the rolled-back file at version 6, which is the
-    // version a v6-only install would have had.
+    // And the store reopens on the rolled-back file at the newest version this
+    // build knows, which is what "migrates forward again" means. Stated as
+    // `latest_version()` rather than a literal, because a literal here went
+    // stale the moment todo 35 added version 8 — and every sibling rollback
+    // test in this directory already used the version-agnostic form, so this one
+    // was the outlier rather than the convention.
     drop(conn);
     let store = Store::open(&copy).expect("the rolled-back file reopens");
     assert_eq!(
         store.schema_version().expect("version"),
-        7,
+        schema::latest_version(),
         "reopen migrates forward again"
     );
     assert_eq!(store.history(project_id).expect("readable").len(), 0);

@@ -29,6 +29,21 @@ running bit evolved across six months). Strivo already owns the hard
 prerequisite neither incumbent has: the acquisition layer. We capture the
 streams, locally, with chat and metrics, from the moment of go-live.
 
+> **Correction (todo 35, C03).** The sentence above used to read "We capture
+> the streams, locally, **with chat** and metrics, from the moment of go-live",
+> and it was false: chat was a browser WebSocket
+> (`crates/strivo-web/src/routes/chat.rs:1-9`, `assets/spa/014-pvr.js:266-284`),
+> so the chat record existed only while a tab was open, nothing was persisted,
+> and no message had a position on the recording's timeline. Acquisition is now
+> the daemon's — `crates/strivo-web/src/chat_capture.rs` opens the socket and
+> `crates/research/src/creator/{chat,store_chat}.rs` own the durable record — so
+> closing the browser stops *rendering* chat and nothing else. Two limits are
+> stated rather than papered over, and both are real: the record is only
+> collected for a room a caller has started a capture for (no route or `serve`
+> wiring mounts it yet), and the Creator schema holding it is `creator`-gated, so
+> a PVR build still has the browser path only. The acquisition claim holds for
+> the Creator edition.
+
 ### 2. The pitch, per audience
 
 - **To a streamer:** "Everything you've ever streamed, searchable like text,

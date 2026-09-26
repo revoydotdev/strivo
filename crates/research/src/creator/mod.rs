@@ -54,6 +54,7 @@
 //! them; the correspondence is pinned by a test that drives the real
 //! `PipelineRegistry`. See [`jobs`]'s module doc for the full argument.
 
+mod chat;
 mod coverage;
 mod entities;
 mod history;
@@ -73,6 +74,7 @@ mod rights;
 mod schema;
 mod store;
 mod store_availability;
+mod store_chat;
 mod store_delivery;
 mod store_history;
 mod store_jobs;
@@ -88,6 +90,11 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+pub use chat::{
+    ChatAppend, ChatCollection, ChatDeletion, ChatDeletionTarget, ChatIdentity, ChatMessage,
+    ChatReplay, CollectionEnd, DeletionOutcome, Landmark, RawChatDeletion, RawChatMessage,
+    ReplayedChat, MAX_CHAT_BATCH,
+};
 pub use coverage::{Coverage, CoverageGap, GapReason};
 pub use entities::{
     Artifact, Availability, CaptureSession, CompositionRevision, MetricObservation, Project,
@@ -95,9 +102,9 @@ pub use entities::{
 };
 pub use history::{Edit, HistoryEntry, HistoryStoreError, TranscriptEdit, TranscriptPatch};
 pub use ids::{
-    ArtifactId, CaptureSessionId, CompositionRevisionId, HistoryId, JobId, MetricObservationId,
-    ProjectId, PublicationId, ReleasePackageId, RenderPlanId, ResearchProjectId, SourceAssetId,
-    TranscriptRevisionId, VariantId,
+    ArtifactId, CaptureSessionId, ChatCollectionId, CompositionRevisionId, HistoryId, JobId,
+    MetricObservationId, ProjectId, PublicationId, ReleasePackageId, RenderPlanId,
+    ResearchProjectId, SourceAssetId, TranscriptRevisionId, VariantId,
 };
 pub use import::{
     fingerprint, import_files, AdmittedFile, ImportEntry, ImportManifest, ImportOutcome,

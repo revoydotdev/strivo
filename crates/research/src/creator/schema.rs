@@ -52,6 +52,10 @@ pub const TABLES: &[&str] = &[
     "creator_metric_availability",
     "creator_source_notes",
     "creator_history",
+    "creator_chat_collections",
+    "creator_chat_messages",
+    "creator_chat_deletions",
+    "creator_chat_gaps",
 ];
 
 /// One numbered forward step, with the explicit reverse step the rollback
@@ -91,6 +95,10 @@ const DROP_SOURCE_RIGHTS_V6: &str = include_str!("schema_v6.down.sql");
 const EDIT_HISTORY_V7: &str = include_str!("schema_v7.sql");
 
 const DROP_EDIT_HISTORY_V7: &str = include_str!("schema_v7.down.sql");
+
+const DURABLE_CHAT_V8: &str = include_str!("schema_v8.sql");
+
+const DROP_DURABLE_CHAT_V8: &str = include_str!("schema_v8.down.sql");
 
 /// Every migration, in order. Version 1 is the whole Creator identity
 /// schema; version 2 is the canonical time model, which replaces version 1's
@@ -147,6 +155,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "creator_edit_history",
         up: EDIT_HISTORY_V7,
         down: DROP_EDIT_HISTORY_V7,
+    },
+    Migration {
+        version: 8,
+        name: "creator_durable_chat",
+        up: DURABLE_CHAT_V8,
+        down: DROP_DURABLE_CHAT_V8,
     },
 ];
 

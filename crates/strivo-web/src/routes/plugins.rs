@@ -6398,3 +6398,242 @@ mod route_entitlement_tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
+
+// ── The DataViz transcript contract, end to end ──────────────────────
+//
+// Plan todo 29 (report F01). The corpus `dataviz_run` transforms is
+// assembled SPA-side from Crunchr transcripts, so the contract has two
+// halves that can only be checked together: the server's segment envelope,
+// and the DataViz crate's series. This drives both through the REAL router
+// against a REAL crunchr database — no stubbed handler, no canned response
+// — with the corpus shaped exactly as `assets/spa/015-creator.js` shapes
+// it. A stubbed transcript body would let the series assertion pass while
+// the real envelope drifted, which is the defect class this file has
+// already produced once (`utterances` vs `segments`).
+#[cfg(test)]
+mod dataviz_transcript_contract_tests {
+    use super::research_route_tests::{test_state, ENV_GUARD};
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    const RECORDING_ID: &str = "11111111-2222-3333-4444-555555555555";
+
+    /// The shape `015-creator.js` reads out of the transcript response.
+    /// Every field is optional on purpose: that is what the SPA's defaults
+    /// (`u.speaker || "Speaker"`, `u.text || ""`, `u.start_sec || 0`,
+    /// `u.end_sec ?? null`) imply, and a `null` here is the missing-timing
+    /// case the fabricated one-second default used to cover up.
+    #[derive(serde::Deserialize)]
+    struct TranscriptEnvelope {
+        recording_id: String,
+        segments: Vec<SegmentEnvelope>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SegmentEnvelope {
+        speaker: Option<String>,
+        text: Option<String>,
+        start_sec: Option<f64>,
+        end_sec: Option<f64>,
+    }
+
+    /// A real crunchr database, reachable through the real `crunchr_db()`
+    /// path, under an entitled environment. Returns the tempdir that owns
+    /// it — drop it and the fixture is gone. Caller holds `ENV_GUARD`.
+    fn seed_crunchr() -> tempfile::TempDir {
+        let data = tempfile::tempdir().expect("tempdir");
+        // SAFETY: ENV_GUARD is held by the caller for the whole fixture.
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", data.path());
+            std::env::set_var("STRIVO_DEV_UNLOCK_ALL", "1");
+        }
+        // Derived from the real `plugins_root()`, not guessed: a guessed XDG
+        // path 404s identically to "not transcribed", hiding a dead fixture.
+        let dir = plugins_root().join("crunchr");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let conn =
+            strivo_plugins::crunchr::db::open_and_init(&dir.join("crunchr.db")).expect("schema");
+        let video_id = strivo_plugins::crunchr::db::insert_video(
+            &conn,
+            RECORDING_ID,
+            "Alpha",
+            "Elden Ring run",
+            "/recordings/x.mkv",
+        )
+        .expect("video");
+        strivo_plugins::crunchr::db::insert_segments(
+            &conn,
+            video_id,
+            &[
+                (
+                    0,
+                    0.0,
+                    30.0,
+                    "the quick brown fox",
+                    Some("Alice"),
+                    Some(0.9),
+                ),
+                (1, 30.0, 60.0, "fox jumps over", Some("Bob"), Some(0.8)),
+                (
+                    2,
+                    60.0,
+                    90.0,
+                    "fox returns at dawn",
+                    Some("Alice"),
+                    Some(0.7),
+                ),
+            ],
+        )
+        .expect("segments");
+        // SAFETY: ENV_GUARD is held by the caller for the whole fixture.
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", data.path());
+            std::env::set_var("STRIVO_DEV_UNLOCK_ALL", "1");
+        }
+        data
+    }
+
+    fn entitled_router() -> Router {
+        let state = test_state("dataviz-contract-key");
+        Router::new()
+            .route(
+                "/api/v1/plugins/crunchr/recordings/{id}",
+                get(crunchr_recording),
+            )
+            .route("/api/v1/dataviz/run", axum::routing::post(dataviz_run))
+            .with_state(state)
+    }
+
+    async fn get_transcript(router: &Router, id: &str) -> (StatusCode, serde_json::Value) {
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/plugins/crunchr/recordings/{id}"))
+                    .header("x-api-key", "dataviz-contract-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    /// A real transcript, through the real router, into the real transform.
+    /// This is the plan's happy criterion: a real-server fixture with a
+    /// transcript produces the expected series.
+    #[tokio::test]
+    async fn a_real_transcript_produces_the_expected_series() {
+        let _guard = ENV_GUARD.lock().await;
+        let _data = seed_crunchr();
+        let router = entitled_router();
+
+        // Non-vacuity first: an empty fixture would make every assertion
+        // below pass for the wrong reason, so the transcript is checked for
+        // content before it is used to prove anything.
+        let (status, body) = get_transcript(&router, RECORDING_ID).await;
+        assert_eq!(status, StatusCode::OK);
+        let env: TranscriptEnvelope = serde_json::from_value(body.clone()).expect("envelope");
+        assert_eq!(env.recording_id, RECORDING_ID);
+        assert_eq!(
+            env.segments.len(),
+            3,
+            "the fixture must actually have segments"
+        );
+
+        // The envelope name the SPA reads. Todo 7 found the client asking
+        // for `utterances`, which this response has never carried.
+        assert!(body.get("segments").is_some());
+        assert!(body.get("utterances").is_none());
+
+        // The corpus, shaped exactly as 015-creator.js shapes it.
+        let corpus = strivo_dataviz::Corpus {
+            label: "selection".into(),
+            episodes: vec![strivo_dataviz::Episode {
+                id: env.recording_id.clone(),
+                title: "Elden Ring run".into(),
+                date: "2026-05-20T10:00:00Z".into(),
+                utterances: env
+                    .segments
+                    .iter()
+                    .map(|s| strivo_dataviz::Utterance {
+                        speaker: s.speaker.clone().unwrap_or_else(|| "Speaker".into()),
+                        text: s.text.clone().unwrap_or_default(),
+                        start_sec: s.start_sec.unwrap_or(0.0),
+                        end_sec: s.end_sec,
+                    })
+                    .collect(),
+            }],
+        };
+
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/dataviz/run")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "dataviz-contract-key")
+                    .body(Body::from(
+                        json!({ "corpus": corpus, "experiment": { "kind": "speaker_time" } })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let out: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let series = &out["series"];
+
+        assert_eq!(series["label"], "Speaker minutes (across corpus)");
+        assert_eq!(series["chart_hint"], "bar");
+        // Alice 30s + 30s = 60s = 1.0 min; Bob 30s = 0.5 min. Sorted desc.
+        // The exact values are the point: a corpus the SPA shaped wrongly
+        // cannot produce them, and an empty one cannot produce them at all.
+        assert_eq!(
+            series["points"],
+            json!([
+                { "label": "Alice", "value": 1.0 },
+                { "label": "Bob", "value": 0.5 }
+            ]),
+            "the series must be the one the real transcript implies"
+        );
+    }
+
+    /// The same two routes, for a recording crunchr has never transcribed.
+    /// This is the "missing" third of the three outcomes, and it must be a
+    /// 404 — the answer that means "no transcript", which is not the
+    /// answer that means "not entitled" (todo 7 asserts that one is 402).
+    #[tokio::test]
+    async fn an_untranscribed_recording_is_a_404_not_an_empty_transcript() {
+        let _guard = ENV_GUARD.lock().await;
+        let _data = seed_crunchr();
+        let router = entitled_router();
+
+        // The control this test would otherwise be blind to: an unreachable
+        // database also answers 404, so a 404 here proves nothing until the
+        // transcribed id is shown to answer 200 on the same router.
+        let (ok_status, _) = get_transcript(&router, RECORDING_ID).await;
+        assert_eq!(ok_status, StatusCode::OK, "the fixture must be reachable");
+
+        let (status, body) = get_transcript(&router, "no-such-recording").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        // A 404 must not carry a transcript-shaped body: `segments: []`
+        // would be readable as "transcribed, nothing said", which is the
+        // collapse this whole distinction exists to prevent.
+        assert!(
+            body.get("segments").is_none(),
+            "a 404 must not carry a segments envelope: {body}"
+        );
+    }
+}

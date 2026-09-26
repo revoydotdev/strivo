@@ -104,4 +104,13 @@ mod tests {
             "application/javascript; charset=utf-8"
         );
     }
+
+    /// An octet-streamed SVG is *downloaded* rather than rendered, so the
+    /// missing glyph is silent. The DataViz charts are inline `<svg>` and
+    /// never fetched; this covers the served icon set, and is the branch a
+    /// future chart export would fall under.
+    #[test]
+    fn svg_served_as_an_image_not_as_an_octet_stream() {
+        assert_eq!(mime_for("icons/candy/settings.svg"), "image/svg+xml");
+    }
 }

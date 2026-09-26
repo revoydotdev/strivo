@@ -708,26 +708,62 @@ const server = createServer(async (req, res) => {
     // (`strivo_dataviz::run`) with no IO, so the fixture computes the
     // answer from the posted corpus rather than returning a canned series:
     // a canned payload would let the spec pass even if the SPA sent the
-    // wrong corpus. Only `speaker_time` is implemented, which is all the
-    // spec exercises; anything else 400s the way an unknown experiment does.
+    // wrong corpus. `speaker_time` and `word_frequency` are implemented —
+    // they are the two experiments that read transcript fields rather than
+    // the posting client, which is what makes them worth driving here.
+    // Anything else 400s the way an unknown experiment does.
     if (p === "/dataviz/run" && req.method === "POST") {
       const body = await readBody(req);
       const exp = body.experiment || {};
-      if (exp.kind !== "speaker_time") {
-        return json(res, 400, { detail: `fixture implements speaker_time only, got ${exp.kind}` });
-      }
-      const totals = new Map();
-      for (const ep of (body.corpus && body.corpus.episodes) || []) {
-        for (const u of ep.utterances || []) {
-          const secs = Math.max((u.end_sec || 0) - (u.start_sec || 0), 0);
-          totals.set(u.speaker || "Speaker", (totals.get(u.speaker || "Speaker") || 0) + secs);
+      const eps = (body.corpus && body.corpus.episodes) || [];
+      if (exp.kind === "speaker_time") {
+        const totals = new Map();
+        for (const ep of eps) {
+          for (const u of ep.utterances || []) {
+            // `end_sec === null` is an unmeasured line, and contributes
+            // nothing — the same as `strivo_dataviz::Utterance::measured_seconds`.
+            const secs =
+              u.end_sec == null ? 0 : Math.max(u.end_sec - (u.start_sec || 0), 0);
+            totals.set(u.speaker || "Speaker", (totals.get(u.speaker || "Speaker") || 0) + secs);
+          }
         }
+        const points = [...totals.entries()]
+          .map(([label, sec]) => ({ label, value: sec / 60 }))
+          .sort((a, b) => b.value - a.value);
+        return json(res, 200, {
+          series: { label: "Speaker minutes (across corpus)", chart_hint: "bar", points },
+        });
       }
-      const points = [...totals.entries()]
-        .map(([label, sec]) => ({ label, value: sec / 60 }))
-        .sort((a, b) => b.value - a.value);
-      return json(res, 200, {
-        series: { label: "Speaker minutes (across corpus)", chart_hint: "bar", points },
+      if (exp.kind === "word_frequency") {
+        // Mirrors `strivo_dataviz::word_frequency`: keep alphabetic chars
+        // and apostrophes, lowercase, drop <3 chars and stop-words, then
+        // sort by count desc and label asc.
+        const stop = new Set(
+          "the and of to a in is you that it for on with as are i this be or by but we an have not they from at your all was so if what can do just like my me he she his her its their out about up than then there here when how who yeah okay ok um uh".split(
+            " ",
+          ),
+        );
+        const counts = new Map();
+        for (const ep of eps) {
+          for (const u of ep.utterances || []) {
+            for (const raw of String(u.text || "").split(/\s+/)) {
+              const w = raw.replace(/[^a-zA-Z']/g, "").toLowerCase();
+              if (w.length < 3 || stop.has(w)) continue;
+              counts.set(w, (counts.get(w) || 0) + 1);
+            }
+          }
+        }
+        const take = Math.max(1, exp.top_n || 30);
+        const points = [...counts.entries()]
+          .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+          .slice(0, take)
+          .map(([label, c]) => ({ label, value: c }));
+        return json(res, 200, {
+          series: { label: `Top ${take} words`, chart_hint: "bar", points },
+        });
+      }
+      return json(res, 400, {
+        detail: `fixture implements speaker_time and word_frequency only, got ${exp.kind}`,
       });
     }
     if (p === "/plugins/crunchr/search") {

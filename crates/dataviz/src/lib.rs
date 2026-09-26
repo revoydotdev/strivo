@@ -18,12 +18,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A single transcribed line — usually one diarised utterance.
+///
+/// `end_sec` is an `Option` because "we do not know when this line ended"
+/// and "this line ended where it started" are different facts, and a type
+/// that cannot express the first leaves a caller only one way to submit it:
+/// invent a duration. Do not coalesce this back to `f64` with
+/// `unwrap_or(start_sec + 1.0)` — that is the defect this type exists to
+/// make impossible, and it reports speech that was never spoken.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Utterance {
     pub speaker: String,
     pub text: String,
     pub start_sec: f64,
-    pub end_sec: f64,
+    /// `None` when the transcript carries no end time for this line.
+    pub end_sec: Option<f64>,
 }
 
 /// One recording's worth of structured speech data.
@@ -38,12 +46,23 @@ pub struct Episode {
     pub utterances: Vec<Utterance>,
 }
 
+impl Utterance {
+    /// Measured speaking seconds, or `None` when the transcript gave this
+    /// line no end time. `None` is not zero: zero is a measurement.
+    pub fn measured_seconds(&self) -> Option<f64> {
+        self.end_sec.map(|end| (end - self.start_sec).max(0.0))
+    }
+}
+
 impl Episode {
-    /// Total speaking duration in seconds across all utterances.
+    /// Total *measured* speaking duration in seconds. Utterances with no
+    /// end time contribute nothing. Callers that present this as a total
+    /// are expected to state how many lines were unmeasured — the caller
+    /// that assembled the corpus is the one that knows.
     pub fn total_seconds(&self) -> f64 {
         self.utterances
             .iter()
-            .map(|u| (u.end_sec - u.start_sec).max(0.0))
+            .filter_map(Utterance::measured_seconds)
             .sum()
     }
 
@@ -169,7 +188,9 @@ fn speaker_time(corpus: &Corpus) -> Series {
     let mut totals: HashMap<String, f64> = HashMap::new();
     for ep in &corpus.episodes {
         for u in &ep.utterances {
-            *totals.entry(u.speaker.clone()).or_insert(0.0) += (u.end_sec - u.start_sec).max(0.0);
+            if let Some(secs) = u.measured_seconds() {
+                *totals.entry(u.speaker.clone()).or_insert(0.0) += secs;
+            }
         }
     }
     let mut points: Vec<DataPoint> = totals
@@ -313,13 +334,13 @@ mod tests {
                             speaker: "Alice".into(),
                             text: "the quick brown fox".into(),
                             start_sec: 0.0,
-                            end_sec: 30.0,
+                            end_sec: Some(30.0),
                         },
                         Utterance {
                             speaker: "Bob".into(),
                             text: "fox jumps over".into(),
                             start_sec: 30.0,
-                            end_sec: 60.0,
+                            end_sec: Some(60.0),
                         },
                     ],
                 },
@@ -332,13 +353,13 @@ mod tests {
                             speaker: "Alice".into(),
                             text: "fox returns".into(),
                             start_sec: 0.0,
-                            end_sec: 60.0,
+                            end_sec: Some(60.0),
                         },
                         Utterance {
                             speaker: "Carol".into(),
                             text: "and a new fox".into(),
                             start_sec: 60.0,
-                            end_sec: 90.0,
+                            end_sec: Some(90.0),
                         },
                     ],
                 },
@@ -423,5 +444,70 @@ mod tests {
             let back: Experiment = serde_json::from_str(&s).unwrap();
             assert_eq!(format!("{e:?}"), format!("{back:?}"));
         }
+    }
+
+    /// A transcript line with no end time must survive the wire. Before
+    /// `end_sec` was an `Option`, this was a deserialisation error, and the
+    /// only way the DataViz UI could submit such a line was to fabricate an
+    /// end time — which is how a second of speech nobody spoke ended up in
+    /// a "speaker minutes" chart.
+    #[test]
+    fn a_null_end_time_deserialises_as_unmeasured_not_as_a_rejection() {
+        let body = r#"{
+            "label": "selection",
+            "episodes": [{
+                "id": "ep1", "title": "Pilot", "date": "2026-01-15T00:00:00Z",
+                "utterances": [
+                    {"speaker": "Alice", "text": "measured", "start_sec": 0.0, "end_sec": 30.0},
+                    {"speaker": "Alice", "text": "unmeasured", "start_sec": 30.0, "end_sec": null}
+                ]
+            }]
+        }"#;
+        let c: Corpus = serde_json::from_str(body).expect("a null end time must parse");
+        assert_eq!(c.episodes[0].utterances[1].end_sec, None);
+        assert_eq!(c.episodes[0].utterances[1].measured_seconds(), None);
+        // 30 measured seconds only — the unmeasured line adds nothing, and
+        // in particular not the one second the UI used to invent for it.
+        assert_eq!(run(&c, &Experiment::SpeakerTime).points[0].value, 0.5);
+    }
+
+    /// The two facts must stay separable. A zero-length line is a
+    /// measurement and belongs in the total; a line with no end time is not,
+    /// and a type that collapses them cannot report either honestly.
+    #[test]
+    fn a_measured_zero_length_line_is_distinct_from_an_unmeasured_one() {
+        let zero = Utterance {
+            speaker: "Alice".into(),
+            text: "x".into(),
+            start_sec: 5.0,
+            end_sec: Some(5.0),
+        };
+        let absent = Utterance {
+            end_sec: None,
+            ..zero.clone()
+        };
+        assert_eq!(zero.measured_seconds(), Some(0.0));
+        assert_eq!(absent.measured_seconds(), None);
+        let ep = Episode {
+            id: "e".into(),
+            title: "t".into(),
+            date: String::new(),
+            utterances: vec![zero, absent],
+        };
+        assert_eq!(ep.total_seconds(), 0.0);
+    }
+
+    /// The `Option` is a wire contract, so the deserialised shape is pinned:
+    /// an absent `end_sec` key must behave like an explicit `null`, and a
+    /// real number must not be mistaken for either.
+    #[test]
+    fn end_sec_absent_null_and_number_are_three_distinct_inputs() {
+        let line = |end: &str| {
+            let body = format!(r#"{{"speaker":"A","text":"t","start_sec":0.0{end}}}"#);
+            serde_json::from_str::<Utterance>(&body).unwrap().end_sec
+        };
+        assert_eq!(line(""), None);
+        assert_eq!(line(r#","end_sec":null"#), None);
+        assert_eq!(line(r#","end_sec":1.5"#), Some(1.5));
     }
 }

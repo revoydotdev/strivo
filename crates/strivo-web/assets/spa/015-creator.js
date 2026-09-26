@@ -19,6 +19,65 @@ let datavizState = {
   experimentKind: "word_frequency",
 };
 
+// The chart panel's states. A toast notifies; this is the state the panel is
+// in. Each text names WHY it is that state, so a collapsed implementation is
+// not merely a different attribute value.
+//
+// A `switch` rather than a `{ skipped: … }` lookup on purpose: a 2-space
+// `key: (arg) => …` entry reads to check-pvr-bundle.mjs as an API method
+// definition, and `failed` would then look like a Creator symbol the PVR
+// bundle calls.
+function dzStateText(state, detail) {
+  switch (state) {
+    case "skipped":
+      return `Skipped — no Crunchr transcript for any of the ${detail} selected recording${detail === 1 ? "" : "s"}, so there is nothing to chart yet. Transcribe one from Recordings → Info → Generate subtitles.`;
+    case "refused":
+      return `Refused — ${detail} Crunchr transcripts are a Strivo Pro capability; activate or trial it from the Plugins page.`;
+    case "failed":
+      return `Failed — ${detail} This is a fault in the service, not a missing transcript.`;
+    default:
+      return "";
+  }
+}
+
+function setDzState(state, detail) {
+  const chart = document.getElementById("dz-chart");
+  const note = document.getElementById("dz-state");
+  const coverage = document.getElementById("dz-coverage");
+  if (!chart || !note) return;
+  chart.setAttribute("data-dz-state", state);
+  chart.innerHTML = "";
+  datavizState.series = null;
+  const text = dzStateText(state, detail);
+  note.textContent = text;
+  note.hidden = !text;
+  if (coverage) {
+    coverage.textContent = "";
+    coverage.hidden = true;
+  }
+}
+
+function setDzChart(series, unmeasured, total) {
+  const chart = document.getElementById("dz-chart");
+  const note = document.getElementById("dz-state");
+  const coverage = document.getElementById("dz-coverage");
+  chart.setAttribute("data-dz-state", "chart");
+  note.textContent = "";
+  note.hidden = true;
+  document.getElementById("dz-chart-title").textContent = series.label;
+  renderDatavizChart(series, chart);
+  datavizState.series = series;
+  // A duration only covers the lines that carry an end time; disclosing the
+  // rest beats presenting a total that omits part of the corpus.
+  if (coverage) {
+    coverage.textContent =
+      unmeasured > 0
+        ? `${unmeasured} of ${total} utterances have no end time and are excluded from these totals.`
+        : "";
+    coverage.hidden = unmeasured === 0;
+  }
+}
+
 async function renderDataviz() {
   const recs = (await API.recordings().catch(() => ({ recordings: [] }))).recordings || [];
   const finished = recs.filter((r) => r.state === "Finished");
@@ -52,7 +111,9 @@ async function renderDataviz() {
       </section>
       <section class="cfg-card dz-chart-card">
         <h2 class="cfg-title" id="dz-chart-title">Result</h2>
-        <div id="dz-chart" class="dz-chart"></div>
+        <div id="dz-state" class="empty sm" hidden></div>
+        <div id="dz-chart" class="dz-chart" data-dz-state="idle"></div>
+        <p class="pg-cap-hint" id="dz-coverage" hidden></p>
       </section>
     </div>
   `);
@@ -94,10 +155,11 @@ async function renderDataviz() {
       //   402 — the transcript store is a Pro capability and this machine is
       //         not entitled, which is a refusal, not a missing row;
       //   anything else — a real failure, surfaced as-is.
-      // Collapsing all three (the old `.catch(() => null)`) made a
-      // non-entitled user read "you have no transcripts" instead of
-      // "activate Crunchr".
+      // `dzState` rides out on the error so the outer catch can tell a
+      // refusal from a fault; without it both arrive as a bare Error.
       const episodes = [];
+      let unmeasured = 0;
+      let lines = 0;
       for (const id of datavizState.selectedIds) {
         const r = finished.find((x) => x.id === id);
         const name = niceTitle(r?.stream_title) || r?.channel_name || id.slice(0, 8);
@@ -105,8 +167,12 @@ async function renderDataviz() {
         try {
           tr = await API.crunchrTranscript(id);
         } catch (e) {
-          if (e && e.code === 402) throw e;
+          if (e && e.code === 402) {
+            e.dzState = "refused";
+            throw e;
+          }
           if (e && /^HTTP 404:/.test(e.message || "")) continue;
+          e.dzState = "failed";
           throw e;
         }
         const segments = (tr && tr.segments) || [];
@@ -115,25 +181,34 @@ async function renderDataviz() {
           id,
           title: name,
           date: r?.started_at || "",
-          utterances: segments.map((u) => ({
-            speaker: u.speaker || "Speaker",
-            text: u.text || "",
-            start_sec: u.start_sec || 0,
-            end_sec: u.end_sec || (u.start_sec || 0) + 1,
-          })),
+          utterances: segments.map((u) => {
+            lines += 1;
+            // An absent end time is sent as null, never as a duration this
+            // code invented. `??` also keeps a measured 0 distinct from an
+            // absent value, which `||` could not.
+            if (u.end_sec == null) unmeasured += 1;
+            return {
+              speaker: u.speaker || "Speaker",
+              text: u.text || "",
+              start_sec: u.start_sec || 0,
+              end_sec: u.end_sec ?? null,
+            };
+          }),
         });
       }
       if (episodes.length === 0) {
+        setDzState("skipped", datavizState.selectedIds.size);
         Toast.error("None of the selected recordings have Crunchr transcripts yet");
         return;
       }
       const corpus = { label: "selection", episodes };
       const resp = await API.datavizRun(corpus, exp.body);
-      datavizState.series = resp.series;
-      document.getElementById("dz-chart-title").textContent = resp.series.label;
-      renderDatavizChart(resp.series, document.getElementById("dz-chart"));
+      setDzChart(resp.series, unmeasured, lines);
       Toast.success(`Ran ${exp.label} over ${episodes.length} episode(s)`);
-    }).catch((err) => Toast.error(err.message || "Run failed"));
+    }).catch((err) => {
+      setDzState((err && err.dzState) || "failed", err.message || "Run failed");
+      Toast.error(err.message || "Run failed");
+    });
   });
   // Re-render chart on resize so the SVG scales. Listener stored on
   // datavizState so a route change can tear it down — without this

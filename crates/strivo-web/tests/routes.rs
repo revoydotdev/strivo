@@ -1723,3 +1723,40 @@ async fn vendored_esm_is_served_with_a_javascript_content_type() {
          silently refused by the browser"
     );
 }
+
+/// An SVG must reach the browser as an image, not as `application/octet-stream`,
+/// which a browser downloads instead of rendering — a silently missing glyph
+/// rather than a visible error. The DataViz charts are inline `<svg>` in the DOM
+/// and are never fetched, so the served icon set is what this actually covers;
+/// it is also the branch any future chart export would fall under.
+#[tokio::test]
+async fn a_served_svg_carries_an_image_content_type_and_real_svg_bytes() {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/assets/icons/candy/settings.svg")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("Content-Type is set")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(content_type, "image/svg+xml");
+
+    // Falsifiability: the status and header above would also hold if the
+    // route served an empty or non-SVG body, so the payload is checked too.
+    let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    let trimmed = body.trim_start();
+    assert!(
+        trimmed.starts_with("<svg") || trimmed.starts_with("<?xml"),
+        "the icon is not SVG at all: {:?}",
+        &trimmed[..trimmed.len().min(60)]
+    );
+    assert!(body.contains("</svg>"), "the SVG body is truncated");
+}

@@ -382,6 +382,273 @@ mod tests {
         (runtime, event_rx)
     }
 
+    // ---------------------------------------------------------------------
+    // Todo 54 — the authored graph *is* the run.
+    //
+    // These are the properties a rendered graph cannot show: that what the
+    // author wrote is what the executor runs, in the author's order, under
+    // the author's id — and that nothing between authoring and the persisted
+    // history re-derives, re-orders, or re-mints any of it. They live in
+    // `core`, not in the web crate, because that is the layer that would have
+    // to be wrong for the seam to break, and they must pass in the PVR
+    // configuration too, where no editor exists in front of the caller.
+    // ---------------------------------------------------------------------
+
+    /// A graph whose stages are mutually distinguishable in all three
+    /// dimensions the acceptance names — order, kind, and lock. If two stages
+    /// shared a kind *and* a lock *and* an attempt count, a re-ordering
+    /// assertion could not fail, and would prove nothing.
+    fn authored_graph() -> Pipeline {
+        let mut pipeline = Pipeline::new("authored").with_trigger("manual");
+        let root = pipeline.add_stage(
+            Stage::new(
+                "Detect cuepoints",
+                StageKind::Custom("cuepoints.extract".into()),
+            )
+            .with_dispatch(crate::pipeline::StageDispatch::new("cuepoints", "extract"))
+            .with_requires(vec![ResourceLock::Cpu { cap: 2 }])
+            .with_max_attempts(5),
+        );
+        let branch = pipeline.add_stage(
+            Stage::new("Write captions", StageKind::Subtitle)
+                .with_dispatch(crate::pipeline::StageDispatch::new("captions", "export"))
+                .with_inputs(vec![root])
+                .with_requires(vec![ResourceLock::Gpu])
+                .with_max_attempts(2),
+        );
+        pipeline.add_stage(
+            Stage::new("Concat outputs", StageKind::Concat)
+                .with_dispatch(crate::pipeline::StageDispatch::new("artifacts", "concat"))
+                .with_inputs(vec![root, branch])
+                .with_requires(vec![ResourceLock::Api {
+                    name: "openai".into(),
+                    cap: 7,
+                }])
+                .with_max_attempts(1),
+        );
+        pipeline
+    }
+
+    /// One row per stage, **in order**: `(stage id, kind label, lock labels,
+    /// max attempts, dispatch target)`.
+    ///
+    /// A `Vec`, deliberately: a `BTreeSet` or a sorted comparison would accept
+    /// any permutation, and this todo's load-bearing word is *order*. Every
+    /// element is a value read from the model, not a projection, so a layer
+    /// that rebuilt the stages would show up as a difference.
+    fn shape(pipeline: &Pipeline) -> Vec<(String, String, Vec<String>, u8, String)> {
+        pipeline
+            .stages
+            .iter()
+            .map(|stage| {
+                (
+                    stage.id.to_string(),
+                    stage.kind.label(),
+                    stage.requires.iter().map(|l| l.label()).collect(),
+                    stage.max_attempts,
+                    stage.dispatch.as_ref().map_or_else(
+                        || "none".to_string(),
+                        |d| format!("{}/{}", d.plugin, d.verb),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// The persisted registry, read exactly the way
+    /// `GET /api/v1/pipelines/runs` reads it: the `Vec<Pipeline>` the daemon
+    /// wrote to `pipelines.json`. Reading the file rather than the
+    /// in-memory registry is what makes this the *history* claim.
+    fn history(path: &std::path::Path) -> Vec<Pipeline> {
+        let bytes = std::fs::read(path).expect("the registry persisted on submit");
+        serde_json::from_slice(&bytes).expect("history decodes")
+    }
+
+    fn t54_registry_file(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("strivo-t54-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("pipelines.json")
+    }
+
+    /// (e) THE test. Author a graph, submit it, and read the id back at all
+    /// three points — the author, the executor's registry, and the persisted
+    /// history — plus the stage list in order, with kinds and locks.
+    #[tokio::test]
+    async fn an_authored_graph_is_the_run_with_its_identity_intact() {
+        let path = t54_registry_file("identity");
+        let (runtime, _rx) = test_runtime(PipelineRegistry::open(&path).expect("open registry"));
+
+        let graph = authored_graph();
+        let authored_id = graph.id;
+        let authored = shape(&graph);
+        assert_eq!(authored.len(), 3);
+
+        let run_id = runtime.submit(graph.clone()).await.expect("accepted");
+        assert_eq!(
+            run_id, authored_id,
+            "the id the executor returns is the id the author minted"
+        );
+
+        let in_flight = runtime
+            .registry
+            .lock()
+            .await
+            .get(run_id)
+            .expect("run registered")
+            .clone();
+        assert_eq!(in_flight.id, authored_id, "the run carries the authored id");
+        assert_eq!(
+            shape(&in_flight),
+            authored,
+            "the run's stages ARE the authored nodes, in the authored order, with the authored kinds and locks"
+        );
+
+        let runs = history(&path);
+        let recorded = runs
+            .iter()
+            .find(|run| run.id == authored_id)
+            .expect("history records the authored id");
+        assert_eq!(
+            shape(recorded),
+            authored,
+            "history holds the same ordered stages, not a re-derivation"
+        );
+        assert_eq!(recorded.subject_id, graph.subject_id);
+        assert_eq!(recorded.trigger, "manual");
+        assert_eq!(runs.len(), 1, "one submission is one run");
+    }
+
+    /// Falsifiability, made mechanical. The assertion above compares two
+    /// ordered vectors, so it is only meaningful if a re-ordering actually
+    /// changes them. This proves that on this very fixture: a submission path
+    /// that reversed the stage list — the defect this todo names — is
+    /// detected rather than absorbed.
+    #[test]
+    fn the_stage_comparison_can_fail_on_a_reordered_graph() {
+        let graph = authored_graph();
+        let mut reordered = graph.clone();
+        reordered.stages.reverse();
+        assert_ne!(
+            shape(&graph),
+            shape(&reordered),
+            "a reordered graph must not compare equal, or the order assertion is vacuous"
+        );
+        assert_eq!(shape(&graph)[0].1, "custom(cuepoints.extract)");
+        assert_eq!(shape(&reordered)[0].1, "concat");
+    }
+
+    /// (f) The QA failure scenario: a graph edited *after* submission must not
+    /// reach the run. Proves the submit path takes a snapshot rather than a
+    /// shared handle — a `Rc`/`Arc` seam or a stored reference would let a
+    /// later edit mutate a run already in flight.
+    #[tokio::test]
+    async fn editing_the_authors_copy_after_submission_does_not_touch_the_run() {
+        let path = t54_registry_file("isolation");
+        let (runtime, _rx) = test_runtime(PipelineRegistry::open(&path).expect("open registry"));
+
+        let mut graph = authored_graph();
+        let submitted = shape(&graph);
+        let run_id = runtime.submit(graph.clone()).await.expect("accepted");
+
+        graph.stages[0].name = "Renamed after submit".into();
+        graph.stages[1].requires = vec![ResourceLock::Disk { cap: 9 }];
+        graph.stages[1].max_attempts = 1;
+        let tail = graph.stages[2].id;
+        graph.stages[0].inputs.push(tail);
+        graph.add_stage(Stage::new("Late arrival", StageKind::Archive));
+        graph.name = "Renamed pipeline".into();
+
+        let running = runtime
+            .registry
+            .lock()
+            .await
+            .get(run_id)
+            .expect("run registered")
+            .clone();
+        assert_eq!(
+            shape(&running),
+            submitted,
+            "the run keeps the graph as submitted"
+        );
+        assert_eq!(running.name, "authored", "the name too");
+        assert_eq!(
+            running.stages.len(),
+            3,
+            "a stage added later is not a stage of the run"
+        );
+
+        let runs = history(&path);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            shape(&runs[0]),
+            submitted,
+            "and history agrees with the run"
+        );
+    }
+
+    /// (g) No layer re-mints identity, which has a second consequence worth
+    /// stating: the same graph cannot become a second run, and the refusal is
+    /// the authored id, not a fresh one. Re-running is the author's call —
+    /// they mint a new id for a new run.
+    #[tokio::test]
+    async fn identity_is_never_re_minted_so_the_same_graph_is_not_a_second_run() {
+        let path = t54_registry_file("identity-once");
+        let (runtime, _rx) = test_runtime(PipelineRegistry::open(&path).expect("open registry"));
+
+        let graph = authored_graph();
+        let authored_id = graph.id;
+        assert_eq!(
+            runtime.submit(graph.clone()).await.expect("first"),
+            authored_id
+        );
+
+        let second = runtime
+            .submit(graph.clone())
+            .await
+            .expect_err("the same id is not a second run");
+        assert_eq!(second, "pipeline id already exists");
+        let runs = history(&path);
+        assert_eq!(runs.len(), 1, "the refusal wrote nothing");
+        assert_eq!(runs[0].id, authored_id);
+
+        // A fresh author-minted id is the author's own call — but while the
+        // first run is still active the registry deliberately coalesces an
+        // equivalent workflow, so the id alone is not a licence to duplicate.
+        // Asserted rather than worked around: it is a real contract.
+        let mut rerun = graph;
+        rerun.id = uuid::Uuid::new_v4();
+        let rerun_id = rerun.id;
+        assert_ne!(rerun_id, authored_id);
+        assert_eq!(
+            runtime
+                .submit(rerun.clone())
+                .await
+                .expect_err("coalesced while active"),
+            "an equivalent pipeline is already active for this subject"
+        );
+        assert_eq!(
+            history(&path).len(),
+            1,
+            "the coalesce refusal wrote nothing"
+        );
+
+        // Once the first run is terminal the same author-minted id is accepted,
+        // and history then holds both ids — the author minted both, and no
+        // layer changed either.
+        runtime.cancel(authored_id).await;
+        runtime
+            .submit(rerun)
+            .await
+            .expect("a re-run once the first is terminal");
+        let runs = history(&path);
+        let ids: Vec<_> = runs.iter().map(|r| r.id).collect();
+        assert!(
+            ids.contains(&authored_id) && ids.contains(&rerun_id),
+            "{ids:?}"
+        );
+        assert_eq!(runs.len(), 2);
+    }
+
     /// (a) A stage that cannot get a permit within the timeout fails with
     /// the existing transient failure class (`Failed { attempt }`, the
     /// same one `finish_failure` uses for every other stage-execution

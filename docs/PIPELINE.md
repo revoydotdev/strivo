@@ -38,16 +38,113 @@ permanent and visible stage failure.
 Stage executors must be idempotent for a `(pipeline, stage, subject)` because
 crash recovery may invoke them again.
 
+## Authoring and execution: one model
+
+A graph authored in the browser **is** the run. There is no second pipeline
+model, no second `PipelineId`, and no translation layer between the graph and
+the executor:
+
+- `GET /api/v1/pipelines/templates` returns every template — shipped and
+  authored — in the exact shape a save takes back, as a real `Pipeline`.
+- `POST /api/v1/pipelines/runs` accepts that same value as `graph` and submits
+  it to the daemon **verbatim**. The reported `pipeline_id` is read off the
+  value that is sent, so the reported id and the executed id are the same
+  expression.
+- The executor's registry holds the submitted `Pipeline` under the id minted
+  at authoring and persists it under that same id to `pipelines.json`. The id
+  is therefore identical at all three points: author → executor → history.
+- `GET /api/v1/pipelines/runs` lists the run, and the `graph` key on the same
+  response draws it, one node per `Stage` and one edge per `inputs` link —
+  derived, never tabulated.
+
+Editing the graph after submitting does not affect the run: submission takes a
+snapshot, so a stage added or re-locked afterwards is not a stage of the run
+already in flight.
+
+### Identity and re-running
+
+`PipelineId` is minted by the author and never re-minted by a layer. Two
+consequences, both deliberate:
+
+- Submitting the same graph twice is refused — `pipeline id already exists`.
+  History is keyed by `PipelineId`, so a silent second record under a fresh id
+  would be indistinguishable from a real second run.
+- Re-running is the author's call: mint a new id, and the executor coalesces it
+  against any **equivalent active** workflow (same name and `subject_id`) until
+  that one reaches a terminal state.
+
+### What a template's `selection` means when it executes
+
+The shipped templates are rendered for the graph view with the **nil uuid** as
+their subject, so a graph exists on a fresh install before any run. That nil
+value is a *rendering* placeholder, not a runtime value.
+
+- The **named-template path** — `POST /api/v1/pipelines/runs` with
+  `recording_id` and `template` — is where the server binds a real recording
+  into `subject_id` and every `dispatch.selection`.
+- The **authored-graph path** executes the graph exactly as sent. Its
+  `selection` is the author's own value, because only the author knows which
+  recordings a run is over. Nothing is substituted at run time, because a
+  silent substitution is precisely the translation this design removes.
+
+### Validation, and where the backstop is
+
+Seven rules gate a graph: six structural rules in
+`PipelineRegistry::validation_errors` (acyclic, non-empty, unique stage ids,
+no dangling inputs, non-zero capacities, non-empty dispatch target) and a
+seventh the executor **structurally cannot express** —
+`unknown-dispatch-target`, a dispatch naming a plugin this build does not
+register. `StageKind::Custom` carries an opaque identifier, so the executor's
+`validate` checks only that the dispatch strings are non-empty, and it has no
+plugin registry to resolve a name against.
+
+All three layers are live, and each answers a different caller:
+
+| Layer | Where | Role |
+|---|---|---|
+| Browser | `assets/spa/047-creator.js` | inline errors before a save |
+| Route | `pipeline_templates::graph_errors` | every rule, before the file is touched and before the IPC write |
+| Executor | `PipelineRegistry::validate` | last line for a persisted or out-of-band pipeline |
+
+`graph_errors` is one function on purpose: "valid" must not have two answers.
+The run route's rule-7 check is a backstop the executor's cannot be — with no
+editor in front of the caller, a graph dispatching to an unregistered plugin
+is refused before it reaches the executor rather than failing hours later, at
+dispatch, on a real recording.
+
 ## Product surface
 
-The Pipelines page separates two concepts:
+The Pipelines page separates two concepts, and they are deliberately different
+models:
 
-1. **Executable workflows** — honest, daemon-backed runs with live state,
-   cancellation, retry, history, and errors.
-2. **Blueprints** — the roadmap capability topology. A blueprint is not
-   presented as runnable until every required capability has an executor.
+1. **Authored graphs and runs** — real `Pipeline` values, daemon-backed, with
+   live state, cancellation, retry, history, and errors. This is the runnable
+   surface: a graph authored here is submitted as-is.
+2. **Blueprints** — `GET /api/v1/pipelines/dag`, the roadmap capability
+   topology from `crates/pipelines-dag`. Not a runnable workflow. A blueprint is
+   not presented as runnable unless every capability it needs has a registered
+   provider **and** its own edges resolve; one that fails its own `validate`
+   reports `invalid` in the payload and is not runnable.
 
-The production workflow is **Ultimate creator publish**:
+The blueprint model is **not** a parallel source of truth for execution. It is
+read at exactly one place — `api.rs::dag_payload` — and its readers are:
+
+- `api.rs::dag_payload` → `GET /api/v1/pipelines/dag`.
+- The SPA accessor `API.pipelinesDag` (`assets/spa/007-creator.js:121`), which
+  is **defined but never called**: no client reads `/pipelines/dag` today.
+- `RecipeChain` is read only by the three `/api/v1/pipelines/chains` handlers.
+  `API.pipelinesChains` does not exist in the SPA, so those routes have no
+  client reader either.
+
+Nothing in the executor reads `crates/pipelines-dag`, and nothing in the
+authoring surface does. Todo 56 owns retiring `/api/v1/pipelines/dag`,
+`API.pipelinesDag`, the `RecipeChain` type and its routes; they remain until
+then as todo 6's delivered surface, and the list above is the record of who
+reads them.
+
+The production workflow is **Ultimate creator preparation** — it ends at a
+rendered artifact and a draft, and publishing that artifact is a separate,
+explicit step (see `crates/research/src/creator/publication.rs`):
 
 `recording → transcript intelligence + visual cuepoints`
 

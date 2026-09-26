@@ -557,12 +557,7 @@ async fn pipelines_templates_save(
             "errors": [],
         }))
         .into_response(),
-        Err(refusal) => {
-            let status =
-                StatusCode::from_u16(refusal.body()["status"].as_u64().unwrap_or(400) as u16)
-                    .unwrap_or(StatusCode::BAD_REQUEST);
-            (status, Json(refusal.body())).into_response()
-        }
+        Err(refusal) => refusal_response(&refusal),
     }
 }
 
@@ -583,6 +578,19 @@ fn registered_plugins() -> strivo_core::plugin::registry::PluginRegistry {
 /// until every capability it needs has an executor. A node is runnable
 /// when each capability it *produces* resolves to at least one registered
 /// provider — the same lookup `PluginRegistry::execute_stage` gates on.
+///
+/// A blueprint whose own edges do not resolve cannot run at all, and that is
+/// checked here rather than left to `strivo_pipelines_dag::validate` in a
+/// test: the route used to call `topo_order(..).unwrap_or_default()`, so a
+/// blueprint that could not be ordered rendered an empty `order` and still
+/// claimed `runnable`. The broken invariant ships in the payload instead, on
+/// todo 52's principle — a client can see it rather than draw a phantom.
+///
+/// The four shipped blueprints all validate, so this is the guard that keeps
+/// them honest rather than a claim that they are currently broken. Todo 56
+/// retires this route and `API.pipelinesDag`; until then the SPA's Pipelines
+/// page is its only reader, and it reads it as a capability roadmap, not as a
+/// runnable workflow.
 #[cfg(feature = "creator")]
 fn dag_payload(
     pipelines: Vec<strivo_pipelines_dag::Pipeline>,
@@ -592,10 +600,13 @@ fn dag_payload(
     let payload: Vec<serde_json::Value> = pipelines
         .into_iter()
         .map(|p: Pipeline| {
-            let order = strivo_pipelines_dag::topo_order(&p).unwrap_or_default();
+            // Resolved before any node is described: a blueprint that fails
+            // here has no meaningful node verdicts to give.
+            let broken = strivo_pipelines_dag::validate(&p).err();
+            let order = strivo_pipelines_dag::topo_order(&p).ok();
             let nodes: Vec<serde_json::Value> = p
                 .nodes
-                .into_iter()
+                .iter()
                 .map(|node| {
                     let mut providers: Vec<serde_json::Value> = Vec::new();
                     let mut missing: Vec<serde_json::Value> = Vec::new();
@@ -621,16 +632,22 @@ fn dag_payload(
                     })
                 })
                 .collect();
-            let runnable =
-                !nodes.is_empty() && nodes.iter().all(|n| n["runnable"].as_bool() == Some(true));
+            // `broken` short-circuits the capability verdict: a blueprint whose
+            // edges do not resolve is not runnable even when every capability
+            // it names has a provider, and saying otherwise is the over-claim.
+            let runnable = broken.is_none()
+                && order.is_some()
+                && !nodes.is_empty()
+                && nodes.iter().all(|n| n["runnable"].as_bool() == Some(true));
             json!({
                 "id": p.id,
                 "name": p.name,
                 "description": p.description,
                 "nodes": nodes,
                 "edges": p.edges,
-                "order": order,
+                "order": order.unwrap_or_default(),
                 "runnable": runnable,
+                "invalid": broken,
             })
         })
         .collect();
@@ -691,7 +708,23 @@ fn pipeline_templates(recording_id: Uuid) -> Vec<(&'static str, strivo_core::pip
 #[cfg(feature = "creator")]
 #[derive(Debug, Deserialize)]
 struct PipelineRunPayload {
-    recording_id: Uuid,
+    /// A graph the caller authored. It is executed **exactly as sent** — the
+    /// same `PipelineId`, the same stage order, kinds and locks — because
+    /// there is no second model to translate it through and no server-side
+    /// step that could quietly reorder or re-mint it.
+    ///
+    /// A template's dispatch `selection` is therefore the author's own value.
+    /// The shipped templates are rendered with the nil uuid so a graph exists
+    /// on a fresh install; that placeholder is a *rendering* artefact, and
+    /// binding it is the author's job because only the author knows which
+    /// recordings a run is over. `recording_id` + `template` below is the
+    /// named-template path, and the server binds those.
+    #[serde(default)]
+    graph: Option<strivo_core::pipeline::Pipeline>,
+    /// Required on the named-template path; ignored when `graph` is sent,
+    /// because the graph carries its own `subject_id`.
+    #[serde(default)]
+    recording_id: Option<Uuid>,
     #[serde(default = "default_pipeline_template")]
     template: String,
 }
@@ -701,9 +734,62 @@ fn default_pipeline_template() -> String {
     "creator_publish".to_string()
 }
 
-/// Submit the first fully executable Creator workflow. Crunchr's runner owns
-/// extraction, transcription, diarisation, chunking, embedding, and analysis;
-/// the daemon owns durability, retries, locking, cancellation, and observability.
+/// A refused save and a refused run carry the same body, so the status is
+/// derived from the refusal rather than re-decided per route: one vocabulary
+/// for `graph/invalid` and `history/conflict` across both surfaces.
+#[cfg(feature = "creator")]
+fn refusal_response(
+    refusal: &crate::routes::pipeline_templates::SaveRefusal,
+) -> axum::response::Response {
+    let status = StatusCode::from_u16(refusal.body()["status"].as_u64().unwrap_or(400) as u16)
+        .unwrap_or(StatusCode::BAD_REQUEST);
+    (status, Json(refusal.body())).into_response()
+}
+
+/// The recording gate a run is subject to. Extracted because the authored-graph
+/// path and the named-template path are the same question about a different id,
+/// and a second copy of it would be a second answer to "may this run".
+#[cfg(feature = "creator")]
+async fn subject_gate(state: &AppState, recording_id: Uuid) -> Result<(), crate::problem::Problem> {
+    match state.snapshot().await {
+        Ok(ServerMessage::StateSnapshot { recordings, .. }) => {
+            let Some(recording) = recordings.get(&recording_id) else {
+                return Err(crate::problem::Problem::not_found("recording not found"));
+            };
+            if !matches!(
+                recording.state,
+                strivo_core::recording::job::RecordingState::Finished
+            ) {
+                return Err(crate::problem::Problem::bad_request(
+                    "pipeline requires a finished recording",
+                ));
+            }
+            if !recording.output_path.is_file() {
+                return Err(crate::problem::Problem::bad_request(
+                    "recording media file is missing",
+                ));
+            }
+            Ok(())
+        }
+        Ok(_) => Err(crate::problem::Problem::internal(
+            "unexpected daemon response",
+        )),
+        Err(error) => Err(crate::problem::Problem::unavailable(error.to_string())),
+    }
+}
+
+/// Submit a graph to be run.
+///
+/// Two ways in, one execution. `graph` is the caller's own authored graph and
+/// goes to the executor verbatim. `recording_id` + `template` is the
+/// named-template path the SPA still uses, where the server builds the graph
+/// and binds the recording.
+///
+/// Either way the seven authoring rules are enforced **here**, before the IPC
+/// write. The executor's own `validate` cannot be this backstop: it has no
+/// plugin registry, so rule 7 — a dispatch naming a plugin this build does not
+/// register — passes all six of its rules and would otherwise fail hours later,
+/// at dispatch, on a real recording.
 #[cfg(feature = "creator")]
 async fn pipeline_run(
     headers: HeaderMap,
@@ -713,40 +799,54 @@ async fn pipeline_run(
     if check_key(&headers, &state).is_err() {
         return Problem::unauthorized().into_response();
     }
-    match state.snapshot().await {
-        Ok(ServerMessage::StateSnapshot { recordings, .. }) => {
-            let Some(recording) = recordings.get(&body.recording_id) else {
-                return Problem::not_found("recording not found").into_response();
-            };
-            if !matches!(
-                recording.state,
-                strivo_core::recording::job::RecordingState::Finished
-            ) {
-                return Problem::bad_request("pipeline requires a finished recording")
+
+    let pipeline = match body.graph {
+        Some(graph) => {
+            let errors =
+                crate::routes::pipeline_templates::graph_errors(&graph, &registered_plugins());
+            if !errors.is_empty() {
+                return refusal_response(
+                    &crate::routes::pipeline_templates::SaveRefusal::Invalid { errors },
+                );
+            }
+            // A graph with no `subject_id` is not rooted in a recording, which
+            // `Pipeline::subject_id` is `Option` for; a rooted one is gated
+            // exactly like the named-template path.
+            if let Some(recording_id) = graph.subject_id {
+                if let Err(problem) = subject_gate(&state, recording_id).await {
+                    return problem.into_response();
+                }
+            }
+            graph
+        }
+        None => {
+            let Some(recording_id) = body.recording_id else {
+                return Problem::bad_request("a run needs either a graph or a recording_id")
                     .into_response();
+            };
+            if let Err(problem) = subject_gate(&state, recording_id).await {
+                return problem.into_response();
             }
-            if !recording.output_path.is_file() {
-                return Problem::bad_request("recording media file is missing").into_response();
+            match body.template.as_str() {
+                "creator_publish" => {
+                    strivo_plugins::pipeline_templates::creator_publish(recording_id, "manual")
+                }
+                "creator_intelligence" => {
+                    strivo_plugins::pipeline_templates::creator_intelligence(recording_id, "manual")
+                }
+                other => {
+                    return Problem::bad_request(format!(
+                        "pipeline template '{other}' has no executable adapter"
+                    ))
+                    .into_response()
+                }
             }
-        }
-        Ok(_) => return Problem::internal("unexpected daemon response").into_response(),
-        Err(error) => return Problem::unavailable(error.to_string()).into_response(),
-    }
-    let pipeline = match body.template.as_str() {
-        "creator_publish" => {
-            strivo_plugins::pipeline_templates::creator_publish(body.recording_id, "manual")
-        }
-        "creator_intelligence" => {
-            strivo_plugins::pipeline_templates::creator_intelligence(body.recording_id, "manual")
-        }
-        _ => {
-            return Problem::bad_request(format!(
-                "pipeline template '{}' has no executable adapter",
-                body.template
-            ))
-            .into_response()
         }
     };
+
+    // Read back from the graph that will be sent, not from a value rebuilt
+    // beside it — the reported id and the executed id are then the same
+    // expression, so they cannot disagree.
     let pipeline_id = pipeline.id;
     match state
         .ipc
@@ -1061,5 +1161,77 @@ mod tests {
             "a node with one satisfied and one absent capability still resolves \
              the ones it can, and must not be credited with the absent one"
         );
+    }
+
+    /// A blueprint whose own edges do not resolve cannot run, whatever its
+    /// capability coverage says. The capability check alone called it
+    /// runnable: every capability here has a provider, and the only thing
+    /// wrong is an edge naming a node that does not exist. The reason ships in
+    /// the payload rather than being swallowed.
+    #[cfg(feature = "creator")]
+    #[test]
+    fn a_blueprint_with_unresolvable_edges_is_not_runnable_and_says_why() {
+        use strivo_pipelines_dag::{Edge, Node, Pipeline};
+        let dangling = Pipeline {
+            id: "dangling".into(),
+            name: "Dangling".into(),
+            description: "test-only".into(),
+            nodes: vec![Node {
+                id: "real".into(),
+                label: "Real".into(),
+                produces: vec!["chapters".into()],
+                consumes: vec![],
+                blurb: String::new(),
+            }],
+            // `ghost` is not in `nodes`, so `validate` rejects the blueprint.
+            edges: vec![Edge {
+                from: "real".into(),
+                to: "ghost".into(),
+                via: "chapters".into(),
+            }],
+        };
+        let payload = dag_payload(vec![dangling], &registered_plugins());
+        let pipeline = &payload["pipelines"][0];
+
+        // The precondition that makes the assertion mean something: the
+        // capability verdict is *positive* on its own.
+        assert_eq!(pipeline["nodes"][0]["runnable"], json!(true));
+        assert_eq!(
+            pipeline["runnable"],
+            json!(false),
+            "a blueprint that cannot be ordered must not claim to be runnable"
+        );
+        assert!(
+            pipeline["invalid"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("ghost")),
+            "the broken invariant is reported, not hidden: {:?}",
+            pipeline["invalid"]
+        );
+    }
+
+    /// The companion honesty check: the four shipped blueprints are valid, so
+    /// the guard above is a guard and not a claim that the product's own
+    /// blueprints are broken. Each is also reported against the real registry.
+    #[cfg(feature = "creator")]
+    #[test]
+    fn every_shipped_blueprint_validates_and_reports_no_invalid_reason() {
+        for blueprint in strivo_pipelines_dag::default_pipelines() {
+            let payload = dag_payload(vec![blueprint.clone()], &registered_plugins());
+            let reported = &payload["pipelines"][0];
+            assert_eq!(
+                reported["invalid"],
+                json!(null),
+                "shipped blueprint {} is invalid: {:?}",
+                blueprint.id,
+                reported["invalid"]
+            );
+            assert_eq!(
+                reported["order"].as_array().map(Vec::len),
+                Some(blueprint.nodes.len()),
+                "every node of {} is ordered",
+                blueprint.id
+            );
+        }
     }
 }

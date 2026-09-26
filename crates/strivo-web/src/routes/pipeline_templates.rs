@@ -199,6 +199,21 @@ fn authored_templates() -> (Vec<StoredTemplate>, Vec<String>) {
     (out, unreadable)
 }
 
+/// Every rule a graph must break-free before it can be **saved or run**: the
+/// executor's six, then the registry one.
+///
+/// One function, because "valid" must not have two answers. A graph that
+/// `save` refuses and a graph the run route submits are the same question, and
+/// a second copy of this check is exactly the drift todo 53 closed. The run
+/// route calls it too — with no editor in front of the caller, this is the
+/// backstop that `PipelineRegistry::validate` cannot be, because the executor
+/// has no registry and so cannot express rule 7.
+pub fn graph_errors(pipeline: &Pipeline, registry: &PluginRegistry) -> Vec<RuleViolation> {
+    let mut errors = PipelineRegistry::validation_errors(pipeline);
+    errors.extend(authoring_violations(pipeline, registry));
+    errors
+}
+
 /// Save `pipeline` as template `id`, on top of `base`.
 ///
 /// `base` is `None` for a first save. A save whose `base` is not the stored
@@ -221,8 +236,7 @@ pub fn save(
     // Validation before the conflict check, and before any write: a save that
     // breaks a rule is refused on its own merits, and it never reaches the
     // executor in either order.
-    let mut errors = PipelineRegistry::validation_errors(pipeline);
-    errors.extend(authoring_violations(pipeline, registry));
+    let errors = graph_errors(pipeline, registry);
     if !errors.is_empty() {
         return Err(SaveRefusal::Invalid { errors });
     }

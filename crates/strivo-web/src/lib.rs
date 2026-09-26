@@ -7,6 +7,8 @@
 pub mod assets;
 pub mod auth;
 pub mod capabilities;
+#[cfg(feature = "creator")]
+pub mod creator_schema;
 pub mod csrf;
 pub mod ipc_client;
 pub mod problem;

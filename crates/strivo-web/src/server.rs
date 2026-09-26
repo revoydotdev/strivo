@@ -204,6 +204,13 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
     // Record process start time for GET /api/v1/telemetry's `started_at`
     // before anything else — a no-op after the first call.
     crate::telemetry::init();
+    // Creator edition only: the canonical project/source/composition schema
+    // is applied once, before the first request, so the tables exist by the
+    // time anything asks for them. In a PVR build this line does not exist —
+    // `creator_schema` is cfg'd out and `strivo-research` is not linked, so a
+    // PVR install has no code that could create these tables.
+    #[cfg(feature = "creator")]
+    crate::creator_schema::ensure_creator_schema();
     let ipc = Arc::new(IpcClient::connect_or_err()?);
     // Session secret must exist before the first request so the cookie
     // /login signs is verifiable by check_key on the same process. Read

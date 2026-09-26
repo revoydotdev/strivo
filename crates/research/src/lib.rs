@@ -15,6 +15,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub mod agreement;
+pub mod creator;
 pub mod moments;
 pub mod refi;
 pub mod search;
@@ -122,6 +123,10 @@ pub enum ResearchError {
     Json(#[from] serde_json::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
+    /// The database was written by a newer build than this one. Opening it
+    /// as if it were understood is how state gets dropped, so it is refused.
+    #[error("schema version {found} is newer than this build supports ({supported})")]
+    UnsupportedSchema { found: i64, supported: i64 },
 }
 pub type Result<T> = std::result::Result<T, ResearchError>;
 

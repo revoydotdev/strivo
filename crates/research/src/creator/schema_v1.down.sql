@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS creator_metric_observations;
+DROP TABLE IF EXISTS creator_publications;
+DROP TABLE IF EXISTS creator_release_packages;
+DROP TABLE IF EXISTS creator_artifacts;
+DROP TABLE IF EXISTS creator_render_plans;
+DROP TABLE IF EXISTS creator_variants;
+DROP TABLE IF EXISTS creator_composition_revisions;
+DROP TABLE IF EXISTS creator_transcript_revisions;
+DROP TABLE IF EXISTS creator_capture_sessions;
+DROP TABLE IF EXISTS creator_source_assets;
+DROP TABLE IF EXISTS creator_project_research_links;
+DROP TABLE IF EXISTS creator_projects;
+DELETE FROM schema_meta WHERE key='creator_schema_version';

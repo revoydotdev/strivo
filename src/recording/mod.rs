@@ -880,8 +880,70 @@ pub async fn run_manager(
                             continue;
                         }
 
+                        // A VOD pull spawns a yt-dlp exactly like a live
+                        // capture spawns ffmpeg, so it draws on the same
+                        // budget. Without this the pull path was a hole: a
+                        // back-catalog request fans out one DownloadVod per
+                        // past broadcast, and every one of them forked a
+                        // yt-dlp with no ceiling, turning a 20-item pull into
+                        // 20 concurrent downloads on a self-hosted box.
+                        // Same rule as Start: 0 = unlimited, finished and
+                        // failed jobs don't hold a slot. Checked after the
+                        // dedupe above so a duplicate is still a silent
+                        // no-op rather than a cap refusal, and before any job
+                        // is created so a refused pull leaves no row, no
+                        // RecordingStarted event, and no `active` entry.
+                        let cap = config.monitor_limits.max_concurrent_recordings;
+                        if cap > 0 {
+                            let active_count = active
+                                .values()
+                                .filter(|r| {
+                                    !matches!(
+                                        r.job.state,
+                                        RecordingState::Finished | RecordingState::Failed
+                                    )
+                                })
+                                .count();
+                            if active_count >= cap as usize {
+                                // Name the thing the user asked for: they
+                                // requested a batch, so a refusal that only
+                                // said "download refused" reads as items
+                                // silently vanishing. The post title is what
+                                // the library lists them by; fall back to the
+                                // channel, then the raw URL.
+                                let label = post_title
+                                    .as_deref()
+                                    .filter(|t| !t.trim().is_empty())
+                                    .unwrap_or(&channel_name);
+                                let label = if label.trim().is_empty() {
+                                    url.as_str()
+                                } else {
+                                    label
+                                };
+                                let _ = event_tx.send(DaemonEvent::Notification {
+                                    title: "Download limit reached".to_string(),
+                                    body: format!(
+                                        "Cannot download {label}: {cap} concurrent recording cap is active"
+                                    ),
+                                });
+                                tracing::info!(
+                                    url = %url,
+                                    cap,
+                                    active_count,
+                                    "VOD download refused: concurrent recording cap is active"
+                                );
+                                continue;
+                            }
+                        }
+
+                        // The VOD pull is subject to the same per-channel
+                        // capture profile as a live capture of that channel.
+                        // This used to be defaulted to "", which matched no
+                        // auto-record entry and silently fell through to the
+                        // global format selector.
+                        let channel_id = channel_id.unwrap_or_default();
                         let mut job = RecordingJob::new(
-                            channel_id.unwrap_or_default(),
+                            channel_id.clone(),
                             channel_name,
                             platform,
                             output_path.clone(),
@@ -908,7 +970,7 @@ pub async fn run_manager(
                         });
 
                         let rtx = resolve_tx.clone();
-                        let fmt = resolve_format(&config, "", platform);
+                        let fmt = resolve_format(&config, &channel_id, platform);
                         tokio::spawn(async move {
                             match YtDlpProcess::with_options(&url, output_path, cookies_path.as_deref(), Some(&fmt), false) {
                                 Ok(process) => {
@@ -1565,5 +1627,130 @@ mod tests {
         cfg.recording.format.format = Some("global_selector".into());
         let r = resolve_format(&cfg, "not_in_list", PlatformKind::Twitch);
         assert_eq!(r.format, "global_selector");
+    }
+
+    // ── DownloadVod concurrency cap ───────────────────────────────────
+
+    /// Drives the real `run_manager` loop over its mpsc command channel and
+    /// returns the jobs it started plus the refusal notifications it emitted.
+    ///
+    /// All commands are queued *before* the manager is polled: the
+    /// `DownloadVod` arm does no `.await`, so the whole batch is handled in
+    /// one uninterrupted burst, before any spawned resolve task can report a
+    /// yt-dlp failure back and free a slot. That is what makes the accepted /
+    /// refused split deterministic rather than a race.
+    ///
+    /// Reading stops at the first refusal, or — when `stop_after_started` is
+    /// `Some(n)` — once `n` jobs have started. A batch that is entirely under
+    /// the cap emits no refusal and no further event until yt-dlp reports
+    /// back, so the count is what terminates that case instead of a hang.
+    async fn drive_download_batch(
+        cfg: AppConfig,
+        urls: Vec<String>,
+        stop_after_started: Option<usize>,
+    ) -> (Vec<RecordingJob>, Vec<DaemonEvent>) {
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        for url in urls {
+            cmd_tx
+                .send(RecordingCommand::DownloadVod {
+                    url: url.clone(),
+                    channel_name: "Some Creator".into(),
+                    platform: PlatformKind::YouTube,
+                    output_path: std::env::temp_dir().join("strivo-cap-test").join(&url),
+                    cookies_path: None,
+                    post_title: Some(format!("Episode for {url}")),
+                    channel_id: Some("UC_channel".into()),
+                })
+                .expect("send DownloadVod");
+        }
+        drop(cmd_tx);
+
+        let cancel = CancellationToken::new();
+        let manager = tokio::spawn(run_manager(cfg, None, cmd_rx, event_tx, cancel.clone()));
+
+        let mut started = Vec::new();
+        let mut notifications = Vec::new();
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                DaemonEvent::RecordingStarted { job } => started.push(job),
+                other @ DaemonEvent::Notification { .. } => {
+                    notifications.push(other);
+                    break;
+                }
+                _ => {}
+            }
+            if stop_after_started.is_some_and(|n| started.len() >= n) {
+                break;
+            }
+        }
+        cancel.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), manager).await;
+        (started, notifications)
+    }
+
+    #[tokio::test]
+    async fn download_vod_respects_concurrent_recording_cap() {
+        let mut cfg = AppConfig::default();
+        cfg.monitor_limits.max_concurrent_recordings = 2;
+        let urls: Vec<String> = (0..20)
+            .map(|i| format!("https://example.invalid/watch?v=vod{i}"))
+            .collect();
+
+        let (started, notifications) = drive_download_batch(cfg, urls, None).await;
+
+        assert_eq!(
+            started.len(),
+            2,
+            "only `cap` VOD pulls may spawn a yt-dlp; the rest must be refused"
+        );
+        assert_eq!(
+            notifications.len(),
+            1,
+            "each refused pull reports back to the user with a reason"
+        );
+        let DaemonEvent::Notification { title, body } = &notifications[0] else {
+            unreachable!("collected only Notification events");
+        };
+        assert_eq!(title, "Download limit reached");
+        // The refusal has to name the item, or a 20-item pull that starts 2
+        // looks like 18 items silently disappearing.
+        assert!(
+            body.contains("Episode for https://example.invalid/watch?v=vod2")
+                && body.contains("2 concurrent recording cap"),
+            "refusal must identify the refused item and the cap: {body}"
+        );
+        // A refused pull leaves no trace: the started jobs are the only ones,
+        // and each is stamped with its own URL.
+        let mut started_urls: Vec<String> = started
+            .iter()
+            .filter_map(|j| j.source_url.clone())
+            .collect();
+        started_urls.sort();
+        assert_eq!(
+            started_urls,
+            vec![
+                "https://example.invalid/watch?v=vod0".to_string(),
+                "https://example.invalid/watch?v=vod1".to_string(),
+            ],
+            "the first `cap` URLs in request order are the ones that run"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_vod_cap_of_zero_stays_unlimited() {
+        let cfg = AppConfig::default();
+        let urls: Vec<String> = (0..5)
+            .map(|i| format!("https://example.invalid/watch?v=free{i}"))
+            .collect();
+
+        let (started, notifications) = drive_download_batch(cfg, urls, Some(5)).await;
+
+        assert_eq!(
+            started.len(),
+            5,
+            "0 means unlimited, matching the Start arm"
+        );
+        assert!(notifications.is_empty());
     }
 }

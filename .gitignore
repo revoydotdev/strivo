@@ -24,6 +24,10 @@ perf.data.old
 *.deb
 *.rpm
 
+# Local bench / soak / bundle-measurement output (scripts/bench_*.sh,
+# soak_*.sh, measure_bundle.sh). Numbers worth keeping go under docs/perf/.
+/artifacts/
+
 # Python tooling caches (scripts/, packaging/)
 __pycache__/
 *.pyc

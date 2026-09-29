@@ -83,6 +83,11 @@
    border, fill and radius it set silently vanished. Same intent, expressed
    with the tokens .ch-ctx-menu above already uses. */
 .playlist-picker-card,.playlist-viewer-card{width:min(48rem,calc(100vw - 2rem));max-height:min(82vh,52rem);overflow:auto}
+/* `.app-modal .card` is (0,2,0) and so outranks `.playlist-viewer-card`
+   (0,1,0), silently pinning every card inside a modal to 480px. Restated at
+   matching specificity for the pull modal only, whose rows need the width:
+   checkbox + thumb + title + badge + button do not fit in 480px. */
+.app-modal .playlist-viewer-card:has(#pm-list){width:min(48rem,calc(100vw - 2rem))}
 .playlist-viewer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:1rem}
 .playlist-viewer-head h2{margin:.1rem 0 .35rem}
 .bulk-scope-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:1rem 0 .35rem}
@@ -99,3 +104,23 @@
 .playlist-item-row a{color:var(--fg);font-size:1.15em}
 .playlist-viewer-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1rem;position:sticky;bottom:0;padding-top:.75rem;background:var(--surface);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur)}
 @media (max-width:40rem){.playlist-item-row{grid-template-columns:auto 5rem 1fr auto}.playlist-item-row img,.playlist-item-thumb{width:5rem}.playlist-viewer-actions{flex-wrap:wrap}.playlist-viewer-actions button{flex:1}}
+
+/* Add-Channel "Pull past media" — a selectable VOD list in the playlist
+   viewer's modal shell. The rows are the channel-detail .media-pill, so these
+   declarations carry selection affordances only and no colour of their own:
+   the ticked wash is the one the recordings table already uses for a selected
+   row (tr.rec-sel), and the focus ring is the app-wide checkbox focus token. */
+.pm-label{cursor:pointer}
+.pm-row:has(.pm-check:checked){background:color-mix(in srgb, var(--accent) 14%, transparent)}
+.pm-row:has(.pm-check:focus-visible){outline:2px solid var(--accent2);outline-offset:2px}
+.pm-all-row{display:flex;align-items:center;gap:.4rem;margin:0 0 .6rem;color:var(--muted)}
+.wizard-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.6rem}
+.wizard-actions button{flex:1 1 auto}
+.wizard-actions #aw-confirm{margin-top:0;width:auto}
+.wizard-confirm .pg-cap-hint{margin:.6rem 0 0}
+/* Narrow: `.mp-info` is `flex:1 1 0%` with `min-width:0`, so it can only grow
+   out of free space — given none, it collapses to 0 and takes the title with
+   it, while the rigid thumb absorbs every pixel of shrink. So the two fixed
+   columns have to go for the text to survive; what is left is the row's actual
+   content. The thumbnail is a ▶ placeholder unless a real one is cached. */
+@media (max-width:40rem){.pm-row .mp-meta,.pm-row .mp-thumb{display:none}}

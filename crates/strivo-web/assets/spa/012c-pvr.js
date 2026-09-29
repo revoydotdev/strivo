@@ -799,9 +799,13 @@ function renderPatreonPosts(c) {
 // seedVodDownloadStateFromRecCache() on any event that can change it
 // (RecordingStarted/Finished, RecordingsPruned). Handles both branches:
 // a Patreon creator's posts (renderPatreonPosts) and an ordinary
-// channel's Past Broadcasts/Recent uploads (paintChannelVods). No-ops
-// when no channel detail is open.
+// channel's Past Broadcasts/Recent uploads (paintChannelVods). The
+// channel-detail half no-ops when no channel detail is open.
 function repaintOpenChannelDownloads() {
+  // The Add-Channel "Pull past media" rows read the same derived state, so
+  // they repaint on the same two triggers. Runs before the channel-detail
+  // early-return below — that half is this pane's modal, this is the wizard's.
+  paintPullMediaList();
   if (!selectedChannelKey) return;
   if (selectedChannelKey.startsWith("Patreon:")) {
     const id = selectedChannelKey.slice("Patreon:".length);

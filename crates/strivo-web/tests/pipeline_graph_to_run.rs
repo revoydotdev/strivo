@@ -47,8 +47,13 @@ const KEY: &str = "t54-graph-to-run-key";
 /// One sandbox for the whole binary. `XDG_DATA_HOME` is how
 /// `AppConfig::data_dir()` resolves and `XDG_STATE_HOME` is how `state_dir()`
 /// — and therefore `strivo.sock` — resolves, so both are pointed at a
-/// throwaway directory. Set once: tests share a process, and two different
-/// values would be a race rather than a sandbox.
+/// throwaway directory.
+///
+/// Process-wide, because `set_var` is process-wide: the socket path is derived
+/// from the environment, so two tests wanting two sandboxes would race on it
+/// rather than get two. Concurrency is therefore confined to one test at a
+/// time via [`serial`], and the two tests that need the daemon each take it in
+/// turn.
 fn sandbox() -> &'static str {
     static DIR: OnceLock<String> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -59,6 +64,16 @@ fn sandbox() -> &'static str {
         std::env::set_var("XDG_STATE_HOME", &dir);
         dir.to_string_lossy().to_string()
     })
+}
+
+/// The one shared sandbox, one test at a time. `strivo.sock` is a single path
+/// derived from process-wide state, so two tests binding it concurrently
+/// collide with `AddrInUse` — which is a harness artefact, not a product
+/// defect, and must not be allowed to read as one.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().await
 }
 
 /// What the fake daemon observed. Handed back so each test can prove the
@@ -124,7 +139,7 @@ async fn fake_daemon() -> Daemon {
             };
             use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
             let mut reader = BufReader::new(&mut stream).lines();
-            let Some(Ok(line)) = reader.next_line().await else {
+            let Ok(Some(line)) = reader.next_line().await else {
                 continue;
             };
             match serde_json::from_str::<ClientMessage>(&line) {
@@ -152,13 +167,18 @@ async fn fake_daemon() -> Daemon {
 }
 
 fn app() -> axum::Router {
-    build_router(AppState::test_state(KEY))
+    build_router(AppState::test_state_at(
+        KEY,
+        strivo_core::ipc::Endpoint::Path(
+            strivo_core::config::AppConfig::state_dir().join("strivo.sock"),
+        ),
+    ))
 }
 
 async fn post_run(app: axum::Router, body: Value) -> (StatusCode, Value) {
     let request = Request::builder()
         .method(Method::POST)
-        .uri("/api/v1/pipelines/run")
+        .uri("/api/v1/pipelines/runs")
         .header("x-api-key", KEY)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
@@ -179,7 +199,8 @@ async fn get_runs(app: axum::Router) -> Value {
         .expect("request");
     let response = app.oneshot(request).await.expect("router ran");
     assert_eq!(response.status(), StatusCode::OK, "runs route answered");
-    to_bytes(response.into_body(), 1 << 22).await.expect("body")
+    let bytes = to_bytes(response.into_body(), 1 << 22).await.expect("body");
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
 /// The authored graph, as the browser sends it. Three stages that differ in
@@ -192,15 +213,19 @@ fn authored_graph(recording_id: uuid::Uuid) -> Pipeline {
     let root = pipeline.add_stage(
         Stage::new(
             "Detect cuepoints",
-            StageKind::Custom("cuepoints.extract".into()),
+            StageKind::Custom("crunchr.extract".into()),
         )
-        .with_dispatch(StageDispatch::new("cuepoints", "extract").for_recording(recording_id))
+        // These must be names `strivo_plugins::register_all` installs, or the
+        // seventh rule refuses the graph before the daemon sees it and the test
+        // passes for the wrong reason. They were `cuepoints`/`captions`, which
+        // no build registers.
+        .with_dispatch(StageDispatch::new("crunchr", "extract").for_recording(recording_id))
         .with_requires(vec![ResourceLock::Cpu { cap: 2 }])
         .with_max_attempts(5),
     );
     let branch = pipeline.add_stage(
         Stage::new("Export captions", StageKind::Subtitle)
-            .with_dispatch(StageDispatch::new("captions", "export").for_recording(recording_id))
+            .with_dispatch(StageDispatch::new("artifacts", "captions").for_recording(recording_id))
             .with_inputs(vec![root])
             .with_requires(vec![ResourceLock::Gpu])
             .with_max_attempts(2),
@@ -221,21 +246,27 @@ fn authored_graph(recording_id: uuid::Uuid) -> Pipeline {
 /// One ordered row per stage: `(name, kind, lock labels, attempts)`. A `Vec`,
 /// so a re-ordering is a difference; and read off the serialised payload for
 /// the HTTP assertions, off the value for the daemon-side one.
+///
+/// `kind` and `requires` are externally-tagged enums, so they arrive as
+/// objects (`{"Custom":"…"}`, `{"Cpu":{"cap":2}}`) and `as_str` would silently
+/// yield `""` for every one. Each row is re-parsed into the real type and
+/// labelled by its own `label()`, so the HTTP rows and the daemon-side rows
+/// are produced by the same code rather than by a second formatting rule that
+/// can drift from the first.
 fn shape_from_value(pipeline: &Value) -> Vec<(String, String, Vec<String>, u64)> {
     pipeline["stages"]
         .as_array()
         .expect("stages array")
         .iter()
         .map(|stage| {
+            let kind: StageKind =
+                serde_json::from_value(stage["kind"].clone()).expect("a stage kind round-trips");
+            let requires: Vec<ResourceLock> =
+                serde_json::from_value(stage["requires"].clone()).expect("stage locks round-trip");
             (
                 stage["name"].as_str().unwrap_or_default().to_string(),
-                stage["kind"].as_str().unwrap_or_default().to_string(),
-                stage["requires"]
-                    .as_array()
-                    .expect("requires")
-                    .iter()
-                    .map(|l| l.as_str().unwrap_or_default().to_string())
-                    .collect(),
+                kind.label(),
+                requires.iter().map(|l| l.label()).collect(),
                 stage["max_attempts"].as_u64().unwrap_or_default(),
             )
         })
@@ -276,8 +307,9 @@ fn expected_shape(pipeline: &Pipeline) -> Vec<(String, String, Vec<String>, u64)
 /// its identity and its ordered stages back at all three points.
 #[tokio::test]
 async fn an_authored_graph_reaches_the_executor_and_history_with_its_identity() {
+    let _guard = serial().await;
     sandbox();
-    let daemon = fake_daemon().await;
+    let mut daemon = fake_daemon().await;
     let graph = authored_graph(daemon.recording_id);
     let authored_id = graph.id.to_string();
     let expected = expected_shape(&graph);
@@ -354,7 +386,7 @@ fn the_ordered_comparison_rejects_a_reordered_graph() {
         expected, reordered_shape,
         "a reordered graph must not compare equal, or the order assertion proves nothing"
     );
-    assert_eq!(expected[0].1, "custom(cuepoints.extract)");
+    assert_eq!(expected[0].1, "custom(crunchr.extract)");
     assert_eq!(reordered_shape[0].1, "concat");
     // And the multiset is identical, which is precisely why a set-based
     // comparison would have passed the defect.
@@ -370,8 +402,9 @@ fn the_ordered_comparison_rejects_a_reordered_graph() {
 /// **before** the IPC write, so an unresolvable dispatch never becomes a run.
 #[tokio::test]
 async fn an_unresolvable_dispatch_is_refused_before_the_daemon_ever_sees_it() {
+    let _guard = serial().await;
     sandbox();
-    let daemon = fake_daemon().await;
+    let mut daemon = fake_daemon().await;
     let mut graph = authored_graph(daemon.recording_id);
     graph.stages[0].dispatch = Some(StageDispatch::new("not-installed", "extract"));
 
@@ -394,7 +427,19 @@ async fn an_unresolvable_dispatch_is_refused_before_the_daemon_ever_sees_it() {
             .is_err(),
         "nothing may reach the executor: the backstop is before the IPC write"
     );
-    // And the runs route has no record of it.
+    // And the runs route has no record of THIS graph. Asserted by id rather
+    // than by count: the sandbox is shared across the binary's tests, so an
+    // earlier test's legitimate run is in the same registry, and counting
+    // would blame the refusal for a run it did not create.
     let runs = get_runs(app()).await;
-    assert_eq!(runs["runs"].as_array().map(Vec::len), Some(0));
+    let refused_id = graph.id.to_string();
+    let listed = runs["runs"]
+        .as_array()
+        .expect("runs array")
+        .iter()
+        .find(|run| run["id"].as_str() == Some(refused_id.as_str()));
+    assert!(
+        listed.is_none(),
+        "a refused graph must leave no run: {listed:?}"
+    );
 }

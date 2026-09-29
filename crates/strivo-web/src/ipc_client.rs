@@ -73,6 +73,13 @@ impl IpcClient {
         }
     }
 
+    /// An `IpcClient` dialling a caller-chosen socket, for a test that stands
+    /// up its own daemon. `pub(crate)` for the same reason as
+    /// [`Self::disconnected`]: not part of the public API.
+    pub(crate) fn at(endpoint: Endpoint) -> Self {
+        Self { endpoint }
+    }
+
     /// — fast enough that we don't bother caching at the web layer.
     pub async fn snapshot(&self) -> Result<ServerMessage> {
         ipc::fetch_snapshot(&self.endpoint)

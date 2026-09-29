@@ -62,6 +62,27 @@ impl ArtifactPlugin {
             "mime": mime,
         })
     }
+
+    /// A caption artifact, which says two things the generic descriptor cannot.
+    ///
+    /// `coordinate` is which clock the timestamps are on. This stage reads the
+    /// Crunchr transcript and knows no edit, so its times are **source** time
+    /// and a composition export is a different artifact with composition times.
+    /// `translation` is what was done to the text: the only backend that ships
+    /// is a pass-through, and an artifact that called itself translated would
+    /// be a lie a reader has no way to check.
+    fn caption_descriptor(
+        kind: &str,
+        path: &Path,
+        mime: &str,
+        translation: &strivo_captions::Translation,
+    ) -> serde_json::Value {
+        let mut value = Self::descriptor(kind, path, mime);
+        value["coordinate"] = serde_json::json!("source");
+        value["translation"] = serde_json::json!(translation.label());
+        value["translation_kind"] = serde_json::json!(translation.kind);
+        value
+    }
 }
 
 impl Plugin for ArtifactPlugin {
@@ -369,11 +390,17 @@ fn captions(
             strivo_captions::to_txt(&segments),
         ),
     ];
+    let translation = strivo_captions::Translation::describe(&strivo_captions::IdentityTranslator);
     let mut artifacts = Vec::new();
     for (name, kind, mime, body) in outputs {
         let path = output_dir.join(name);
         write_atomic(&path, body.as_bytes())?;
-        artifacts.push(ArtifactPlugin::descriptor(kind, &path, mime));
+        artifacts.push(ArtifactPlugin::caption_descriptor(
+            kind,
+            &path,
+            mime,
+            &translation,
+        ));
     }
     Ok(StageExecutionResult {
         artifacts,
@@ -809,6 +836,27 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("no Crunchr transcript"), "{error}");
+    }
+
+    #[test]
+    fn caption_artifacts_declare_their_clock_and_say_they_did_not_translate() {
+        let (_dir, crunchr, output, input) = fixture();
+        let result = captions(input.id, &crunchr, &output).unwrap();
+        assert_eq!(result.artifacts.len(), 3);
+        for artifact in &result.artifacts {
+            assert_eq!(
+                artifact["coordinate"], "source",
+                "this stage reads the transcript and knows no edit, so its \\
+                 timestamps are source time and must say so: {artifact}"
+            );
+            assert_eq!(artifact["translation_kind"], "identity");
+            let label = artifact["translation"].as_str().unwrap_or_default();
+            assert!(
+                label.contains("identity") && label.contains("no translation"),
+                "the artifact must not present a pass-through as a translation: {label}"
+            );
+            assert!(!label.to_lowercase().contains("translated by"), "{label}");
+        }
     }
 
     #[test]

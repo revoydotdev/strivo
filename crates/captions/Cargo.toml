@@ -15,3 +15,15 @@ path = "src/lib.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+# The one time model. `strivo-editor` is a *user* of nothing here — the
+# dependency runs editor-ward, so a caption coordinate can be todo 22's
+# `Timed` and a caption duration can be remapped through the interval map
+# instead of a second float-seconds copy of it.
+strivo-editor = { path = "../editor" }
+# Brand-level safe areas, so "inside the frame" means the same rectangle for
+# a caption as for a watermark. Reused, not redefined.
+strivo-branding = { path = "../branding" }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"

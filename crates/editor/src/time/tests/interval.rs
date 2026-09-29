@@ -264,3 +264,69 @@ fn the_map_survives_serialisation() {
     assert_eq!(output.start(), at(0));
     assert_eq!(output.duration().expect("length"), at(1_000_000));
 }
+
+/// Given a source range that lies inside one kept segment
+/// When the range is placed on the output timeline
+/// Then both ends move by the segment's rate, and a range that leaves its
+/// segment has no answer at all.
+#[test]
+fn a_whole_source_range_places_by_the_rate_and_refuses_to_straddle() {
+    let mut map = IntervalMap::new();
+    map.push_source(segment("a", 0, 1_000_000, Rate::ONE))
+        .expect("first segment");
+    map.push_source(segment("a", 2_000_000, 2_000_000, Rate::new(1, 2).unwrap()))
+        .expect("second segment at 2x");
+
+    let inside = map
+        .output_spans_of(super::span(2_500_000, 500_000))
+        .expect("a range wholly inside the second segment");
+    assert_eq!(inside.len(), 1);
+    assert_eq!(inside[0].start(), at(1_250_000));
+    assert_eq!(inside[0].end(), at(1_500_000));
+
+    // Source [0.9s, 1.3s): the first half is kept, the second is deleted. Two
+    // separate one-instant queries would each answer, from different segments,
+    // and pairing them would draw a continuous span across the cut.
+    let straddling = super::span(900_000, 400_000);
+    assert!(map.output_spans_of(straddling).is_err());
+    assert!(map.composition_times_of(at(900_000)).is_ok());
+    assert!(map.composition_times_of(at(1_300_000)).is_err());
+}
+
+#[test]
+fn a_repeated_span_reports_every_output_interval_it_occupies() {
+    let mut map = IntervalMap::new();
+    map.push_source(segment("a", 0, 1_000_000, Rate::ONE))
+        .expect("first use");
+    map.push_source(segment("a", 0, 1_000_000, Rate::ONE))
+        .expect("the same span again");
+
+    let both = map
+        .output_spans_of(super::span(100_000, 200_000))
+        .expect("a repeated span is placed twice");
+    assert_eq!(
+        both.len(),
+        2,
+        "the repeat is real and dropping it loses a cue"
+    );
+    assert_eq!((both[0].start(), both[0].end()), (at(100_000), at(300_000)));
+    assert_eq!(
+        (both[1].start(), both[1].end()),
+        (at(1_100_000), at(1_300_000)),
+        "and it lands in the second use's output position"
+    );
+}
+
+#[test]
+fn an_empty_output_spans_answer_is_an_unmapped_source_coordinate() {
+    let mut map = IntervalMap::new();
+    map.push_source(segment("a", 0, 1_000_000, Rate::ONE))
+        .expect("one segment");
+    assert_eq!(
+        map.output_spans_of(super::span(5_000_000, 1_000)),
+        Err(TimeError::Unmapped {
+            coordinate: Coordinate::Source,
+            at: 5_000_000,
+        })
+    );
+}

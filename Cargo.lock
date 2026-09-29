@@ -3310,6 +3310,9 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "strivo-branding",
+ "strivo-editor",
+ "tempfile",
 ]
 
 [[package]]

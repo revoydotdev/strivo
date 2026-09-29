@@ -902,8 +902,11 @@ async fn captions_export(
         })
         .collect();
     // Apply translation. Today only IdentityTranslator ships; a future
-    // iteration registers real backends (NLLB / Argos / OpenAI).
+    // iteration registers real backends (NLLB / Argos / OpenAI). The response
+    // carries what the backend actually was, so a pass-through is never
+    // delivered under a "translated" label.
     let translator = strivo_captions::IdentityTranslator;
+    let translation = strivo_captions::Translation::describe(&translator);
     let translated = match strivo_captions::apply_translation(&segments, &translator) {
         Ok(out) => out,
         Err(e) => return Problem::internal(format!("translate: {e}")).into_response(),
@@ -965,12 +968,24 @@ async fn captions_export(
         "_",
     );
     let filename = format!("{safe}.{}.{ext}", q.lang);
+    // Declares which clock the timestamps are on and what the text went
+    // through, so a pass-through is never delivered under a "translated" label.
+    // This stage knows no edit, so its times are source time.
+    let translation_label = translation.label();
     (
         [
             (axum::http::header::CONTENT_TYPE, mime),
             (
                 axum::http::header::CONTENT_DISPOSITION,
                 Box::leak(format!("attachment; filename=\"{filename}\"").into_boxed_str()),
+            ),
+            (
+                axum::http::header::HeaderName::from_static("x-strivo-caption-coordinate"),
+                "source",
+            ),
+            (
+                axum::http::header::HeaderName::from_static("x-strivo-caption-translation"),
+                translation_label.as_ref(),
             ),
         ],
         body,

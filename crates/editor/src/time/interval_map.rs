@@ -337,6 +337,45 @@ impl IntervalMap {
         Ok(hits)
     }
 
+    /// Every output interval a whole source range occupies — one per entry that
+    /// contains all of it.
+    ///
+    /// [`Self::composition_times_of`] cannot answer this. It takes one instant,
+    /// so two instants answered separately may come from *different* entries,
+    /// and pairing them would draw one continuous thing across the cut between
+    /// them. This takes the range itself and only reports entries that contain
+    /// all of it, so a range running out of a kept segment has no answer here
+    /// and is refused rather than joined up.
+    ///
+    /// More than one answer is the repeated-clip case, exactly as it is above.
+    pub fn output_spans_of(&self, range: Interval) -> Result<Vec<Interval>, TimeError> {
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            let Entry::Source { span, output } = entry else {
+                continue;
+            };
+            if range.start() < span.range.start() || range.end() > span.range.end() {
+                continue;
+            }
+            let offset = span.rate.output_of(MediaTime::from_micros(
+                range.start().micros() - span.range.start().micros(),
+            )?)?;
+            let start = MediaTime::from_micros(output.start().micros() + offset.micros())?;
+            let length = span.rate.output_of(range.duration()?)?;
+            out.push(Interval::new(
+                start,
+                MediaTime::from_micros(start.micros() + length.micros())?,
+            )?);
+        }
+        if out.is_empty() {
+            return Err(Unmapped {
+                coordinate: Coordinate::Source,
+                at: range.start().micros(),
+            });
+        }
+        Ok(out)
+    }
+
     /// The declared-coordinate entry point. A source-time coordinate is
     /// answered with composition positions, a composition-time coordinate
     /// with a source position, and the declaration is the only thing that

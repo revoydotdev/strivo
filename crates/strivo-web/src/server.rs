@@ -216,6 +216,16 @@ impl AppState {
             jobs_db_path: Arc::new(strivo_core::config::AppConfig::data_dir().join("jobs.db")),
         }
     }
+
+    /// [`Self::test_state`] with the IPC client pointed at a real socket.
+    /// `test_state` dials a path that does not exist, so anything that
+    /// reaches the daemon there gets a 503.
+    pub fn test_state_at(api_key: &str, endpoint: strivo_core::ipc::Endpoint) -> Self {
+        Self {
+            ipc: Arc::new(crate::ipc_client::IpcClient::at(endpoint)),
+            ..Self::test_state(api_key)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -37,7 +37,7 @@ tokio = { version = "1", features = ["full"] }
 
 # Portable executable lookup. Used by check_external_tools; must be the crate
 # rather than the `which` binary, which does not exist on Windows.
-which = "7"
+which = "8"
 
 # HTTP
 reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls"], default-features = false }

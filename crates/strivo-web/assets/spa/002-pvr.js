@@ -189,8 +189,3 @@ const API = {
   settings: () => API._fetch("/settings"),
   patreon: () => API._fetch("/patreon"),
   gantt: () => API._fetch("/gantt"),
-  // Read-only plugin list — used both by the Creator plugin hub/pane
-  // wiring below AND by the (edition-agnostic) recording-info modal to
-  // decide which per-plugin action buttons to show, so it must survive
-  // PVR stripping.
-  plugins: () => API._fetch("/plugins"),

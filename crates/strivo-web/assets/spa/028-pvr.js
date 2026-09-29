@@ -205,7 +205,10 @@ async function openRecordingInfo(jobId, opts = {}) {
     // missing); a failure must not block the modal from rendering.
     [rec, plugins, probe] = await Promise.all([
       API.recordingOne(jobId),
-      API.plugins().catch(() => ({ plugins: [] })),
+      // API.pluginList is defined only in the Creator bundle (003-creator.js).
+      typeof API.pluginList === "function"
+        ? API.pluginList().catch(() => ({ plugins: [] }))
+        : Promise.resolve({ plugins: [] }),
       API.recordingProbe(jobId).catch(() => null),
     ]);
   } catch (e) {

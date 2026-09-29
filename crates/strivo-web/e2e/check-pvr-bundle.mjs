@@ -89,7 +89,9 @@ function callSitesFor(strippedText, name) {
   // (the codebase's own idiom for a call whose target may not exist in
   // this bundle, e.g. teardownDataviz/teardownArchive/renderPipelines) —
   // that's the fix, not a violation, so skip calls sitting under the guard.
-  const guardRe = new RegExp(`typeof\\s+${name}\\s*===?\\s*["']function["']`);
+  // The member form `typeof API.name === "function"` guards an API method
+  // that only a Creator module defines (e.g. API.pluginList in 028-pvr.js).
+  const guardRe = new RegExp(`typeof\\s+(?:API\\.)?${name}\\s*===?\\s*["']function["']`);
   const lines = strippedText.split("\n");
   const hits = [];
   lines.forEach((line, i) => {
@@ -193,7 +195,7 @@ if (violations.length) {
 const symbolLeaks = [];
 for (const name of creatorOnlyNames) {
   const wordRe = new RegExp(`(?<![\\w$])${name}(?![\\w$])`, "g");
-  const guardRe = new RegExp(`typeof\\s+${name}\\s*===?\\s*["']function["']`);
+  const guardRe = new RegExp(`typeof\\s+(?:API\\.)?${name}\\s*===?\\s*["']function["']`);
   const callRe = new RegExp(`(?<![\\w$])${name}\\s*\\(`);
   const lines = builtSpaJs.split("\n");
   let leaks = 0;

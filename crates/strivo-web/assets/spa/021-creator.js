@@ -480,7 +480,7 @@ async function renderPluginHub() {
   // Fetch licence + plugins in parallel; licence failure must not block
   // the hub render — it just means we hide the upgrade card this paint.
   const [resp, licence] = await Promise.all([
-    API.plugins(),
+    API.pluginList(),
     API.licenceStatus().catch(() => null),
   ]);
   root.removeAttribute("aria-busy");

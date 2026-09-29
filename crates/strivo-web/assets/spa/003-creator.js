@@ -1,3 +1,7 @@
+  // Read-only plugin list — used by the plugin hub/pane and by the
+  // recording-info modal (028-pvr.js), which checks for this method before
+  // calling it: the PVR daemon mounts no /plugins route.
+  pluginList: () => API._fetch("/plugins"),
   pluginRpc: (plugin, verb, body) =>
     API._fetch(`/plugins/${encodeURIComponent(plugin)}/${encodeURIComponent(verb)}`, {
       method: "POST",

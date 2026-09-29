@@ -417,6 +417,34 @@ impl YouTubePlatform {
         bail!("YouTube API exhausted retries for {url}")
     }
 
+    /// Resolve a handle (`@somechannel`) to its `(channel id, channel title)`
+    /// via `/channels`. Needs stored YouTube auth: `api_get` carries the
+    /// bearer token and repairs an expired one on a 401.
+    ///
+    /// `forHandle` covers every channel created since handles existed;
+    /// `forUsername` only resolves the legacy `/user/<name>` ones. It is a
+    /// fallback, not a parallel probe — a second request costs a quota unit
+    /// and the first answer is right the overwhelming majority of the time.
+    pub async fn lookup_channel_id_by_handle(&self, handle: &str) -> Result<(String, String)> {
+        let mut found = None;
+        for key in ["forHandle", "forUsername"] {
+            let url = format!(
+                "{YOUTUBE_API_URL}/channels?{}",
+                channel_lookup_query(key, handle)
+            );
+            let resp: VideoListResponse = self.api_get(&url).await?;
+            found = resp.items.unwrap_or_default().into_iter().find_map(|item| {
+                let id = item.id?;
+                let title = item.snippet.and_then(|s| s.title).unwrap_or_default();
+                Some((id, title))
+            });
+            if found.is_some() {
+                break;
+            }
+        }
+        found.with_context(|| format!("no such YouTube channel: {handle}"))
+    }
+
     /// Check RSS feed for recent videos from a channel (free, no quota)
     async fn check_rss_for_live(&self, channel_id: &str) -> Result<Vec<String>> {
         let url = format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}");
@@ -1005,6 +1033,20 @@ impl Platform for YouTubePlatform {
     }
 }
 
+/// Query string for one `/channels` handle-lookup mode (`forHandle` /
+/// `forUsername`). Percent-encodes the user-supplied handle instead of
+/// interpolating it into the URL, and strips the leading `@` so a handle
+/// pasted off a channel URL works unchanged.
+fn channel_lookup_query(key: &str, handle: &str) -> String {
+    let handle = handle.trim_start_matches('@');
+    let mut url = reqwest::Url::parse(&format!("{YOUTUBE_API_URL}/channels"))
+        .expect("YOUTUBE_API_URL is a compile-time constant");
+    url.query_pairs_mut()
+        .append_pair("part", "snippet")
+        .append_pair(key, handle);
+    url.query().unwrap_or_default().to_string()
+}
+
 /// Flip `kind` to LiveBroadcast for any VOD whose id is in `live_ids`
 /// (those carried `liveStreamingDetails.actualStartTime`). Pure so the
 /// live/upload partition is unit-testable without the network.
@@ -1055,6 +1097,31 @@ mod tests {
             .count();
         let uploads = vods.iter().filter(|v| v.kind == VodKind::Upload).count();
         assert_eq!(streams + uploads, vods.len());
+    }
+}
+
+#[cfg(test)]
+mod handle_lookup_tests {
+    use super::channel_lookup_query;
+
+    #[test]
+    fn handle_query_strips_at_and_uses_the_requested_key() {
+        assert_eq!(
+            channel_lookup_query("forHandle", "@somechannel"),
+            "part=snippet&forHandle=somechannel"
+        );
+        assert_eq!(
+            channel_lookup_query("forUsername", "somechannel"),
+            "part=snippet&forUsername=somechannel"
+        );
+    }
+
+    /// A handle is user input: it must be encoded, not spliced into the query
+    /// string, or a value containing `&` would forge extra parameters.
+    #[test]
+    fn handle_query_percent_encodes_odd_input() {
+        let query = channel_lookup_query("forHandle", "a&b=c d");
+        assert_eq!(query, "part=snippet&forHandle=a%26b%3Dc+d");
     }
 }
 

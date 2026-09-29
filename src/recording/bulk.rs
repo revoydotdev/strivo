@@ -254,8 +254,9 @@ async fn fetch_recent_vods(
 }
 
 /// Resolve a human-entered identifier to a channel id (task #19). Twitch
-/// resolves a login to its numeric id; YouTube/Patreon have no public search
-/// wired, so the entered id is accepted as-is.
+/// resolves a login to its numeric id; YouTube resolves a handle to a `UC…`
+/// id; Patreon has no public search wired, so the entered id is accepted
+/// as-is.
 async fn resolve_channel(
     config: &AppConfig,
     platform: PlatformKind,
@@ -280,8 +281,38 @@ async fn resolve_channel(
                 .with_context(|| format!("no Twitch channel for login '{query}'"))?;
             Ok((id, display_name))
         }
-        PlatformKind::YouTube | PlatformKind::Patreon => Ok((query.to_string(), query.to_string())),
+        PlatformKind::YouTube => {
+            // A pasted channel id is already the answer; resolving it would
+            // spend a request on a value the user gave us verbatim.
+            if looks_like_youtube_channel_id(query) {
+                return Ok((query.to_string(), query.to_string()));
+            }
+            let cfg = config
+                .youtube
+                .clone()
+                .context("youtube section missing in config")?;
+            let yt = crate::platform::youtube::YouTubePlatform::new(
+                cfg.client_id,
+                cfg.client_secret,
+                cfg.cookies_path.clone(),
+            );
+            yt.load_stored_tokens().await.context("youtube auth")?;
+            yt.lookup_channel_id_by_handle(query)
+                .await
+                .with_context(|| format!("no YouTube channel for handle '{query}'"))
+        }
+        PlatformKind::Patreon => Ok((query.to_string(), query.to_string())),
     }
+}
+
+/// A YouTube channel id is `UC` + 22 url-safe characters. Recognising it keeps
+/// the paste-your-id workflow off the network entirely.
+fn looks_like_youtube_channel_id(query: &str) -> bool {
+    query.len() > 20
+        && query.starts_with("UC")
+        && query
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Resolve a channel's catalog and run the pull, emitting BulkProgress.
@@ -514,5 +545,36 @@ async fn resolve_vods(
             pt.load_stored_tokens().await.context("patreon auth")?;
             pt.fetch_channel_vods(channel_id, None, None).await
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_channel_tests {
+    use super::{looks_like_youtube_channel_id, resolve_channel};
+    use crate::config::AppConfig;
+    use crate::platform::PlatformKind;
+
+    /// The short-circuit must not touch config, auth, or the network: this
+    /// config carries no credentials, so any lookup attempt would fail here.
+    #[tokio::test]
+    async fn a_pasted_channel_id_resolves_to_itself() {
+        let (id, name) = resolve_channel(
+            &AppConfig::default(),
+            PlatformKind::YouTube,
+            "UCkqvT9Y7cT_A6aX0bJ9bD8g",
+        )
+        .await
+        .expect("no lookup needed for a channel id");
+        assert_eq!(id, "UCkqvT9Y7cT_A6aX0bJ9bD8g");
+        assert_eq!(name, "UCkqvT9Y7cT_A6aX0bJ9bD8g");
+    }
+
+    /// Handles are far shorter than a channel id and never start with `UC`, so
+    /// the id heuristic must not swallow them.
+    #[test]
+    fn handles_are_not_mistaken_for_channel_ids() {
+        assert!(!looks_like_youtube_channel_id("@somechannel"));
+        assert!(!looks_like_youtube_channel_id("UCshort"));
+        assert!(!looks_like_youtube_channel_id("UCabcdefghijklmnopqrstu v"));
     }
 }

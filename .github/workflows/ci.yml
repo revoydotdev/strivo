@@ -32,7 +32,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, arch]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Scratch on disk, not tmpfs
         # The self-hosted Arch runner's /tmp is a quota-limited tmpfs shared
         # with everything else on the host; cc/rustc temp files there have
@@ -59,7 +59,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, arch]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Scratch on disk, not tmpfs
         # The self-hosted Arch runner's /tmp is a quota-limited tmpfs shared
         # with everything else on the host; cc/rustc temp files there have
@@ -93,7 +93,7 @@ jobs:
     steps:
       # Full history (not the default shallow clone) -- the CHANGELOG check
       # below needs `git describe --tags` / `git log <tag>..HEAD` to work.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -118,7 +118,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, arch]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Scratch on disk, not tmpfs
         # The self-hosted Arch runner's /tmp is a quota-limited tmpfs shared
         # with everything else on the host; cc/rustc temp files there have

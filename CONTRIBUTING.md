@@ -67,6 +67,13 @@ User-visible changes belong under `## [Unreleased]` in
 Removed / Deprecated / Security` bucket. Internal refactors that do not
 affect users do not need an entry.
 
+## Docs discipline
+
+- **ADRs are immutable.** Supersede, never rewrite: add a new ADR under
+  `docs/adr/` and update the status table in `docs/adr/README.md`.
+- **Audit manifests use stable IDs.** In `docs/audits/*/MANIFEST.{json,md}`,
+  never renumber or delete an item; close it and append the evidence.
+
 ## Scope and design
 
 The architectural shape of the project (platform trait, plugin event bus,

@@ -58,7 +58,7 @@ configs carrying `[crunchr]`/`[archiver]` sections still load in the PVR build
 
 ---
 
-## Where StriVo is today (v0.5.0)
+## Where StriVo is today (0.8.0 released 2026-09-20; the Creator wave below is unreleased on main)
 
 ### PVR core — solid ✅
 - Web-only frontend (the ratatui TUI was removed in `2ab4e6c`); `strivo`
@@ -74,13 +74,13 @@ configs carrying `[crunchr]`/`[archiver]` sections still load in the PVR build
 - Desktop notifications now actually fire (✅ this cycle); config + schedule
   state are written atomically (✅ this cycle).
 
-### Creator Edition toolkit — built, partly wired 🟡 (see Creator Edition roadmap)
-~34 in-tree crates under `crates/<name>/`, each pure-data with unit tests, most
-wired to a Pro-gated HTTP endpoint and surfaced on the SPA. Transcription
-(`crunchr`), scene/cue detection (`cuepoints`), chat density (`chat-density`),
-and cross-recording aggregation (`insights`) work and are wired. The analytics
-spine (`dataviz`, `pipelines-dag` + `src/pipeline/`) is built but the daemon
-does not yet drive the executor — the highest-leverage Creator gap.
+### Creator Edition toolkit — the production loop is being wired 🟡 (see Creator Edition roadmap)
+~35 in-tree crates, the daemon-driven DAG executor, and — landed since 0.8.0,
+unreleased — the project schema, time model, single render plan, multi-track
+timeline, mixer, B-roll, reframing, brand assets, captions, undo/branching,
+local and multitrack import, authorable pipeline graphs, live clipping during
+capture, and the release-package state machine. Still open: live run graph,
+template library, connectors, outcome metrics — see "Current position" below.
 
 ---
 
@@ -139,6 +139,64 @@ reference CSS is archived under `docs/archive/`. The settled facts:
 
 Read `spa.css`'s `:root` token block for the authoritative values; new SPA
 components consume those tokens rather than hardcoding colours.
+
+---
+
+## Current position and next steps (2026-10-13)
+
+The work since 0.8.0 follows an execution plan of 104 todos in 17 waves. The
+plan file is untracked local state under `.omo/` (its bookkeeping is checked by
+`scripts/check-plan-deps.mjs`), so this section is its tracked summary. 58 of
+the 104 todos are done; the gate (`cargo fmt`, `clippy --workspace -D warnings`,
+`cargo test --workspace`) is green on `main`.
+
+**Done — Phase 1 (waves 0–4, establish the truth and land the Pro contracts):**
+the consolidated audit register (`docs/audits/2026-09-25-consolidated/`), the
+reproducible performance baseline (`docs/perf/`, `docs/PERFORMANCE.md`), the
+enforcing WCAG 2.2 AA scan, the DESIGN.md token gates, and the nine Pro
+groundwork contracts — capability descriptor, verified entitlement, canonical
+schema, time model, single render plan, durable jobs, media-input admission,
+render isolation, unified revision.
+
+**Done — Phase 2 so far (waves 5–7, most of 8, the first todo of 9):** M0 trust
+repairs; M1 one project for capture and import (local files, OBS multitrack, the
+chat engine, stream events and viewer samples, rights and consent); M2 the
+timeline (edits, mixer, B-roll, reframing, brand assets, captions,
+undo/branching); the node-graph half of the DAG (render, author, validate,
+execute-as-authored) plus live clipping during capture; the release-package
+state machine.
+
+**Next, in dependency order:**
+1. **Finish Wave 8** — the live run graph with per-node status, logs, retry,
+   cancel and artifacts (todo 55); the template library that migrates and
+   retires `RecipeChain` and its four routes (56); cross-archive retrieval
+   into the active project (58 — this is CE-P5).
+2. **Wave 9 — M3, the completed production loop (todos 60–69):** connection
+   vault and capability-driven destinations; the first connector (YouTube
+   resumable upload, verified against a local contract-test server with the
+   real-account step named and explicitly blocked); the
+   metadata/thumbnail/caption/chapter editor; calendar and missed-time
+   recovery; the manual publishing package; QC and a review player; immutable
+   output variants with stale-dependency tracking; export profiles and a batch
+   queue; the security and asset-dependency review; Creator packaging,
+   entitlement design and the release-hold review.
+3. **Mount the engines that landed without a surface:** the chat engine
+   (`a302eb0`; no route starts collection) and the SPA half of the project
+   workspace (14 of 20 Pro panes are still `route: null` — PHASE0/F-12 in the
+   ledger below).
+4. **Wave 10 — M4 measured feedback** (metric dictionary, outcome ingestion,
+   linked source/composition/outcome timeline, dashboards), **Wave 11 — M5**,
+   then the side waves 6b–11b (transcript and moment intelligence, translation
+   aids, real-media contract coverage, external datasets, further
+   destinations).
+5. **PVR hygiene throughout:** the ledger todos at the foot of this file, led
+   by PHASE0/F-11 (the upgrade card never reads `licence.implemented`) and the
+   licence-backend deployment.
+
+**Release position:** `[Unreleased]` in CHANGELOG.md carries `feat:` commits,
+so the derived next version is 0.9.0 (MINOR). The newest release published on
+GitHub is v0.6.0; v0.7.0 and v0.8.0 are tagged in the repository but no release
+workflow run has published them.
 
 ---
 
@@ -202,9 +260,14 @@ The CE-P3 Creator DAG now drives
 alongside the caption branch, and converges both into publish drafts and
 Casebook. Outputs are durable, inspectable, and downloadable from run history.
 
-### CE-P8 · Real-time — "as fast as it is recorded" ⬜ *(headline promise)*
+### CE-P8 · Real-time — "as fast as it is recorded" 🟡 *(headline promise)*
 Streaming incremental extraction *during* capture: extractors tail the live
 segment, write signals, analytics/visualisation update live over SSE.
+- **First slice landed (unreleased):** a reviewed clip renders from finalized
+  capture segments while recording continues, admitted against the byte reserve
+  so acquisition is never starved (`src/recording/live_clip.rs`); extractor
+  signals are written while the capture session is still open.
+- **Still open:** live analytics and visualisation updating over SSE.
 
 ### CE-Capstone · Domain templates ⬜
 On the domain-agnostic core, ship two configs (not codebases): a **Sports**
@@ -254,7 +317,7 @@ fork.
 | `yt-publish` marketplace entry needs YouTube OAuth | ⏸ | Deferred — needs Google Cloud creds |
 | Creator Edition clippy gate | ✅ | CI runs `-D warnings` with the Creator feature |
 | Windows build | ✅ | Ported 2026-08-18. `tokio::net::Unix*` replaced by an `Endpoint`/`Listener`/`Stream` abstraction over named pipes (`src/ipc.rs`); the NDJSON protocol carried over unchanged. Process liveness uses `OpenProcess`/`GetExitCodeProcess`; disk-budget and storage gauge use `GetDiskFreeSpaceExW` (both were silently disabled on Windows before); `strivo enable` installs a Task Scheduler logon task. **Graceful stop was the real risk** — the old `#[cfg(not(unix))]` arm hard-killed ffmpeg, so no Matroska trailer was written; now ffmpeg gets `q` on stdin (needs no console, so it works from a headless daemon) with a console-attach CTRL_BREAK fallback for yt-dlp. Verified on win11-ci: MSVC release build, daemon runs headless over `\\.\pipe\strivo`, web UI serves, and `tests/graceful_stop.rs` proves a stopped recording is finalised and seekable. CI cross-checks the Windows target on every push |
-| Release pipeline | 🟡 | Linux **and macOS** both proven end-to-end via `workflow_dispatch` rehearsals (runs 32185451150, 32189647104): tarball + completions + manpage + verified sha256, macOS artifact is a real Mach-O x86_64 binary. Windows blocked — see the row above. The self-hosted VM runners are driven by `gh-runner-autoscaler.service`, which starts them on demand from queued-job labels |
+| Release pipeline | 🟡 | Linux **and macOS** both proven end-to-end via `workflow_dispatch` rehearsals (runs 32185451150, 32189647104): tarball + completions + manpage + verified sha256, macOS artifact is a real Mach-O x86_64 binary. The Windows zip + installer job is in `release.yml` since the port but has not yet produced a published artifact, and no release later than v0.6.0 has been published on GitHub. The self-hosted VM runners are driven by `gh-runner-autoscaler.service`, which starts them on demand from queued-job labels |
 
 ### Adversarial-review wounds (from the 2026-05-29 review, folded in)
 1. **Identity collapse** — resolved: the PVR is now the product, the engine is
@@ -290,6 +353,15 @@ fork.
 ## Conventions
 
 - Commit prefixes: `feat:` `fix:` `chore:` `refactor:` `ci:` `docs:` `test:` `perf:`.
+- **Versioning:** release tags are Semantic Versioning 2.0.0 (`vMAJOR.MINOR.PATCH`).
+  Derive the bump from the conventional-commit prefixes since the last tag —
+  `fix:` → PATCH, `feat:` → MINOR, a `!` marker or `BREAKING CHANGE:` footer →
+  MAJOR; other prefixes carry no bump. The version lives once in
+  `[workspace.package]`; the tag, the manifest and `CHANGELOG.md` must agree.
+  Released versions are immutable: never re-tag or re-publish, cut the next one.
+- **The user cuts releases.** Tooling and contributors prepare the version bump
+  and the changelog and leave the tagging to the maintainer; do not create or
+  push a release tag.
 - **No AI attribution** in commits, PRs, or code comments. The human author is the
   sole author of record: no `Co-Authored-By` or generated-with trailers.
 - **Editions:** default build = PVR; `--features creator` = Creator Edition. Keep

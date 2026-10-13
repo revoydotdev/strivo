@@ -68,7 +68,7 @@ async function renderPipelines(livePipeline) {
     <section class="cfg-card pl-pipe-card">
       <header class="pl-pipe-head">
         <div>
-          <h2 class="cfg-title">Ultimate creator publish</h2>
+          <h2 class="cfg-title">Ultimate creator preparation</h2>
           <p class="pg-cap-hint">Transcript intelligence + visual scene mining → captions, chapters, safety, highlights, clips, thumbnails → publish drafts + Casebook. Ten durable stages, real downloadable artifacts.</p>
         </div>
         <button class="btn-primary sm" id="pl-run-ultimate"
@@ -96,7 +96,7 @@ async function renderPipelines(livePipeline) {
   renderPipelineAuthoring();
 
   document.getElementById("pl-run-ultimate")?.addEventListener("click", () => {
-    openRecordingPickerForPipeline({ name: "Ultimate creator publish", id: "creator_publish" }, finishedRecs);
+    openRecordingPickerForPipeline({ name: "Ultimate creator preparation", id: "creator_publish" }, finishedRecs);
   });
   document.getElementById("pl-runs-show-all")?.addEventListener("click", () => {
     showAllRuns = true;

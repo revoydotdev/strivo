@@ -553,7 +553,7 @@ const PIPELINE_GRAPH = {
       key: "template:creator_publish",
       kind: "template",
       run_id: null,
-      name: "Ultimate creator publish",
+      name: "Ultimate creator preparation",
       state: "Pending",
       trigger: "manual",
       error: null,
@@ -1038,7 +1038,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         runs: [{
           id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          name: "Ultimate creator publish",
+          name: "Ultimate creator preparation",
           trigger: "recording-finished",
           state: "Done",
           stages: [{

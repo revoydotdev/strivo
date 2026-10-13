@@ -6658,7 +6658,15 @@ mod route_entitlement_tests {
 // it. A stubbed transcript body would let the series assertion pass while
 // the real envelope drifted, which is the defect class this file has
 // already produced once (`utterances` vs `segments`).
-#[cfg(test)]
+//
+// Both tests here drive the *entitled* happy path, which is unreachable in a
+// release build by construction: `licence::gate::dev_unlock` is
+// `cfg!(debug_assertions)`-gated and is the only path to entitlement these
+// tests can take (the licence cache path is held). Under `cargo test
+// --release` the seeded fixture therefore answers 402, not 200, so the module
+// follows the convention of the entitled happy paths above and compiles only
+// in a debug profile. CI runs the Creator suite in both profiles.
+#[cfg(all(test, debug_assertions))]
 mod dataviz_transcript_contract_tests {
     use super::research_route_tests::{test_state, ENV_GUARD};
     use super::*;

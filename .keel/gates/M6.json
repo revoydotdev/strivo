@@ -1,0 +1,24 @@
+{
+  "schema": "keel.gates/1",
+  "milestone": "6",
+  "gates": [
+    {
+      "id": "G1",
+      "statement": "every test this milestone's todos add exists and passes (milestone 6)",
+      "proof": {
+        "kind": "command",
+        "cmd": "for t in canonical_transcript_revisions speaker_correction_glossary multimodal_moment_ranking moment_inbox ai_rough_cut_proposals external_processing_consent creator_eval_datasets translation_aids external_dataset_import tiktok_instagram_connectors additional_destinations batch_policy_automation; do cargo test --locked --workspace \"$t\" 2>&1|tee /dev/stderr|grep -Eq 'test result: ok\\. [1-9][0-9]* passed' || exit 1; done",
+        "timeout": 3600
+      }
+    },
+    {
+      "id": "G2",
+      "statement": "the browser mock lane passes with the milestone 6 todos landed",
+      "proof": {
+        "kind": "command",
+        "cmd": "cd crates/strivo-web/e2e && npm test",
+        "timeout": 3600
+      }
+    }
+  ]
+}

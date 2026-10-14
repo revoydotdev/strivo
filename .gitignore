@@ -93,3 +93,5 @@ desktop.ini
 
 # Stale duplicate marketing-site build output (source lives at repo root)
 /website/
+# keel: the lane file of a dispatched run
+.keel/lane.json

@@ -372,6 +372,11 @@ fork.
 
 ---
 
+> **Deprecated 2026-10-14: not the plan of record.** Planning for this repo now
+> lives in `.keel/plan.md` (keel). The revoy block below is kept as history and
+> is no longer the source of open items; each of its rows is re-derived in keel
+> milestone M2 (PVR hygiene). The `.omo/` plan it cites is also superseded.
+
 ## revoy ledger block
 
 Machine-readable current phase for the revoy cross-project ledger. Tracks the

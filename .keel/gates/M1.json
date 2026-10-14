@@ -1,0 +1,51 @@
+{
+  "schema": "keel.gates/1",
+  "milestone": "1",
+  "gates": [
+    {
+      "id": "G1",
+      "statement": "fmt is clean at HEAD (CI check job, fmt step)",
+      "proof": {
+        "kind": "command",
+        "cmd": "cargo fmt --all -- --check",
+        "timeout": 600
+      }
+    },
+    {
+      "id": "G2",
+      "statement": "clippy is clean with warnings denied across the workspace (CI clippy step)",
+      "proof": {
+        "kind": "command",
+        "cmd": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "timeout": 1800
+      }
+    },
+    {
+      "id": "G3",
+      "statement": "the Creator-feature clippy is clean (CI clippy Creator step)",
+      "proof": {
+        "kind": "command",
+        "cmd": "cargo clippy -p strivo-core -p strivo-web -p strivo-bin --features creator --all-targets --locked -- -D warnings",
+        "timeout": 1800
+      }
+    },
+    {
+      "id": "G4",
+      "statement": "the release test lane passes (CI test step)",
+      "proof": {
+        "kind": "command",
+        "cmd": "cargo test --workspace --release --all-targets --locked",
+        "timeout": 3600
+      }
+    },
+    {
+      "id": "G5",
+      "statement": "the debug test lane passes (CI debug test step)",
+      "proof": {
+        "kind": "command",
+        "cmd": "cargo test --workspace --all-targets --locked",
+        "timeout": 3600
+      }
+    }
+  ]
+}

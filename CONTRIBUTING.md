@@ -81,3 +81,5 @@ daemon / client split, browser-served SPA UI) is described in the README's
 *Architecture* and *Design rationale* sections. Larger changes that move any
 of those load-bearing pieces should be discussed in an issue first so we can
 agree on the approach before the diff lands.
+
+The plan of record is `.keel/plan.md` (keel), dated 2026-10-14: validate it with `keel validate strivo` and read the schedule with `keel dag strivo --milestone <n>`. The revoy ledger block in ROADMAP.md and the `.omo/` plan are history.

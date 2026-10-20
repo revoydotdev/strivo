@@ -274,6 +274,21 @@ function reconcileControllers(stage) {
     mount.dataset.contentKey,
     (counts.get(mount.dataset.contentKey) || 0) + 1,
   ));
+  // A source that already has a live controller and is now mounted twice
+  // (the composer can drop the playing source into a second tile) must keep
+  // its bare key on the tile it was created for. Otherwise both mounts are
+  // re-keyed to `sourceKey#path`, the bare key drops out of `wanted`, and the
+  // untouched tile's player is destroyed. Falls back to the first mount when
+  // the original tile is gone.
+  const bareOwner = new Map();
+  mounts.forEach((mount) => {
+    const k = mount.dataset.contentKey;
+    if (counts.get(k) < 2 || !playerState.controllers.has(k)) return;
+    const owned = playerState.controllerPaths.get(k);
+    if (!bareOwner.has(k) || (owned !== undefined && (mount.dataset.path || "") === owned)) {
+      bareOwner.set(k, mount);
+    }
+  });
   mounts.forEach((mount) => {
     // A source may intentionally be shown in more than one tile (for
     // example, two quality/volume views of the same channel).  The source
@@ -282,7 +297,7 @@ function reconcileControllers(stage) {
     // in this registry.  Give duplicate mounts deterministic per-paint
     // identities while retaining the source key as the prefix.
     const sourceKey = mount.dataset.contentKey;
-    const key = counts.get(sourceKey) > 1
+    const key = counts.get(sourceKey) > 1 && bareOwner.get(sourceKey) !== mount
       ? `${sourceKey}#${mount.dataset.path || "root"}`
       : sourceKey;
     wanted.set(key, mount);
@@ -298,6 +313,7 @@ function reconcileControllers(stage) {
         /* a controller that fails to tear down must not block the rest */
       }
       playerState.controllers.delete(key);
+      playerState.controllerPaths.delete(key);
     }
   }
 
@@ -337,6 +353,7 @@ function reconcileControllers(stage) {
         videoId: mount.dataset.videoId || "",
       });
     }
+    if (key === sourceKey) playerState.controllerPaths.set(key, path);
     ctl.mount(mount);
     const vol = tileVolumeForKey(sourceKey);
     ctl.setMuted(vol === 0);
@@ -357,6 +374,7 @@ function destroyAllControllers() {
     }
   }
   playerState.controllers.clear();
+  playerState.controllerPaths.clear();
 }
 
 function tracingWarn(msg, e) {
@@ -383,15 +401,28 @@ function savePlayerAutoplay() {
 /// registry is: a tile that moves is still the same stream. Keying on path
 /// meant switching preset — which relocates a stream from "" to "a.a" —
 /// silently paused it, because the new path had never been started.
-function tilePlaying(node) {
+function tilePlaying(node, path) {
   if (playerState.autoplay) return true;
-  const key = contentKeyOf(node);
+  const key = playKeyOf(node, path);
   return !!key && (playerState.playing || []).includes(key);
 }
-function setTilePlaying(node, on) {
-  const key = contentKeyOf(node);
+function setTilePlaying(node, on, path) {
+  const key = playKeyOf(node, path);
   if (!key) return;
   const set = new Set(playerState.playing || []);
   if (on) set.add(key); else set.delete(key);
   playerState.playing = [...set];
+}
+/// A source shown in a second tile is a separate viewing, so it needs its own
+/// play state: the first tile (layout order) keeps the bare content key and
+/// every later duplicate is keyed `<key>#<path>`. Without a path the bare
+/// key is used.
+function playKeyOf(node, path) {
+  const key = contentKeyOf(node);
+  if (!key || path === undefined || path === null) return key;
+  let first = null;
+  walkLayout(playerState.layout, (n, p) => {
+    if (first === null && contentKeyOf(n) === key) first = p;
+  });
+  return first === null || first === path ? key : `${key}#${path}`;
 }

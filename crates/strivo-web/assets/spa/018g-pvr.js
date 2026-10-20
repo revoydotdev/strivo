@@ -429,7 +429,7 @@ RAIL_CLICK_HANDLERS.watch = (channelKey, ev) => {
 
   const node = _slot(streamId, null);
   playerState.layout = setNodeAt(playerState.layout, dest, node);
-  setTilePlaying(node, true);
+  setTilePlaying(node, true, dest);
   savePlayerLayout();
 
   const streams = playerState.chatRailLastStreams || [];

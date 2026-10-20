@@ -129,7 +129,7 @@ function effectiveCapabilities(ctl) {
 }
 
 function renderPopulatedSlotHtml(slot, path, streams) {
-  const playing = tilePlaying(slot);
+  const playing = tilePlaying(slot, path);
   // ─ Recording playback path ─
   if (slot.recordingId) {
     const rec = recCache.find((r) => r.id === slot.recordingId);
@@ -593,7 +593,7 @@ function wireTileChrome(tile, ctx) {
     e.preventDefault();
     e.stopPropagation();
     const path = e.currentTarget.dataset.path || "";
-    setTilePlaying(getNodeAt(playerState.layout, path), true);
+    setTilePlaying(getNodeAt(playerState.layout, path), true, path);
     // Playing state is not part of the layout tree, so the shape-diffing
     // patch path cannot see this change — force the full paint. That is
     // cheap now: the repaint re-parents existing players instead of

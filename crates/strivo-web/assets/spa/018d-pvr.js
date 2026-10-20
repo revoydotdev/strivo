@@ -181,6 +181,7 @@ const playerState = {
   // contentKey -> PlayerController. Outlives every repaint; see the
   // "Player controllers" block for why ownership is not in the DOM.
   controllers: new Map(),
+  controllerPaths: new Map(), // contentKey -> tile path the controller was created at
   volumes: loadTileVolumes(), // contentKey -> 0..1; muted is volume === 0
 };
 

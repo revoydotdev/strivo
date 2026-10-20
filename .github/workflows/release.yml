@@ -36,7 +36,7 @@ jobs:
   # had already run.
   check-version:
     name: Tag matches manifest version
-    runs-on: [self-hosted, linux, x64, arch]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,7 +46,7 @@ jobs:
     name: Build x86_64-linux tarball
     needs: check-version
     if: github.event_name != 'workflow_dispatch' || inputs.linux
-    runs-on: [self-hosted, linux, x64, arch]
+    runs-on: [self-hosted, linux, x64, release]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -242,7 +242,7 @@ jobs:
     # Never publish from a rehearsal run, and never publish a partial set: if any
     # platform failed or was skipped on a tag push, stop and let a human decide.
     if: github.event_name == 'push' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'skipped')
-    runs-on: [self-hosted, linux, x64, arch]
+    runs-on: [self-hosted, linux, x64, release]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

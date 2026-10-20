@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-20
+
 Everything marked **Creator Edition** below compiles only under
 `--features creator`; a PVR build contains none of it (asserted by
 `e2e/check-pvr-bundle.mjs`, the two-edition boot tests and `build.rs`).
@@ -206,6 +208,15 @@ Everything marked **Creator Edition** below compiles only under
   by the capability descriptor.
 
 ### Fixed
+- **Editing a multiview layout in the composer destroyed a playing tile's
+  player** when the composer mounted that tile's source a second time. The
+  original tile now keeps its player and a duplicate tile gets its own play
+  state.
+- **Creator Edition routes fell under the 12px text floor and the 28px hit
+  target.** The root font size is 14px, so `0.75rem` rendered at 10.5px; the
+  pipelines, plugins, archive and dataviz styles now use the existing
+  `--text-xs` token, and their small controls meet the 28px floor. Two
+  unlabelled selects in the pipeline stage editor now carry accessible names.
 - **The PVR recording-info modal requested the Creator-only plugin list** on
   every open, a guaranteed 404 in a PVR build. The method now lives in a
   creator module as `API.pluginList` and the modal calls it behind a `typeof`
@@ -778,7 +789,8 @@ changelog entry at the time.
 - Dialog system for confirmations and input.
 - Color theme system for the TUI.
 
-[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/revoydotdev/strivo/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/revoydotdev/strivo/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/revoydotdev/strivo/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/revoydotdev/strivo/compare/v0.5.0...v0.6.0

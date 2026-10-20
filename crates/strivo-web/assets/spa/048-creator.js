@@ -105,7 +105,7 @@ function authorNodeRow(state, stage, errors) {
           )
           .join("") || '<span class="pg-cap-hint">none</span>'
       }
-      <select data-pa-field="lock_kind">${options(
+      <select data-pa-field="lock_kind" aria-label="Lock kind">${options(
         PA_LOCK_KINDS,
         state.pending.lockKind,
       )}</select>
@@ -129,7 +129,7 @@ function authorNodeRow(state, stage, errors) {
           )
           .join("") || '<span class="pg-cap-hint">nothing — it is a root</span>'
       }
-      <select data-pa-field="input">${options(
+      <select data-pa-field="input" aria-label="Runs after stage">${options(
         others.map((s) => s.id),
         state.pending.input,
       )}</select>

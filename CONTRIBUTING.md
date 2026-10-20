@@ -38,13 +38,32 @@ plugin changes land in the same PR as host changes that depend on them.
 
 ## Before opening a pull request
 
-Run the same gates CI runs:
+Run the same gates CI runs (`.github/workflows/ci.yml`). Locally:
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+# fmt
+cargo fmt --all -- --check
+# clippy, default edition and Creator edition
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy -p strivo-core -p strivo-web -p strivo-bin --features creator --all-targets --locked -- -D warnings
+# tests: release lane, then debug lane (debug-only paths such as STRIVO_DEV_UNLOCK_ALL)
+cargo test --workspace --release --all-targets --locked
+cargo test --workspace --all-targets --locked
+# Creator edition tests
+cargo test --release -p strivo-web -p strivo-bin --features creator --all-targets --locked
+cargo test -p strivo-web -p strivo-bin --features creator --all-targets --locked
+# licence backend typecheck and tests
+(cd licence-backend && npm ci && npm run typecheck && npm test)
+# browser mock lane (Playwright)
+(cd crates/strivo-web/e2e && npm ci && npx playwright install chromium && npm test)
 ```
+
+CI also runs `npm run test:real` in `crates/strivo-web/e2e`, which needs a PVR
+release binary: `cargo build --release --locked`, then
+`STRIVO_BIN=$PWD/target/release/strivo npm run test:real` from that directory.
+The workflow additionally runs the packaging and docs lints under `scripts/`,
+an MSRV check, a Windows cross-check and a performance lane; read `ci.yml` for
+their exact commands.
 
 If any of those fail locally, CI will fail too. Style fixes can be pre-applied
 with `cargo fmt --all`.

@@ -97,7 +97,7 @@ exit:
 - [ ] CONTRIBUTING.md states the gates CI runs, and CI runs no gate it omits | verify: auditor
 
 todos:
-- [ ] 1-A1 — Keep the ipc_handshake socket tests independent of TMPDIR length
+- [x] 1-A1 — Keep the ipc_handshake socket tests independent of TMPDIR length
   lane: L5
   needs: -
   touches: tests/ipc_handshake.rs
@@ -106,7 +106,7 @@ todos:
   qa: `d="$(mktemp -d)/$(printf 'x%.0s' $(seq 1 100))" && mkdir -p "$d" && TMPDIR="$d" cargo test --locked --test ipc_handshake 2>&1|tee /dev/stderr|grep -Eq 'test result: ok\. [1-9][0-9]* passed'`
   commit: fix(tests): keep the ipc socket tests under any TMPDIR length
 
-- [ ] 1-A2 — State in CONTRIBUTING.md the gates CI actually runs
+- [x] 1-A2 — State in CONTRIBUTING.md the gates CI actually runs
   lane: L6
   needs: -
   touches: CONTRIBUTING.md
@@ -115,7 +115,7 @@ todos:
   qa: `git grep -q -- '--features creator' CONTRIBUTING.md && git grep -q 'npm test' CONTRIBUTING.md`
   commit: docs(contributing): list the gates CI actually runs
 
-- [ ] 1-A3 — Make ROADMAP's gate claim match what CI runs
+- [x] 1-A3 — Make ROADMAP's gate claim match what CI runs
   lane: L6
   needs: 1-C2
   touches: ROADMAP.md
@@ -124,7 +124,7 @@ todos:
   qa: `! git grep -q 'is green on' -- ROADMAP.md`
   commit: docs(roadmap): state the gate CI runs and which lane is red
 
-- [ ] 1-A4 — Stop the composer from disturbing an untouched tile's player
+- [x] 1-A4 — Stop the composer from disturbing an untouched tile's player
   lane: L1
   needs: 1-C6, 1-C7, 1-C8, 1-C11, 1-C15, 1-C16, 1-C17, 1-C18, 1-C29, 1-C31, 1-C32, 1-D6, 1-D9, 1-D17, 1-D18, 1-D19
   touches: crates/strivo-web/assets/spa/**, crates/strivo-web/e2e/tests/**
@@ -133,7 +133,7 @@ todos:
   qa: `cd crates/strivo-web/e2e && npx playwright test tests/player-controller.spec.ts -g 'composer edits leave'`
   commit: fix(web): keep an untouched multiview tile's player when the composer edits
 
-- [ ] 1-A5 — Pin down the late-recordings race in performance-navigation.spec.ts or prove it flaky
+- [x] 1-A5 — Pin down the late-recordings race in performance-navigation.spec.ts or prove it flaky
   lane: L1
   needs: 1-C7, 1-C11, 1-C15, 1-C16, 1-C18, 1-C29, 1-C32, 1-D6, 1-D9, 1-D17, 1-D18, 1-D19
   touches: crates/strivo-web/e2e/tests/**
@@ -141,6 +141,24 @@ todos:
   must-not: Do not add a retry to make it pass.
   qa: `cd crates/strivo-web/e2e && npx playwright test tests/performance-navigation.spec.ts --repeat-each=10`
   commit: test(web): repeat the late-response route spec until its race is settled
+
+- [ ] 1-A6 — Settle the split-ratio nudge race in multiview-dnd.spec.ts
+  lane: L1
+  needs: 1-A4
+  touches: crates/strivo-web/e2e/tests/**, crates/strivo-web/assets/spa/**
+  do: crates/strivo-web/e2e/tests/multiview-dnd.spec.ts:461 ('Ctrl+Shift+ArrowRight nudges the split ratio and it survives reload') is intermittent: 3 of 10 runs failed at 17dec25 and 2 of 5 full-spec runs failed after 1-A4, each reading a ratio of 0.5 where 0.55 was expected at :475. It predates 1-A4. Find whether the keypress lands before the split handler is bound or the persisted ratio is read before it is written, and fix that ordering.
+  must-not: Do not add a retry or a fixed sleep to make it pass.
+  qa: `cd crates/strivo-web/e2e && npx playwright test tests/multiview-dnd.spec.ts -g 'nudges the split' --repeat-each=20`
+  commit: fix(web): make the split-ratio nudge survive reload deterministically
+
+- [ ] 1-A7 — Settle the solo-tile timeout in player-controller.spec.ts
+  lane: L1
+  needs: 1-A4
+  touches: crates/strivo-web/e2e/tests/**, crates/strivo-web/assets/spa/**
+  do: crates/strivo-web/e2e/tests/player-controller.spec.ts:140 ('solo raises one tile and silences the rest') times out intermittently in full-spec runs: 2 of 3 runs at 6a2cd1c and 2 of 3 with 1-A4 applied, while 20 of 20 pass run alone. It is order-dependent, so find the state an earlier test in the file leaves behind.
+  must-not: Do not add a retry, reorder the spec to hide it, or raise the timeout.
+  qa: `cd crates/strivo-web/e2e && npx playwright test tests/player-controller.spec.ts --repeat-each=5 --workers=1`
+  commit: fix(web): stop solo-tile state leaking between player-controller tests
 
 #### M1-B — Wave 8 in flight: live run graph, template library, cross-archive retrieval
 exit:
@@ -150,7 +168,7 @@ exit:
 todos:
 - [ ] 1-B1 — A live run graph with per-node status, logs, retry, cancel and artifacts
   lane: L2
-  needs: 1-D18, 1-D19, 1-D20, 1-A4, 1-A5, 1-B4, 1-B5, 1-D5
+  needs: 1-D18, 1-D19, 1-D20, 1-A4, 1-A5, 1-A6, 1-A7, 1-B4, 1-B5, 1-D5
   touches: src/pipeline/executor.rs, src/pipeline/runtime.rs, src/pipeline/stage.rs, crates/strivo-web/assets/spa/013-creator.js, crates/strivo-web/assets/spa/036-pvr.js, crates/strivo-web/e2e/**
   do: The run inspector replaces today's page-refetching list. Each node shows its live `StageState`, attempts, typed failure class, resource lock held, bounded log tail, and produced artifacts, updating from the `PipelineUpdated` stream by patching the affected node — building directly on todo 11's fix. Retry re-arms a failed branch including siblings; cancel cascades and is idempotent, per `src/pipeline/executor.rs:452-500,567`. Acceptance (legacy): (agent-executable): a Playwright test drives a run and asserts each node transitions `Pending → Running → Done` without a full-page refetch; a retry test asserts a failed branch and its siblings re-arm; a lock-timeout test asserts the UI names the holder. The qa names the test to write first; no test of that name exists at 6a2cd1c (checked against the 1659 test names the workspace lists).
   must-not: Must NOT expose a wedged stage as merely slow; a lock-acquisition timeout must surface as a typed failure naming the holder, which `executor.rs:642`'s `find_lock_holder` already supports
@@ -168,14 +186,14 @@ todos:
 
 - [ ] 1-B3 — Cross-archive retrieval that lands a moment in the active project
   lane: L3
-  needs: 1-C34, 1-D4, 1-D9, 1-D18, 1-D21, 1-A4, 1-B4, 1-B5, 1-D15, 1-D22
+  needs: 1-C34, 1-D4, 1-D9, 1-D18, 1-D21, 1-A4, 1-A6, 1-A7, 1-B4, 1-B5, 1-D15, 1-D22
   touches: crates/research/src/search.rs, crates/research/src/moments.rs, crates/strivo-web/assets/spa/017-creator.js
   do: CE-P5, and the Query Lab payoff `docs/STRATEGY-NVIVO-RIVERSIDE.md:152-155` names: a hybrid lexical, semantic and temporal query whose hits are renderable — "every moment I talked about the speedrun AND chat density spiked". A query returns playable, provenance-linked intervals across recordings and adds selected moments to the active project without reimport. Builds on the existing FTS5 search at `crates/research/src/search.rs` and the archive surface at `assets/spa/017-creator.js`. Acceptance (legacy): (agent-executable): a cross-recording query returns intervals that each resolve to a source and time range; a selected hit opens at that timecode in the editor; adding it to the active project needs no reimport; an aggregate over a 10 000-hour library is computed server-side within the 500 ms uncached budget. The qa names the test to write first; no test of that name exists at 6a2cd1c (checked against the 1659 test names the workspace lists).
   must-not: Must NOT round-trip an entire archive's transcripts through the browser to compute an aggregate
   qa: `cargo test --locked --workspace archive_retrieval 2>&1|tee /dev/stderr|grep -Eq 'test result: ok\. [1-9][0-9]* passed'`
   commit: feat(research): retrieve moments across the archive into the active project
 
-- [ ] 1-B4 — Make the Creator pipelines surface pass the keyboard, axe and UX-budget gates
+- [x] 1-B4 — Make the Creator pipelines surface pass the keyboard, axe and UX-budget gates
   lane: L1
   needs: 1-C6, 1-C7, 1-C8, 1-C11, 1-C15, 1-C16, 1-C17, 1-C18, 1-C29, 1-C31, 1-C32, 1-D6, 1-D9, 1-D17, 1-D18, 1-D19
   touches: crates/strivo-web/assets/spa/**, crates/strivo-web/assets/spa-css/**, crates/strivo-web/e2e/tests/**
@@ -184,7 +202,7 @@ todos:
   qa: `cd crates/strivo-web/e2e && npx playwright test tests/a11y-keyboard.spec.ts tests/a11y-scan.spec.ts tests/ux-budget.spec.ts -g 'Creator #/pipelines'`
   commit: fix(pipelines): make the node graph reachable by keyboard and inside the UX budget
 
-- [ ] 1-B5 — Make the Creator plugins, archive and dataviz routes pass the UX-budget gates
+- [x] 1-B5 — Make the Creator plugins, archive and dataviz routes pass the UX-budget gates
   lane: L1
   needs: 1-C6, 1-C7, 1-C8, 1-C11, 1-C17, 1-C18, 1-C29, 1-C31, 1-D6, 1-D9, 1-D17, 1-D18, 1-D19
   touches: crates/strivo-web/assets/spa-css/**, crates/strivo-web/assets/spa/**

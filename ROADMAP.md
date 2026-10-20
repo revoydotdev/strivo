@@ -148,15 +148,16 @@ The work since 0.8.0 follows an execution plan. The legacy plan file is
 untracked local state under `.omo/` (its bookkeeping is checked by
 `scripts/check-plan-deps.mjs`), so this section is its tracked summary. Its
 original count was 104 todos in 17 waves, of which 58 were done. That figure is
-superseded: the keel plan (`.keel/plan.md`, untracked) now tracks 129 todos
-(58 done, 71 open) across 6 milestones (M1 to M6) and 19 phases, and its milestone IDs
-are keel's own, not the historical M-labels used below.
+superseded: the keel plan (`.keel/plan.md`, the plan of record) tracks the
+work in 6 milestones (M1 to M6) and 19 phases, and its milestone IDs are keel's
+own, not the historical M-labels used below. Its ledger, not this paragraph, is
+the live todo count.
 
-Status at `6a2cd1c`: the cargo gate (`cargo fmt`, `clippy --workspace -D warnings`,
+Status: the cargo gate (`cargo fmt`, `clippy --workspace -D warnings`,
 `cargo test --workspace`) is green. The browser mock lane (Playwright, `npm test`
-in `crates/strivo-web/e2e`, run by `ci.yml`) has known failures: 9 tests fail
-at that commit. They are tracked as keel M1 todos (1-A4, 1-B4, 1-B5) and are not
-resolved.
+in `crates/strivo-web/e2e`, run by `ci.yml`) failed 9 tests deterministically at
+`6a2cd1c`; those are fixed (keel M1 todos 1-A4, 1-B4, 1-B5). Two of its tests
+are still intermittent and can turn a run red, tracked as 1-A6 and 1-A7.
 
 **Done — Phase 1 (waves 0–4, establish the truth and land the Pro contracts):**
 the consolidated audit register (`docs/audits/2026-09-25-consolidated/`), the

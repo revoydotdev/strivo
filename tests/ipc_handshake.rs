@@ -32,13 +32,24 @@ fn snapshot_stub() -> ServerMessage {
     }
 }
 
+/// A temp dir under `/tmp` with a short name. Unix socket paths are limited
+/// to about 107 bytes (SUN_LEN), so a long `TMPDIR` must not decide whether
+/// the socket tests can bind.
+#[cfg(unix)]
+fn short_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("sv")
+        .tempdir_in("/tmp")
+        .unwrap()
+}
+
 /// A fresh, collision-free test endpoint. Unix gets a socket path inside a
 /// dedicated temp dir (dropped — and thus cleaned up — at the end of the
 /// test); Windows gets a uniquely-named pipe (pipes have no filesystem
 /// footprint to clean up).
 #[cfg(unix)]
 fn test_endpoint(_tag: &str) -> (Endpoint, Option<tempfile::TempDir>) {
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = short_tempdir();
     let sock = tmp.path().join("strivo.sock");
     (Endpoint::Path(sock), Some(tmp))
 }
@@ -138,7 +149,7 @@ fn is_daemon_running_rejects_stale_socket_file() {
     // A bare socket file on disk with no accept(2)er should NOT be
     // treated as a live daemon. This is the cross-check we added on
     // top of the pid liveness check.
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = short_tempdir();
     let sock = tmp.path().join("strivo.sock");
     let pid = tmp.path().join("strivo.pid");
 

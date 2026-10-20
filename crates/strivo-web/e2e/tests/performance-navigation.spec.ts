@@ -7,10 +7,21 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("a late recordings response cannot replace a newer Settings route", async ({ page }) => {
+  // Hold every recordings response behind a gate.  A timed delay raced the
+  // `load` event that `goto` waits for: under load the app's loading window
+  // could close before the first assertion ran.  The gate keeps the Recordings
+  // route genuinely in flight until the test decides it is late.
+  let releaseRecordings!: () => void;
+  const recordingsHeld = new Promise<void>((resolve) => { releaseRecordings = resolve; });
   await page.route("**/api/v1/recordings**", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    await recordingsHeld;
     await route.continue();
   });
+  const isRecordings = (r: { url(): string }) => r.url().includes("/api/v1/recordings");
+  const lateResponses = [
+    page.waitForResponse(isRecordings),
+    page.waitForResponse(isRecordings),
+  ];
 
   await page.goto("/app#/recordings");
   await expect(page.locator("#route-status")).toContainText(/Loading recordings/i);
@@ -18,9 +29,11 @@ test("a late recordings response cannot replace a newer Settings route", async (
 
   await expect(page).toHaveURL(/#\/settings/);
   await expect(page.locator("h1.page-title")).toHaveText("Settings");
-  // Allow the abandoned request to finish.  Its renderer must not reclaim
-  // the shared content node after the Settings route owns it.
-  await page.waitForTimeout(450);
+  // Now let the abandoned requests complete.  Their renderer must not reclaim
+  // the shared content node after the Settings route owns it.  Waiting for
+  // each response to finish is the real signal, not a timer.
+  releaseRecordings();
+  await Promise.all((await Promise.all(lateResponses)).map((r) => r.finished()));
   await expect(page.locator("h1.page-title")).toHaveText("Settings");
   await expect(page.locator(".recordings-table")).toHaveCount(0);
 });

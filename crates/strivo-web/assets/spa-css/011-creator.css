@@ -21,6 +21,7 @@
 }
 
 /* Plugin hub card gear — links into Settings → Plugins manager. */
+.pg-card-gear { min-width: 28px; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; }
 .pg-card-gear {
   margin-left: auto;
   padding: 0 0.4rem;

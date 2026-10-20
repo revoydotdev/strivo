@@ -71,7 +71,7 @@
 .upgrade-hint {
   margin: 0.7rem 0 0;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-style: italic;
 }
 @media (max-width: 640px) {

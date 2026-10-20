@@ -7,7 +7,7 @@
 .dz-rec-row { display: flex; gap: 0.5rem; align-items: center; padding: 0.25rem 0.4rem; border-radius: 3px; }
 .dz-rec-row:hover { background: rgba(255,255,255,0.04); }
 .dz-rec-title { flex: 1; }
-.dz-rec-meta { font-size: 0.8em; opacity: 0.7; }
+.dz-rec-meta { font-size: var(--text-xs); opacity: 0.7; }
 .dz-exp-buttons { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
 .dz-exp.active { box-shadow: inset 0 0 0 1px var(--accent, #b07cff); color: var(--accent, #b07cff); }
 .dz-chart { overflow-x: auto; min-height: 200px; }
@@ -54,7 +54,7 @@
 @media (max-width: 900px) { .arc-grid { grid-template-columns: 1fr; } }
 .arc-search-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
 .arc-search-row input { flex: 1; }
-.arc-moments-filter { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; font-size: 0.85rem; color: var(--muted); }
+.arc-moments-filter { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; font-size: var(--text-xs); color: var(--muted); }
 .arc-moments-filter input { width: 90px; }
 .arc-row {
   padding: 0.6rem 0.7rem;
@@ -75,4 +75,4 @@
   border-bottom: 1px solid var(--border);
 }
 .arc-index-row:last-child { border-bottom: none; }
-.arc-digest { font-family: var(--mono); font-size: 0.75rem; color: var(--dim); }
+.arc-digest { font-family: var(--mono); font-size: var(--text-xs); color: var(--dim); }

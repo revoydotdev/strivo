@@ -71,7 +71,7 @@
 .rec-scene-meta { font-size: 0.78em; }
 .rec-scene-tags { grid-column: 1; grid-row: 2; display: flex; gap: 0.25rem; flex-wrap: wrap; }
 .rec-scene-tag {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   padding: 0.05rem 0.4rem;
   background: rgba(110,86,207,0.18);
   border-radius: 999px;

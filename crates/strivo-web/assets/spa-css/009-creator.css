@@ -20,7 +20,7 @@
 .pl-pipe-actions { display: inline-flex; gap: 0.5rem; align-items: center; }
 .pl-pipe-readiness {
   padding: 0.15rem 0.55rem;
-  font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase;
+  font-size: var(--text-xs); letter-spacing: 0.04em; text-transform: uppercase;
   border-radius: 999px;
   background: rgba(78,201,176,0.18);
   color: var(--accent2);
@@ -29,6 +29,7 @@
   background: rgba(245,158,11,0.18);
   color: hsl(35, 80%, 65%);
 }
+.pa-fields input:not([type=checkbox]):not([type=radio]), .pa-fields select { min-height: 28px; }
 .pl-pipe-bar {
   height: 4px; border-radius: 2px;
   background: rgba(255,255,255,0.08);

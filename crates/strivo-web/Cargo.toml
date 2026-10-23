@@ -11,6 +11,8 @@ rust-version = "1.88"
 path = "src/lib.rs"
 
 [features]
+# Lead-developer build: see the root crate's `dev-unlock` feature.
+dev-unlock = ["strivo-core/dev-unlock"]
 # Creator Edition: mounts the plugin/tooling routes (`routes::plugins`, plus
 # the marketplace/pipelines/capabilities endpoints in `routes::api`) and pulls
 # in every first-party tool crate the web UI surfaces. The default build is a

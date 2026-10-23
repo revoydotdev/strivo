@@ -1802,3 +1802,34 @@ async fn a_served_svg_carries_an_image_content_type_and_real_svg_bytes() {
     );
     assert!(body.contains("</svg>"), "the SVG body is truncated");
 }
+
+/// The Creator surface stays held: without the developer override the
+/// settings response keeps the SPA on the PVR surface in every build,
+/// including a Creator build. Only `dev_unlock()` (a debug or `dev-unlock`
+/// build with STRIVO_DEV_UNLOCK_ALL set) may turn it on.
+#[tokio::test]
+async fn settings_hold_creator_surface_without_dev_unlock() {
+    if std::env::var_os("STRIVO_DEV_UNLOCK_ALL").is_some() {
+        return;
+    }
+    let sandbox = tempfile::tempdir().unwrap();
+    let config_path = sandbox.path().join("config.toml");
+    strivo_core::config::AppConfig::default()
+        .save(Some(&config_path))
+        .unwrap();
+    let api_key = "creator-hold-test-key";
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/api/v1/settings")
+        .header("x-api-key", api_key)
+        .body(Body::empty())
+        .unwrap();
+    let response = app_with_config(api_key, config_path)
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["creator_enabled"], false);
+}

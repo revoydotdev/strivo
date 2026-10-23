@@ -635,8 +635,11 @@ async fn settings(headers: HeaderMap, State(state): State<AppState>) -> impl Int
                 "patreon_configured": cfg.patreon.is_some(),
                 // Creator work is not publicly available, including in a
                 // feature-enabled build. Keep the SPA on the released PVR
-                // surface until the product clears its security/release gate.
-                "creator_enabled": false,
+                // surface until the product clears its security/release gate;
+                // only the developer override (debug or `dev-unlock` build
+                // plus STRIVO_DEV_UNLOCK_ALL) exposes it.
+                "creator_enabled": cfg!(feature = "creator")
+                    && strivo_core::licence::gate::dev_unlock(),
             });
             // Creator Edition surfaces the Archiver config section.
             #[cfg(feature = "creator")]

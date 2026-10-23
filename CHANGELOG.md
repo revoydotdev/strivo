@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Added
+- **`dev-unlock` build feature for a lead developer's own machine.**
+  `cargo build --release -p strivo-bin --features creator,dev-unlock` gives an
+  optimized binary that honours `STRIVO_DEV_UNLOCK_ALL=1`, which before
+  worked in debug builds alone. The same override now also exposes the
+  Creator surface in the web UI (`creator_enabled` in `GET
+  /api/v1/settings`), which was held off in every build. Without the
+  override, every build, Creator included, still reports
+  `creator_enabled: false`. No published build enables the feature, and
+  `scripts/check-release-version.sh` fails a release whose build files name
+  it.
+
 ## [0.9.1] — 2026-10-22
 
 ### Fixed

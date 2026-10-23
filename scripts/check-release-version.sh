@@ -29,3 +29,12 @@ if [[ "$tag_version" != "$manifest_version" ]]; then
 fi
 
 echo "OK: tag v${tag_version} matches manifest version ${manifest_version}"
+
+# The `dev-unlock` feature lets a release binary unlock every Pro capability
+# from an environment variable. It is for a lead developer's own machine and
+# must never reach a published build.
+if grep -n -- 'dev-unlock' .github/workflows/release.yml .github/workflows/docker.yml Dockerfile packaging/aur/PKGBUILD scripts/install.sh 2>/dev/null; then
+  echo "error: a published build enables the dev-unlock feature (lines above)" >&2
+  exit 1
+fi
+echo "OK: no published build enables dev-unlock"

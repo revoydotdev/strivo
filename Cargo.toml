@@ -31,6 +31,13 @@ rust-version = "1.88"
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Lead-developer build only: lets an optimized binary honour
+# STRIVO_DEV_UNLOCK_ALL, which otherwise works in debug builds alone. No
+# published build enables it; scripts/check-release-version.sh fails a
+# release whose build files name it.
+dev-unlock = []
+
 [dependencies]
 # Async
 tokio = { version = "1", features = ["full"] }

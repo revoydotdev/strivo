@@ -6,8 +6,9 @@
 //! Decision order:
 //!
 //!   1. **Not a Pro capability** — always allowed.
-//!   2. **Debug-only override** — `STRIVO_DEV_UNLOCK_ALL=1` can enable
-//!      development tests in a debug build.
+//!   2. **Developer override** — `STRIVO_DEV_UNLOCK_ALL=1` unlocks every
+//!      Pro capability in a debug build, or in a release build compiled
+//!      with the `dev-unlock` feature, which no published build enables.
 //!   3. **A verified, in-date licence cache** — only when the operator has
 //!      opted in with `[licence] cache_reconnection`, which is off by
 //!      default. See [`crate::licence::reconnect`]; the entitlement hold
@@ -55,8 +56,11 @@ pub fn entitled() -> bool {
     super::reconnect::grant()
 }
 
-fn dev_unlock() -> bool {
-    cfg!(debug_assertions)
+/// The developer override: `STRIVO_DEV_UNLOCK_ALL=1` in a debug build or a
+/// `dev-unlock` build. Also decides whether the web UI exposes the Creator
+/// surface, so the override unlocks the UI and the gate together.
+pub fn dev_unlock() -> bool {
+    (cfg!(debug_assertions) || cfg!(feature = "dev-unlock"))
         && std::env::var("STRIVO_DEV_UNLOCK_ALL")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
@@ -84,7 +88,7 @@ mod tests {
     }
 
     #[test]
-    fn dev_unlock_env_grants_entitlement_only_in_debug_builds() {
+    fn dev_unlock_env_grants_entitlement_only_in_debug_or_dev_unlock_builds() {
         // The override is debug-only by construction (see `dev_unlock`):
         // a release binary must never unlock Pro features from an
         // environment variable, which is the property "hold creator
@@ -95,13 +99,16 @@ mod tests {
         // release half — the half that actually matters for shipping —
         // is covered instead of compiled away. CI runs the suite with
         // `--release`, where an unconditional assert here fails.
+        // The `dev-unlock` feature is the one sanctioned exception, and no
+        // published build enables it.
+        let unlockable = cfg!(debug_assertions) || cfg!(feature = "dev-unlock");
         std::env::set_var("STRIVO_DEV_UNLOCK_ALL", "1");
         assert_eq!(
             is_entitled("test-plugin-a", TEST_PRO_PLUGINS),
-            cfg!(debug_assertions),
-            "dev unlock must grant entitlement in debug and never in release"
+            unlockable,
+            "dev unlock must grant entitlement in debug or dev-unlock builds and never in a published release"
         );
-        assert_eq!(entitled(), cfg!(debug_assertions));
+        assert_eq!(entitled(), unlockable);
         std::env::remove_var("STRIVO_DEV_UNLOCK_ALL");
 
         // Absent the variable, nothing is entitled in either profile.

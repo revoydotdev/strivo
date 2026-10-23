@@ -23,6 +23,10 @@ path = "src/main.rs"
 # routes + core config surface. The default `cargo build` is a pure Live Stream
 # PVR: `cargo build -p strivo-bin --features creator` builds the full edition.
 creator = ["dep:strivo-plugins", "strivo-web/creator"]
+# Lead-developer build: an optimized binary that honours STRIVO_DEV_UNLOCK_ALL.
+# `cargo build --release -p strivo-bin --features creator,dev-unlock`. Never
+# enabled by a published build.
+dev-unlock = ["strivo-web/dev-unlock"]
 
 [dependencies]
 strivo-core = { path = "../.." }

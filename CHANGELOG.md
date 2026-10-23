@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-22
+
+### Fixed
+- **Release builds fetch their bundled dependencies again.** BtbN prunes its
+  ffmpeg autobuilds after about a month, so the September pin in
+  `packaging/vendored-deps.toml` returned 404 and the 0.9.0 Linux and Windows
+  release builds failed before publishing. ffmpeg, mpv, streamlink and yt-dlp
+  are re-pinned to their 2026-10-20 builds and now download from StriVo's own
+  `vendored-deps-2026-10-20` mirror release; each pin keeps its original
+  source as `upstream_url`. 0.9.0 was tagged but never published, so 0.9.1 is
+  the first published release with the 0.9.0 changes below.
+
+### Changed
+- Release jobs run on a dedicated `release` runner instead of queueing behind
+  general CI.
+
 ## [0.9.0] — 2026-10-20
 
 Everything marked **Creator Edition** below compiles only under
@@ -789,7 +805,8 @@ changelog entry at the time.
 - Dialog system for confirmations and input.
 - Color theme system for the TUI.
 
-[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/revoydotdev/strivo/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/revoydotdev/strivo/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/revoydotdev/strivo/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/revoydotdev/strivo/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/revoydotdev/strivo/compare/v0.6.0...v0.7.0

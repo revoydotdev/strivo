@@ -14,7 +14,7 @@ library—not a hosted streaming service.
 [![License](https://img.shields.io/github/license/revoydotdev/strivo?color=blue)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-1f6feb?logo=linux&logoColor=white)](#platforms)
 
-> **Alpha software — latest release: 0.9.0.** Configuration, daemon IPC, and
+> **Alpha software — latest release: 0.9.1.** Configuration, daemon IPC, and
 > the dynamic-plugin ABI are not yet stable. Read the [changelog](CHANGELOG.md)
 > before upgrading, and keep a copy of your configuration and recordings.
 

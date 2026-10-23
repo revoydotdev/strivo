@@ -25,22 +25,29 @@
 # commit — its contents (and therefore its checksum) change over time even
 # though the URL doesn't. Pin to a dated `autobuild-YYYY-MM-DD-HH-MM` tag
 # instead, which is an immutable snapshot, and re-pin deliberately.
+#
+# BtbN prunes dated autobuilds after about a month, so the ffmpeg pins resolve
+# through StriVo's own `vendored-deps-YYYY-MM-DD` mirror release (`url`), with
+# the BtbN original kept in `upstream_url`. Re-pinning means uploading a new
+# mirror release first, then updating `url`, `sha256` and `version`.
 
 [ffmpeg.linux_x86_64]
 status = "resolved"
-version = "autobuild-2026-09-10-15-31 (ffmpeg N-126492-gefb0a7e5e7)"
+version = "autobuild-2026-10-20-13-08 (ffmpeg N-127790-g56dbd4cd37)"
 license = "LGPL-2.1-or-later"
-url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-10-15-31/ffmpeg-N-126492-gefb0a7e5e7-linux64-lgpl.tar.xz"
-sha256 = "d761a4d65982dd480b6dad58f8964be3e7a2afa343d66d68ae606e2b687e2c58"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/ffmpeg-N-127790-g56dbd4cd37-linux64-lgpl.tar.xz"
+upstream_url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-N-127790-g56dbd4cd37-linux64-lgpl.tar.xz"
+sha256 = "176bdd3a63e9cd7c56438734118a4fd074872abc02318231a3439dbce6625367"
 source_url = "https://github.com/BtbN/FFmpeg-Builds"
 notes = "Static LGPL build; contains ffmpeg + ffprobe. Extract both."
 
 [ffmpeg.windows_x86_64]
 status = "resolved"
-version = "autobuild-2026-09-10-15-31 (ffmpeg N-126492-gefb0a7e5e7)"
+version = "autobuild-2026-10-20-13-08 (ffmpeg N-127790-g56dbd4cd37)"
 license = "LGPL-2.1-or-later"
-url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-10-15-31/ffmpeg-N-126492-gefb0a7e5e7-win64-lgpl.zip"
-sha256 = "6681b2b1bf9513514b3241b81ffdc9bbb422bf85fe0a5b179abec4ad1447024b"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/ffmpeg-N-127790-g56dbd4cd37-win64-lgpl.zip"
+upstream_url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-N-127790-g56dbd4cd37-win64-lgpl.zip"
+sha256 = "ca67d7b3bf3c73a9ffcd670a9216c227829635198355fa6edd46140464c8b58b"
 source_url = "https://github.com/BtbN/FFmpeg-Builds"
 notes = "Static LGPL build; contains ffmpeg.exe + ffprobe.exe. Extract both."
 
@@ -66,7 +73,8 @@ chain. Needs a decision before this row can be filled in.
 status = "resolved"
 version = "20260903 (git 69e63f425a)"
 license = "GPL-2.0-or-later"
-url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260903/mpv-x86_64-20260903-git-69e63f425a.7z"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/mpv-x86_64-20260903-git-69e63f425a.7z"
+upstream_url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260903/mpv-x86_64-20260903-git-69e63f425a.7z"
 sha256 = "418dbfb5feb851cbed33d6c05d8481ba71802621bfd6efe8974522b28d42ac97"
 source_url = "https://github.com/shinchiro/mpv-winbuild-cmake"
 notes = """
@@ -102,7 +110,8 @@ notes = "Same gap as ffmpeg's macOS row — no official standalone build; only H
 status = "resolved"
 version = "8.5.0-1"
 license = "BSD-2-Clause"
-url = "https://github.com/streamlink/windows-builds/releases/download/8.5.0-1/streamlink-8.5.0-1-py314-x86_64.zip"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/streamlink-8.5.0-1-py314-x86_64.zip"
+upstream_url = "https://github.com/streamlink/windows-builds/releases/download/8.5.0-1/streamlink-8.5.0-1-py314-x86_64.zip"
 sha256 = "86409e93774ec59928ed289d291c48766f9c7535ea41085255404f219875b5f3"
 source_url = "https://github.com/streamlink/windows-builds"
 notes = """
@@ -122,7 +131,8 @@ build/license per install, not two.
 status = "resolved"
 version = "8.5.0-1"
 license = "BSD-2-Clause"
-url = "https://github.com/streamlink/streamlink-appimage/releases/download/8.5.0-1/streamlink-8.5.0-1-cp314-cp314-manylinux_2_28_x86_64.AppImage"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/streamlink-8.5.0-1-cp314-cp314-manylinux_2_28_x86_64.AppImage"
+upstream_url = "https://github.com/streamlink/streamlink-appimage/releases/download/8.5.0-1/streamlink-8.5.0-1-cp314-cp314-manylinux_2_28_x86_64.AppImage"
 sha256 = "640a3bf2d24670b09758c87b531e9de5e382b581c6bcfbdd732bd3e5d43b832c"
 source_url = "https://github.com/streamlink/streamlink-appimage"
 notes = """
@@ -146,7 +156,8 @@ notes = "streamlink's own install docs list only Homebrew for macOS — no offic
 status = "resolved"
 version = "2026.08.19"
 license = "GPL-3.0-or-later"
-url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/yt-dlp"
+upstream_url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp"
 sha256 = "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6"
 source_url = "https://github.com/yt-dlp/yt-dlp"
 
@@ -154,7 +165,8 @@ source_url = "https://github.com/yt-dlp/yt-dlp"
 status = "resolved"
 version = "2026.08.19"
 license = "GPL-3.0-or-later"
-url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/yt-dlp.exe"
+upstream_url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe"
 sha256 = "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a"
 source_url = "https://github.com/yt-dlp/yt-dlp"
 
@@ -162,6 +174,7 @@ source_url = "https://github.com/yt-dlp/yt-dlp"
 status = "resolved"
 version = "2026.08.19"
 license = "GPL-3.0-or-later"
-url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos"
+url = "https://github.com/revoydotdev/strivo/releases/download/vendored-deps-2026-10-20/yt-dlp_macos"
+upstream_url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos"
 sha256 = "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202"
 source_url = "https://github.com/yt-dlp/yt-dlp"

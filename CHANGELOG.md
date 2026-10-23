@@ -18,6 +18,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `vendored-deps-2026-10-20` mirror release; each pin keeps its original
   source as `upstream_url`. 0.9.0 was tagged but never published, so 0.9.1 is
   the first published release with the 0.9.0 changes below.
+- **A backup lists its files in the same order on every host.** The
+  System page's backup rows took the archive's files in raw directory order,
+  which the filesystem decides, so the same backup read `jobs.db, config.toml`
+  on one machine and `config.toml, jobs.db` on another. `GET /api/v1/backups`
+  now sorts each entry's file names.
 
 ### Changed
 - Release jobs run on a dedicated `release` runner instead of queueing behind

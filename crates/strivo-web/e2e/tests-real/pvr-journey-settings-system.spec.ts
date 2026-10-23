@@ -138,7 +138,7 @@ test("step 9 — backup and restore against a real tarball", async ({ page, requ
   // --- state: populated, and the new entry is at the head of the list.
   await expect(page.locator("#backup-list")).toContainText(made.name);
   await expect(page.locator("#backup-list")).not.toContainText("No backups yet.");
-  await expect(page.locator("#backup-list")).toContainText("jobs.db, config.toml");
+  await expect(page.locator("#backup-list")).toContainText("config.toml, jobs.db");
   const restoreButtons = page.locator(".restore-backup");
   await expect(restoreButtons).toHaveCount(before.length + 1);
 

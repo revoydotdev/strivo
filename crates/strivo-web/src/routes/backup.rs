@@ -178,13 +178,19 @@ async fn backups_list(headers: HeaderMap, State(state): State<AppState>) -> impl
             let (projects, sources) = census_counts(&p);
             #[cfg(not(feature = "creator"))]
             let (projects, sources) = (0usize, 0usize);
+            // read_dir order is filesystem-defined, so sort for a listing
+            // that reads the same on every host.
+            let mut files: Vec<String> = std::fs::read_dir(&p)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|f| f.file_name().to_str().map(String::from))
+                .collect();
+            files.sort();
             json!({
                 "name": name,
                 "bytes": walk_dir_bytes(&p).unwrap_or(0),
-                "files": std::fs::read_dir(&p)
-                    .into_iter().flatten().flatten()
-                    .filter_map(|f| f.file_name().to_str().map(String::from))
-                    .collect::<Vec<_>>(),
+                "files": files,
                 "projects": projects,
                 "sources": sources,
             })
